@@ -118,7 +118,7 @@ public class RunServiceImpl implements IRunService {
                 throw stale();
             }
             if (run.currentAttempt() != attempt.attemptNumber() || attempt.expiresAt() == null
-                    || !attempt.expiresAt().isAfter(Instant.now())
+                    || !attempt.validAt(Instant.now())
                     || !java.util.Set.of("DISPATCHING", "RUNNING").contains(attempt.state())) throw stale();
             finish(run, attempt, result.status(), result.resultCode(), result.message(), result.retryable());
         });
@@ -130,7 +130,7 @@ public class RunServiceImpl implements IRunService {
             transactions.executeWithoutResult(status -> {
                 var pair = locked(id);
                 if (!pair.attempt().terminal() && pair.attempt().expiresAt() != null
-                        && !pair.attempt().expiresAt().isAfter(Instant.now()))
+                        && !pair.attempt().validAt(Instant.now()))
                     finish(pair.run(), pair.attempt(), "TIMED_OUT", "LEASE_EXPIRED", "执行租约已过期，迟到结果将被拒绝", false);
             });
         }
@@ -145,7 +145,8 @@ public class RunServiceImpl implements IRunService {
                         && remote.status() < 500 && remote.status() != 429;
                 transactions.executeWithoutResult(status -> {
                     var pair = locked(id);
-                    if (pair.attempt().terminal()) return;
+                    // Worker 已领取执行资格比派发响应更强；响应丢失不能终结正在执行的工作。
+                    if (pair.attempt().terminal() || pair.attempt().ownerWorkerId() != null) return;
                     if (permanent || pair.attempt().dispatchCount() >= properties.maxDispatchAttempts()) {
                         finish(pair.run(), pair.attempt(), "FAILED", permanent ? "DISPATCH_REJECTED" : "DISPATCH_UNCONFIRMED",
                                 permanent ? "Worker 拒绝执行请求" : "有限派发次数已耗尽，未确认业务执行结果", false);
@@ -191,7 +192,7 @@ public class RunServiceImpl implements IRunService {
         var pair = locked(id); var run = pair.run(); var attempt = pair.attempt(); var now = Instant.now();
         if (attempt.terminal() || terminal(run) || !java.util.Set.of("READY", "DISPATCHING").contains(attempt.state())
                 || attempt.nextDispatchAt().isAfter(now) || run.currentAttempt() != attempt.attemptNumber()) return null;
-        if (attempt.expiresAt() != null && !attempt.expiresAt().isAfter(now)) {
+        if (attempt.expiresAt() != null && !attempt.validAt(now)) {
             finish(run, attempt, "TIMED_OUT", "LEASE_EXPIRED", "执行租约已过期", false); return null;
         }
         if (attempt.dispatchCount() >= properties.maxDispatchAttempts()) {
@@ -205,7 +206,7 @@ public class RunServiceImpl implements IRunService {
         }
         var expires = attempt.expiresAt() == null
                 ? now.plusSeconds(snapshot.timeoutSeconds()).plus(properties.leaseGrace()).truncatedTo(java.time.temporal.ChronoUnit.MILLIS) : attempt.expiresAt();
-        mapper.dispatching(id, expires, now.plus(properties.requestTimeout()).plus(properties.dispatchRetryDelay()));
+        mapper.dispatching(id, expires, now.plus(properties.requestTimeout()).plus(properties.dispatchRetryDelay()), now);
         return new Dispatch(id, run.id(), attempt.attemptNumber(), attempt.leaseVersion(), expires, snapshot);
     }
 
@@ -213,7 +214,7 @@ public class RunServiceImpl implements IRunService {
         var run = pair.run(); var attempt = pair.attempt(); var now = Instant.now();
         if (terminal(run) || run.currentAttempt() != attempt.attemptNumber() || attempt.leaseVersion() != leaseVersion
                 || !java.util.Set.of("READY", "DISPATCHING").contains(attempt.state())
-                || attempt.expiresAt() == null || !attempt.expiresAt().isAfter(now)) return;
+                || !attempt.validAt(now)) return;
         // SQL 没有完成 Attempt 转换时，不得推进 Run；两条转换仍处于同一本地事务。
         if (mapper.accepted(attempt, now)
                 && !mapper.runState(run, "RUNNING", attempt.attemptNumber(), null, null, now)) throw stale();

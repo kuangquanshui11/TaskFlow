@@ -23,7 +23,7 @@ public class InternalAuthenticationFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         String path=request.getRequestURI();
-        String expected = path.equals("/internal/v1/attempts/updateResult") ? properties.reportToken()
+        String expected = path.equals("/internal/v1/attempts/updateResult") || path.equals("/internal/v1/attempts/updateLease") ? properties.reportToken()
                 : path.equals("/internal/v1/workers/insert") || path.equals("/internal/v1/workers/updateHeartbeat") ? nodes.nodeToken() : properties.controlToken();
         String supplied = request.getHeader("X-Taskflow-Token");
         if (expected == null || expected.isBlank()) {

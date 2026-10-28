@@ -1,4 +1,4 @@
-param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure,
+param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$IncludeExecutionLease,
     [ValidateSet('http','rabbitmq')][string]$Transport = 'http', [string]$MqSettingsPath,[string]$PlatformSettingsPath)
 $ErrorActionPreference = 'Stop'
 $repoPath = Split-Path -Parent $PSScriptRoot
@@ -201,6 +201,7 @@ try {
             $eurekaYaml="eureka:`n  client:`n    enabled: true`n    registry-fetch-interval-seconds: 1`n    initial-instance-info-replication-interval-seconds: 1`n    instance-info-replication-interval-seconds: 2`n    service-url:`n      defaultZone: `"$($platform.registryUrl)`"`n  instance:`n    lease-renewal-interval-in-seconds: 1`n    lease-expiration-duration-in-seconds: 4"
             $traceYaml="  tracing:`n    sampling:`n      probability: 1.0`n    export:`n      otlp:`n        enabled: true`n  opentelemetry:`n    tracing:`n      export:`n        otlp:`n          endpoint: `"$($platform.traceEndpoint)`"`n  info:`n    env:`n      enabled: true`n  endpoints:`n    web:`n      exposure:`n        include: health,info"
         }
+        $executionLeaseYaml = if ($IncludeExecutionLease) { "    lease:`n      duration: 10s`n      renewal-interval: 500ms" } else { '' }
         $configuration = @"
 spring:
   config:
@@ -259,6 +260,7 @@ taskflow:
     detail-cache:
       enabled: false
   execution:
+$executionLeaseYaml
     scheduler-url: "http://127.0.0.1:19081"
     worker-url: "http://127.0.0.1:19082"
     control-token: "$controlToken"
@@ -346,6 +348,40 @@ info:
     Assert-Check ($duplicate.body.data.id -eq $success.run.id) 'Same request key creates one logical Run'
     $successResult = Wait-TestRun $success.run.id
     Assert-Check ($successResult.state -eq 'SUCCEEDED' -and @($successResult.attempts).Count -eq 1) 'Success handler completes via three real services'
+    if ($IncludeExecutionLease) {
+        $leaseJob = New-TestJob 'demoSlow' -Timeout 20 -Delay 12000
+        $leaseRun = New-TestRun $leaseJob
+        $leaseBefore = $null
+        for ($i = 0; $i -lt 40; $i++) {
+            $observed = (Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/runs/selectById?id=" + $leaseRun.run.id)).body.data
+            if ($observed.attempts[0].ownerWorkerId -and $observed.attempts[0].leaseUntil) { $leaseBefore = $observed; break }
+            Start-Sleep -Milliseconds 100
+        }
+        Assert-Check ($null -ne $leaseBefore -and $leaseBefore.attempts[0].ownerWorkerId -eq 'worker-default') 'Execution lease binds the actual Worker before running the Handler'
+        $leaseAttempt = $leaseBefore.attempts[0]
+        $renewed = $null
+        for ($i = 0; $i -lt 40; $i++) {
+            $observed = (Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/runs/selectById?id=" + $leaseRun.run.id)).body.data
+            if ([DateTimeOffset]::Parse($observed.attempts[0].leaseUntil) -gt [DateTimeOffset]::Parse($leaseAttempt.leaseUntil).AddSeconds(1)) { $renewed = $observed; break }
+            Start-Sleep -Milliseconds 100
+        }
+        Assert-Check ($null -ne $renewed -and $renewed.attempts[0].leaseVersion -eq $leaseAttempt.leaseVersion -and
+            $renewed.attempts[0].expiresAt -eq $leaseAttempt.expiresAt -and
+            [DateTimeOffset]::Parse($renewed.attempts[0].leaseUntil) -le [DateTimeOffset]::Parse($leaseAttempt.expiresAt)) 'Real HTTP renewal extends only the short lease and preserves the version and hard deadline'
+        $wrongOwner = @{ attemptId=$leaseAttempt.id; runId=$leaseBefore.id; leaseVersion=$leaseAttempt.leaseVersion;
+            workerId='another-worker'; sessionId=$leaseAttempt.ownerSessionId }
+        Assert-Check ((Call-Api 'POST' 'http://127.0.0.1:19081/internal/v1/attempts/updateLease' $wrongOwner $reportToken).status -eq 409) 'Renewal rejects a different Worker'
+        $wrongOwner.workerId = 'worker-default'; $wrongOwner.sessionId = [Guid]::NewGuid().ToString()
+        Assert-Check ((Call-Api 'POST' 'http://127.0.0.1:19081/internal/v1/attempts/updateLease' $wrongOwner $reportToken).status -eq 409) 'Renewal rejects a different execution session'
+        $originalDispatch = @{ attemptId=$leaseAttempt.id; runId=$leaseBefore.id; attemptNumber=$leaseAttempt.attemptNumber;
+            leaseVersion=$leaseAttempt.leaseVersion; expiresAt=$leaseAttempt.expiresAt; snapshot=$leaseBefore.snapshot }
+        Assert-Check ((Call-Api 'POST' 'http://127.0.0.1:19082/internal/v1/executions/insert' $originalDispatch $dispatchToken).status -eq 202) 'Duplicate dispatch after renewal still matches the original Inbox fingerprint'
+        $leaseResult = Wait-TestRun $leaseRun.run.id
+        Assert-Check ($leaseResult.state -eq 'SUCCEEDED' -and @($leaseResult.attempts).Count -eq 1 -and
+            [DateTimeOffset]::UtcNow -gt [DateTimeOffset]::Parse($leaseAttempt.leaseUntil)) 'Handler succeeds beyond the initial short lease through actual Scheduler and Worker processes'
+        $wrongOwner.sessionId = $leaseAttempt.ownerSessionId
+        Assert-Check ((Call-Api 'POST' 'http://127.0.0.1:19081/internal/v1/attempts/updateLease' $wrongOwner $reportToken).status -eq 409) 'Terminal Attempt cannot be revived by renewal'
+    }
     if ($InjectWorkerResultSaveFailure) {
         $stream = [IO.File]::Open($processes['worker'].log, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
         $reader = [IO.StreamReader]::new($stream)

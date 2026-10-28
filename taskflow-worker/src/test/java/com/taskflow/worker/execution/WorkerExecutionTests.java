@@ -6,6 +6,7 @@ import java.util.UUID;
 import java.net.URI;
 import java.net.http.*;
 import com.taskflow.worker.execution.client.SchedulerReportClient;
+import com.taskflow.worker.execution.client.SchedulerLeaseClient;
 import com.taskflow.worker.execution.config.ExecutionProperties;
 import com.taskflow.worker.execution.config.ResultPersistenceProperties;
 import com.taskflow.worker.execution.dto.ExecutionProtocol.*;
@@ -44,16 +45,25 @@ class WorkerExecutionTests {
     @Autowired ExecutionProperties properties;
     @Autowired PlatformTransactionManager transactions;
     @Autowired IExecutionResultService results;
+    @Autowired IExecutionLeaseService leases;
     @Autowired ResultPersistenceProperties resultProperties;
     @Autowired MeterRegistry metrics;
     @Value("${local.server.port}") int port;
     @MockitoBean SchedulerReportClient reports;
+    @MockitoBean SchedulerLeaseClient leaseClient;
     @MockitoSpyBean IDemoHandlerService handlers;
     @BeforeEach void clean() throws Exception {
         try (var connection = jdbc.getDataSource().getConnection()) {
             assertThat(connection.getMetaData().getURL()).startsWith("jdbc:h2:mem:taskflow-worker-");
         }
         jdbc.update("DELETE FROM worker_execution");
+        when(leaseClient.updateLease(any())).thenAnswer(call -> {
+            LeaseRequest request = call.getArgument(0);
+            var now = Instant.now();
+            var command = json.readValue(mapper.find(request.attemptId()).orElseThrow().dispatchJson(), Dispatch.class);
+            return new LeaseAcknowledgement(request.attemptId(), request.runId(), request.leaseVersion(), request.workerId(),
+                    request.sessionId(), now, command.expiresAt(), command.expiresAt().minusSeconds(10), command.expiresAt());
+        });
     }
     @AfterEach void savingHasStopped() {
         await().atMost(Duration.ofSeconds(4)).untilAsserted(() ->
@@ -74,7 +84,7 @@ class WorkerExecutionTests {
         executions.insert(command); executions.executePending(); finished(command);
         executions.insert(command); executions.executePending();
         assertThat(mapper.find(command.attemptId()).orElseThrow().state()).isEqualTo("SUCCEEDED");
-        verify(handlers, times(1)).execute(any());
+        verify(handlers, times(1)).execute(any(), any());
     }
     @Test void transientResultSaveFailureRecoversWithoutRepeatingHandler() throws Exception {
         var command = command("demoSuccess", 1, 30, "{}");
@@ -90,7 +100,7 @@ class WorkerExecutionTests {
         var row = mapper.find(command.attemptId()).orElseThrow();
         assertThat(row.state()).isEqualTo("SUCCEEDED");
         assertThat(row.message()).isEqualTo("执行成功");
-        verify(handlers, times(1)).execute(any());
+        verify(handlers, times(1)).execute(any(), any());
         when(reports.report(any())).thenReturn(true);
         executions.reportPending();
         assertThat(mapper.find(command.attemptId()).orElseThrow().reported()).isTrue();
@@ -105,7 +115,7 @@ class WorkerExecutionTests {
                 throw new org.springframework.dao.DataAccessResourceFailureException("temporary save failure");
             return call.callRealMethod();
         }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), any());
-        var stopped = new ExecutionServiceImpl(mapper, handlers, reports, properties, json, transactions, results);
+        var stopped = new ExecutionServiceImpl(mapper, handlers, reports, properties, json, transactions, results, leases);
         try {
             stopped.recover(); stopped.insert(command); stopped.shutdown();
             assertThatCode(stopped::executePending).doesNotThrowAnyException();
@@ -115,7 +125,7 @@ class WorkerExecutionTests {
             assertThat(row.retryable()).isFalse();
             assertThat(mapper.pendingCount()).isZero();
             assertThat(saves.get()).isEqualTo(2);
-            verify(handlers, never()).execute(any());
+            verify(handlers, never()).execute(any(), any());
         } finally { stopped.shutdown(); }
     }
     @Test void handlerFailureRetainsOriginalResultAndRetryPolicyAfterSaveRecovery() throws Exception {
@@ -143,7 +153,7 @@ class WorkerExecutionTests {
         });
         executions.reportPending();
         assertThat(mapper.find(command.attemptId()).orElseThrow().reported()).isTrue();
-        verify(handlers, times(1)).execute(any());
+        verify(handlers, times(1)).execute(any(), any());
     }
     @Test void committedResultWithLostConfirmationIsRecognizedWithoutResettingReportState() throws Exception {
         var command = command("demoSuccess", 1, 30, "{}");
@@ -169,7 +179,7 @@ class WorkerExecutionTests {
         assertThat(row.reported()).isTrue();
         executions.insert(command); executions.executePending(); executions.reportPending();
         assertThat(saves.get()).isEqualTo(2);
-        verify(handlers, times(1)).execute(any());
+        verify(handlers, times(1)).execute(any(), any());
         verifyNoInteractions(reports);
     }
     @Test void exhaustedSavingIsFiniteTraceableAndDoesNotRepeatUnknownBusiness(CapturedOutput output) throws Exception {
@@ -193,7 +203,7 @@ class WorkerExecutionTests {
         }
         assertThat(attempts.get()).isEqualTo(3);
         assertThat(mapper.find(command.attemptId()).orElseThrow().state()).isEqualTo("RUNNING");
-        verify(handlers, times(1)).execute(any());
+        verify(handlers, times(1)).execute(any(), any());
         verifyNoInteractions(reports);
         // 模拟丢失内存结果后的启动恢复：只记录副作用未知，不重新执行。
         executions.recover();
@@ -201,7 +211,7 @@ class WorkerExecutionTests {
         assertThat(recovered.resultCode()).isEqualTo("WORKER_RESTARTED");
         assertThat(recovered.retryable()).isFalse();
         executions.executePending();
-        verify(handlers, times(1)).execute(any());
+        verify(handlers, times(1)).execute(any(), any());
     }
     @Test void conflictingOrMissingTerminalRecordIsNotReportedAsSaved(CapturedOutput output) {
         var command = command("demoSuccess", 1, 30, "{}");
@@ -246,7 +256,7 @@ class WorkerExecutionTests {
             assertThat(metrics.get("taskflow.worker.result.persistence.active").gauge().value()).isEqualTo(2);
             assertThatThrownBy(() -> executions.insert(command("demoSuccess", 1, 30, "{}")))
                     .isInstanceOfSatisfying(ExecutionException.class, error -> assertThat(error.status()).isEqualTo(429));
-            verify(handlers, times(2)).execute(any());
+            verify(handlers, times(2)).execute(any(), any());
         } finally { release.countDown(); }
         finished(first); finished(second);
         await().atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
@@ -254,7 +264,7 @@ class WorkerExecutionTests {
             assertThat(mapper.find(third.attemptId()).orElseThrow().state()).isEqualTo("SUCCEEDED");
             assertThat(mapper.find(fourth.attemptId()).orElseThrow().state()).isEqualTo("SUCCEEDED");
         });
-        verify(handlers, times(4)).execute(any());
+        verify(handlers, times(4)).execute(any(), any());
     }
     @Test void claimDatabaseFailureReleasesSlotAndCanResumeOriginalAcceptedWork() throws Exception {
         var command = command("demoSuccess", 1, 30, "{}");
@@ -262,10 +272,10 @@ class WorkerExecutionTests {
         doThrow(new org.springframework.dao.DataAccessResourceFailureException("claim failed")).when(mapper).claim(command.attemptId());
         assertThatThrownBy(executions::executePending).isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
         assertThat(mapper.find(command.attemptId()).orElseThrow().state()).isEqualTo("ACCEPTED");
-        verify(handlers, never()).execute(any());
+        verify(handlers, never()).execute(any(), any());
         doCallRealMethod().when(mapper).claim(command.attemptId());
         executions.executePending(); finished(command);
-        verify(handlers, times(1)).execute(any());
+        verify(handlers, times(1)).execute(any(), any());
     }
     private double outcome(String outcome) {
         return metrics.get("taskflow.worker.result.persistence").tag("outcome", outcome).counter().count();
@@ -306,7 +316,7 @@ class WorkerExecutionTests {
         assertThat(mapper.find(unknown.attemptId()).orElseThrow().resultCode()).isEqualTo("WORKER_RESTARTED");
         assertThat(mapper.find(accepted.attemptId()).orElseThrow().state()).isEqualTo("ACCEPTED");
         executions.executePending(); finished(accepted);
-        verify(handlers, times(1)).execute(any());
+        verify(handlers, times(1)).execute(any(), any());
     }
     @Test void unsupportedExpiredOrOverCapacityRequestsAreRejected() {
         assertThatThrownBy(() -> executions.insert(command("notAllowed", 1, 30, "{}"))).isInstanceOf(ExecutionException.class);
@@ -345,7 +355,7 @@ class WorkerExecutionTests {
         var limited = new ExecutionProperties(properties.schedulerUrl(), properties.dispatchToken(), properties.reportToken(),
                 properties.connectTimeout(), properties.requestTimeout(), properties.scanInterval(), properties.parallelism(),
                 properties.maxPending(), properties.maxReportAttempts(), properties.reportRetryDelay(), false, Duration.ofMillis(1));
-        var reporting = new ExecutionServiceImpl(mapper, handlers, reports, limited, json, transactions, results);
+        var reporting = new ExecutionServiceImpl(mapper, handlers, reports, limited, json, transactions, results, leases);
         try {
             reporting.recover(); reporting.reportPending();
             verify(reports, atMostOnce()).report(any());

@@ -1,4 +1,4 @@
-param([ValidateRange(1024,65535)][int]$Port = 13387, [switch]$IncludeDispatchFairness)
+param([ValidateRange(1024,65535)][int]$Port = 13387, [switch]$IncludeDispatchFairness, [switch]$IncludeExecutionLease)
 $ErrorActionPreference = 'Stop'
 $repoPath = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoPath
@@ -41,6 +41,7 @@ try {
     $env:TASKFLOW_RUN_STATE_TEST_DB_PASSWORD = ''
     # 数据源 URL 与会话隔离级别由 application-test-run-state-mysql.yml 提供。
     $testClasses = if ($IncludeDispatchFairness) { 'RunStateConcurrencyTests,DispatchFairnessTests' } else { 'RunStateConcurrencyTests' }
+    if ($IncludeExecutionLease) { $testClasses += ',ExecutionLeaseTests' }
     & (Join-Path $repoPath 'mvnw.cmd') -B -l (Join-Path $runPath 'tests.log') -pl taskflow-scheduler ("-Dtest=" + $testClasses) test
     if ($LASTEXITCODE -ne 0) { throw ('Scheduler MySQL tests failed. Evidence: ' + $runPath) }
     Write-Output ('Scheduler MySQL tests passed. Evidence: ' + $runPath)

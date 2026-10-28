@@ -11,6 +11,7 @@ import com.rabbitmq.client.Channel;
 import com.taskflow.worker.dispatch.dto.DispatchEvent;
 import com.taskflow.worker.dispatch.service.IDispatchConsumerService;
 import com.taskflow.worker.execution.client.SchedulerReportClient;
+import com.taskflow.worker.execution.client.SchedulerLeaseClient;
 import com.taskflow.worker.execution.dto.ExecutionProtocol.*;
 import com.taskflow.worker.execution.exception.ExecutionException;
 import com.taskflow.worker.execution.mapper.ExecutionMapper;
@@ -37,10 +38,21 @@ class DispatchConsumerTests {
     @Autowired JdbcTemplate jdbc;
     @Autowired JsonMapper json;
     @MockitoBean SchedulerReportClient reports;
+    @MockitoBean SchedulerLeaseClient leaseClient;
     @MockitoSpyBean IDemoHandlerService handlers;
     @MockitoSpyBean ExecutionMapper mapper;
     private Channel channel;
-    @BeforeEach void clean() { jdbc.update("DELETE FROM worker_execution"); channel=mock(Channel.class); when(channel.isOpen()).thenReturn(true); }
+    @BeforeEach void clean() {
+        jdbc.update("DELETE FROM worker_execution");
+        when(leaseClient.updateLease(any())).thenAnswer(call -> {
+            LeaseRequest request = call.getArgument(0);
+            var now = Instant.now();
+            var command = json.readValue(mapper.find(request.attemptId()).orElseThrow().dispatchJson(), Dispatch.class);
+            return new LeaseAcknowledgement(request.attemptId(), request.runId(), request.leaseVersion(), request.workerId(),
+                    request.sessionId(), now, command.expiresAt(), command.expiresAt().minusSeconds(10), command.expiresAt());
+        });
+        channel=mock(Channel.class); when(channel.isOpen()).thenReturn(true);
+    }
 
     @Test void ackHappensAfterInboxCommitAndDuplicateDoesNotExecuteAgain() throws Exception {
         var command = command(); var message=message(command);
@@ -54,7 +66,7 @@ class DispatchConsumerTests {
         await().untilAsserted(() -> assertThat(mapper.find(command.attemptId()).orElseThrow().state()).isEqualTo("SUCCEEDED"));
         consumer.consume(message,channel); executions.executePending();
         assertThat(count()).isEqualTo(1);
-        verify(handlers,times(1)).execute(any());
+        verify(handlers,times(1)).execute(any(), any());
         verify(channel,times(3)).basicAck(7,false);
     }
     @Test void lostAckAfterCommitCanBeRedeliveredWithoutDuplicateExecution() throws Exception {
@@ -64,7 +76,7 @@ class DispatchConsumerTests {
         assertThat(count()).isEqualTo(1);
         consumer.consume(message,channel); executions.executePending();
         await().untilAsserted(() -> assertThat(mapper.find(command.attemptId()).orElseThrow().state()).isEqualTo("SUCCEEDED"));
-        verify(handlers,times(1)).execute(any());
+        verify(handlers,times(1)).execute(any(), any());
     }
     @Test void malformedUnsupportedOrMismatchedEventsAreRejectedWithoutInboxWrite() throws Exception {
         var valid = message(command());
@@ -132,7 +144,7 @@ class DispatchConsumerTests {
                 assertThat(mapper.find(incoming.attemptId()).orElseThrow().runId()).isEqualTo(incoming.runId());
                 verify(channel).basicAck(7, false);
                 verify(channel, never()).basicReject(anyLong(), anyBoolean());
-                verify(handlers, never()).execute(any());
+                verify(handlers, never()).execute(any(), any());
             } finally { consumption.cancel(true); }
         }
     }
@@ -148,12 +160,12 @@ class DispatchConsumerTests {
         verify(channel).basicAck(7, false);
         verify(channel, never()).basicReject(anyLong(), anyBoolean());
         verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
-        verify(handlers, never()).execute(any());
+        verify(handlers, never()).execute(any(), any());
     }
     @Test void expiredNewDispatchIsAcknowledgedWithoutExecutionOrDeadLetter() throws Exception {
         var original=command(); var expired=new Dispatch(original.attemptId(),original.runId(),1,1,Instant.now().minusSeconds(1),original.snapshot());
         consumer.consume(message(expired),channel);
-        assertThat(count()).isZero(); verify(channel).basicAck(7,false); verify(handlers,never()).execute(any());
+        assertThat(count()).isZero(); verify(channel).basicAck(7,false); verify(handlers,never()).execute(any(), any());
         verify(channel,never()).basicReject(anyLong(),anyBoolean());
     }
     @Test void closedChannelLeavesDeliveryToBrokerRecoveryWithoutInboxWrite() throws Exception {

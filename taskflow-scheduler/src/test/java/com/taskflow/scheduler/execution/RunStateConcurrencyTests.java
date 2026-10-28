@@ -243,7 +243,7 @@ class RunStateConcurrencyTests {
         var id = run.attempts().getFirst().id();
         new TransactionTemplate(manager).executeWithoutResult(status -> {
             var runRow = mapper.lock(run.id()).orElseThrow();
-            mapper.dispatching(id, Instant.now().plusSeconds(30), Instant.now());
+            mapper.dispatching(id, Instant.now().plusSeconds(30), Instant.now(), Instant.now());
             var dispatching = mapper.lockAttempt(id).orElseThrow();
             var oldLease = new Attempt(id, run.id(), dispatching.attemptNumber(), dispatching.leaseVersion() + 1,
                     dispatching.state(), dispatching.dispatchCount(), dispatching.nextDispatchAt(), dispatching.expiresAt(),

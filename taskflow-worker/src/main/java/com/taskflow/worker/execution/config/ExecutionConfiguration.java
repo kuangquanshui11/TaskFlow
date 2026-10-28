@@ -11,7 +11,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties({ExecutionProperties.class, ResultPersistenceProperties.class})
+@EnableConfigurationProperties({ExecutionProperties.class, ResultPersistenceProperties.class, ExecutionLeaseProperties.class})
 @EnableScheduling
 public class ExecutionConfiguration {
     private final ExecutionProperties properties;

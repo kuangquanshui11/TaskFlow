@@ -12,7 +12,17 @@ public final class RunRecords {
             Instant createdAt, Instant updatedAt, String triggerType, Instant scheduledAt) { }
     public record Attempt(UUID id, UUID runId, int attemptNumber, long leaseVersion, String state,
             int dispatchCount, Instant nextDispatchAt, Instant expiresAt, Instant startedAt,
-            Instant finishedAt, String resultCode, String message) {
+            Instant finishedAt, String resultCode, String message,
+            Instant leaseUntil, String ownerWorkerId, UUID ownerSessionId) {
+        public Attempt(UUID id, UUID runId, int attemptNumber, long leaseVersion, String state,
+                int dispatchCount, Instant nextDispatchAt, Instant expiresAt, Instant startedAt,
+                Instant finishedAt, String resultCode, String message) {
+            this(id, runId, attemptNumber, leaseVersion, state, dispatchCount, nextDispatchAt, expiresAt,
+                    startedAt, finishedAt, resultCode, message, null, null, null);
+        }
+        public boolean validAt(Instant now) {
+            return expiresAt != null && expiresAt.isAfter(now) && (leaseUntil == null || leaseUntil.isAfter(now));
+        }
         public boolean terminal() { return java.util.Set.of("SUCCEEDED", "FAILED", "TIMED_OUT").contains(state); }
     }
     public record RunView(UUID id, long jobId, long configVersion, UUID requestKey, String state,

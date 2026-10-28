@@ -114,6 +114,10 @@ taskflow:
     consume-retry-delay: 1s
     consumer-enabled: true
   execution:
+    lease:
+      renewal-interval: ${TASKFLOW_EXECUTION_LEASE_RENEWAL_INTERVAL:5s}
+      safety-margin: ${TASKFLOW_EXECUTION_LEASE_SAFETY_MARGIN:6s}
+      watchdog-interval: 100ms
     result-persistence:
       max-attempts: "${TASKFLOW_RESULT_SAVE_MAX_ATTEMPTS:5}"
       retry-delay: "${TASKFLOW_RESULT_SAVE_RETRY_DELAY:500ms}"

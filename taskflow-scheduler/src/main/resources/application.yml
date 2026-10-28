@@ -133,6 +133,8 @@ taskflow:
     dispatch-retry-delay: 2s
     max-dispatch-attempts: 5
     lease-grace: 10s
+    lease:
+      duration: ${TASKFLOW_EXECUTION_LEASE_DURATION:30s}
     scanning-enabled: true
     parallelism: 4
     max-pending: 32

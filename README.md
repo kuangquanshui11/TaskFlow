@@ -8,7 +8,7 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 已补齐微服务技术栈：Gateway WebFlux/Netty、Eureka、Config Server、OpenFeign/LoadBalancer、Resilience4j、Micrometer Tracing/OTLP。新增三个独立基础设施应用；公共 API 统一经 Gateway，cloud 模式通过服务名调用。Java 21 / Boot 4.1.1 保持不变，使用 Cloud 2025.1.4 BOM。启动与边界见 [微服务技术栈](docs/microservice-platform.md)。
 
-独立 Vue 3 管理台已连接真实 Admin 接口，支持任务管理、Cron 预览、手动执行与运行历史，由 Nginx 托管。Admin 已实现 Redis 详情缓存，默认 TTL 60 秒。手动执行已打通 Admin → Scheduler → Worker → 结果上报：Run/Attempt、执行快照、幂等接收、有限重试、超时与重启恢复均有独立持久化。配置异步同步已实现：Admin 事务 Outbox、后台有限重试、Scheduler 版本副本和删除墓碑。Cron 已支持到期扫描、计划轮次去重及 SKIP/FIRE_ONCE。Scheduler 派发 Outbox、RabbitMQ 发布确认、Worker Inbox 提交后消费确认已实现；远程三节点正常与单节点停机场景各 43 项真实 MQ 检查通过，当前 3.8 Broker 使用显式兼容策略，至少一次死信转移仍未验收。Worker 注册、心跳、在线/离线判定及节点查询页面已实现，固定目标派发会检查节点有效期、Handler 和路由；执行租约续期与跨节点回收尚未实现。Java 21 与 Spring Boot 4.1.1 保持不变。
+独立 Vue 3 管理台已连接真实 Admin 接口，支持任务管理、Cron 预览、手动执行与运行历史，由 Nginx 托管。Admin 已实现 Redis 详情缓存，默认 TTL 60 秒。手动执行已打通 Admin → Scheduler → Worker → 结果上报：Run/Attempt、执行快照、幂等接收、有限重试、超时与重启恢复均有独立持久化。配置异步同步已实现：Admin 事务 Outbox、后台有限重试、Scheduler 版本副本和删除墓碑。Cron 已支持到期扫描、计划轮次去重及 SKIP/FIRE_ONCE。Scheduler 派发 Outbox、RabbitMQ 发布确认、Worker Inbox 提交后消费确认已实现；远程三节点正常与单节点停机场景各 43 项真实 MQ 检查通过，当前 3.8 Broker 使用显式兼容策略，至少一次死信转移仍未验收。Worker 注册、心跳、在线/离线判定及节点查询页面已实现，固定目标派发会检查节点有效期、Handler 和路由；固定 Worker 有界续租和 Handler 执行上下文已实现，见 [执行租约](docs/execution-leases.md)；跨节点回收尚未实现。Java 21 与 Spring Boot 4.1.1 保持不变。
 
 Worker 结果保存恢复已补齐：同一份结果有限重试写库，恢复后继续上报，耗尽有可定位错误，保存重试不重新调用 Handler；线程池拒绝已领取任务也有收尾。进程崩溃、重试耗尽和过期租约仍有明确限制，见 [结果保存恢复](docs/worker-result-recovery.md)。
 
@@ -38,6 +38,8 @@ Worker 结果保存恢复已补齐：同一份结果有限重试写库，恢复�
 - [Admin Redis 缓存配置与验证](docs/redis.md)
 - [任务详情缓存验证记录](docs/cache-verification.md)
 - [手动执行 HTTP 协议](docs/execution-protocol.md)
+- [固定 Worker 有界续租与 Handler 上下文](docs/execution-leases.md)
+- [执行租约验证](docs/execution-leases-verification.md)
 - [配置异步同步、状态与恢复](docs/config-sync.md)
 - [Scheduler 下一计划时间计算与查询](docs/plan-calculation.md)
 - [Cron 自动调度](docs/automatic-scheduling.md)
@@ -245,4 +247,4 @@ TaskFlow/
 
 ## 下一步
 
-任务管理、Cron 自动执行、可靠派发代码、Worker 节点管理和微服务治理基础已实现。Worker 结果保存故障已按重试、恢复上报、耗尽诊断和故障测试补齐。真实 MQ 正常与单节点停机闭环已通过；后续补充可靠死信、在途消息故障与多数派丢失验收，并推进执行租约续期与失联恢复；Jaeger 容器实测及全量配置对账仍需补齐。平台能力与验证范围见 [微服务技术栈](docs/microservice-platform.md)。
+任务管理、Cron 自动执行、可靠派发代码、Worker 节点管理和微服务治理基础已实现。Worker 结果保存故障已按重试、恢复上报、耗尽诊断和故障测试补齐。真实 MQ 正常与单节点停机闭环已通过；后续补充可靠死信、在途消息故障与多数派丢失验收，执行租约续期已补齐，后续推进失联恢复；Jaeger 容器实测及全量配置对账仍需补齐。平台能力与验证范围见 [微服务技术栈](docs/microservice-platform.md)。

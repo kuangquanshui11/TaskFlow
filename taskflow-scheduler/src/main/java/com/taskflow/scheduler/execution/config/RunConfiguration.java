@@ -9,7 +9,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(RunProperties.class)
+@EnableConfigurationProperties({RunProperties.class, ExecutionLeaseProperties.class})
 @EnableScheduling
 public class RunConfiguration {
     private final RunProperties properties;

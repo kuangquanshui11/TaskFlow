@@ -13,6 +13,9 @@ import com.taskflow.worker.execution.dto.ExecutionProtocol.*;
 import com.taskflow.worker.execution.exception.ExecutionException;
 import com.taskflow.worker.execution.mapper.ExecutionMapper;
 import com.taskflow.worker.execution.model.ExecutionCompletion;
+import com.taskflow.worker.execution.model.ExecutionContext;
+import com.taskflow.worker.execution.exception.ExecutionCancelledException;
+import com.taskflow.worker.execution.service.IExecutionLeaseService;
 import com.taskflow.worker.execution.service.IDemoHandlerService;
 import com.taskflow.worker.execution.service.IExecutionService;
 import com.taskflow.worker.execution.service.IExecutionResultService;
@@ -29,6 +32,7 @@ public class ExecutionServiceImpl implements IExecutionService {
     private final IDemoHandlerService handlers;
     private final SchedulerReportClient reports;
     private final IExecutionResultService results;
+    private final IExecutionLeaseService leases;
     private final ExecutionProperties properties;
     private final JsonMapper json;
     private final TransactionTemplate transactions;
@@ -38,9 +42,10 @@ public class ExecutionServiceImpl implements IExecutionService {
     private final AtomicBoolean recovered = new AtomicBoolean();
     public ExecutionServiceImpl(ExecutionMapper mapper, IDemoHandlerService handlers, SchedulerReportClient reports,
                                 ExecutionProperties properties, JsonMapper json, PlatformTransactionManager manager,
-                                IExecutionResultService results) {
+                                IExecutionResultService results, IExecutionLeaseService leases) {
         this.mapper = mapper; this.handlers = handlers; this.reports = reports; this.properties = properties; this.json = json;
         this.results = results;
+        this.leases = leases;
         transactions = new TransactionTemplate(manager);
         slots = new Semaphore(properties.parallelism());
         pool = new ThreadPoolExecutor(properties.parallelism(), properties.parallelism(), 0, TimeUnit.MILLISECONDS,
@@ -112,9 +117,10 @@ public class ExecutionServiceImpl implements IExecutionService {
     private void execute(Dispatch dispatch) {
         String state = "SUCCEEDED", code = "SUCCEEDED", message = "";
         boolean retryable = false;
-        var expired = new AtomicBoolean();
+        boolean handlerStarted = false;
         var active = new AtomicBoolean(true);
         ScheduledFuture<?> timeout = null;
+        ExecutionContext context = null;
         try {
             long remaining = java.time.Duration.between(Instant.now(), dispatch.expiresAt()).toMillis()
                     - properties.requestTimeout().toMillis();
@@ -123,26 +129,49 @@ public class ExecutionServiceImpl implements IExecutionService {
                 state = "FAILED"; code = "LEASE_EXPIRED"; message = "排队期间租约已临近过期，未执行 Handler";
             } else {
                 var runner = Thread.currentThread();
-                var deadline = Instant.now().plusMillis(budget);
-                timeout = timeouts.schedule(() -> {
-                    synchronized (active) {
-                        if (active.get()) { expired.set(true); runner.interrupt(); }
-                    }
-                }, budget, TimeUnit.MILLISECONDS);
                 try {
-                    message = handlers.execute(dispatch);
+                    // 首次领取失败时不启动业务；续租使用独立网络线程，失效检查使用本地计时器。
+                    context = leases.open(dispatch);
+                    var execution = context;
+                    timeout = timeouts.scheduleWithFixedDelay(() -> {
+                        synchronized (active) {
+                            if (active.get() && execution.cancelled()) {
+                                active.set(false); runner.interrupt();
+                            }
+                        }
+                    }, 0, leases.watchdogIntervalMillis(), TimeUnit.MILLISECONDS);
+                    context.checkActive();
+                    handlerStarted = true;
+                    message = handlers.execute(dispatch.snapshot(), context);
+                    context.checkActive();
+                } catch (ExecutionCancelledException cancelled) {
+                    state = "FAILED"; code = cancelled.code(); message = "执行资格已失效";
+                } catch (ExecutionException rejected) {
+                    state = "FAILED"; code = "LEASE_LOST"; message = "未能领取执行租约，未执行 Handler";
                 } catch (InterruptedException interrupted) {
                     state = "FAILED"; code = "HANDLER_INTERRUPTED"; message = "执行线程被中断";
                 } catch (IllegalArgumentException invalid) {
-                    state = "FAILED"; code = "INVALID_HANDLER_ARGUMENT"; message = "处理器参数不合法";
+                    state = "FAILED";
+                    code = handlerStarted ? "INVALID_HANDLER_ARGUMENT" : "LEASE_UNCONFIRMED";
+                    message = handlerStarted ? "处理器参数不合法" : "执行租约确认不合法，未执行 Handler";
                 } catch (RuntimeException failed) {
-                    state = "FAILED"; code = "HANDLER_FAILED"; message = "示例处理器执行失败"; retryable = true;
+                    state = "FAILED";
+                    code = handlerStarted ? "HANDLER_FAILED" : "LEASE_UNCONFIRMED";
+                    message = handlerStarted ? "示例处理器执行失败" : "未能确认执行租约，未执行 Handler";
+                    retryable = handlerStarted;
                 } finally {
-                    synchronized (active) { active.set(false); timeout.cancel(false); }
+                    synchronized (active) {
+                        active.set(false);
+                        if (timeout != null) timeout.cancel(false);
+                        if (context != null) {
+                            if (context.cancelled()) {
+                                state = "FAILED"; code = context.cancellationCode();
+                                message = "执行超时或租约已失效"; retryable = false;
+                            }
+                            context.handlerFinished();
+                        }
+                    }
                     Thread.interrupted();
-                }
-                if (expired.get() || !Instant.now().isBefore(deadline)) {
-                    state = "FAILED"; code = "EXECUTION_TIMEOUT"; message = "Handler 执行超时"; retryable = false;
                 }
             }
             // 终态与待上报信息在同一条本地 SQL 中持久化；HTTP 上报由独立扫描完成。
@@ -153,6 +182,7 @@ public class ExecutionServiceImpl implements IExecutionService {
                     dispatch.attemptId(), failure.getClass().getSimpleName());
         } finally {
             synchronized (active) { active.set(false); if (timeout != null) timeout.cancel(false); }
+            if (context != null) leases.close(context);
             Thread.interrupted();
             // Handler 真正退出且结果保存结束后才释放槽位，限制故障期间内存中的结果数量。
             slots.release();

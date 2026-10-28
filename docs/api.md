@@ -11,7 +11,7 @@
 | 可选处理器查询 | Admin | 已实现，返回配置白名单，不代表 Worker 已在线注册 |
 | 手动触发、Run/Attempt 查询 | Scheduler；Admin 代理 | 已实现，独立状态库、幂等键、完整快照 |
 | Cron 到期扫描、计划去重、错过补偿 | Scheduler | 已实现，Run/首次 Attempt/计划推进同事务，SKIP/FIRE_ONCE |
-| 待派发扫描、有限重试、租约校验 | Scheduler | 已实现；续租和跨节点回收待后续实现 |
+| 待派发扫描、有限重试、租约校验 | Scheduler | 已实现；固定 Worker 有界续租已实现，跨节点回收待后续实现 |
 | 事务派发 Outbox、RabbitMQ 发布确认 | Scheduler | 已实现；三节点真实 MQ 闭环与满载背压验收通过，见可靠派发与验证记录 |
 | MQ 消费确认、Inbox 去重、死信处理 | Worker | 已实现；提交后 ACK，满载等待且不消耗故障预算，过期投递 ACK 并由 Scheduler 超时收尾；实际故障有限重试；固定 Worker 队列 |
 | Handler 执行、幂等接收、结果重报 | Worker | 已实现，白名单 Handler、有界执行、独立持久化 |
@@ -243,7 +243,9 @@ POST /api/v1/runs/insert：
 
 GET /api/v1/runs/select 的 jobId 必须为正数，page 默认 1、范围 1–1000000，pageSize 默认 10、范围 1–100。data 为 records、total、page、pageSize；records 包含运行 id、jobId、configVersion、state、attemptCount、resultCode、message 和创建/更新时间。运行历史来自 Scheduler，即使 Job 后来删除也继续保留。
 
-GET /api/v1/runs/selectById 与 selectByRequestKey 返回同一详情结构；不存在返回 404 / RUN_NOT_FOUND。snapshot 包含原配置的名称、描述、处理器、参数、执行策略、Cron、时区和配置版本。后续编辑 Job 不改变已有 Run。attempts 按 attemptNumber 排序，包含 id、runId、leaseVersion、state、dispatchCount、nextDispatchAt、expiresAt、startedAt、finishedAt、resultCode、message。当前 startedAt 为开始派发时间。
+GET /api/v1/runs/selectById 与 selectByRequestKey 返回同一详情结构；不存在返回 404 / RUN_NOT_FOUND。snapshot 包含原配置的名称、描述、处理器、参数、执行策略、Cron、时区和配置版本。后续编辑 Job 不改变已有 Run。attempts 按 attemptNumber 排序，包含 id、runId、leaseVersion、state、dispatchCount、nextDispatchAt、expiresAt、startedAt、finishedAt、resultCode、message，以及 nullable 的 leaseUntil、ownerWorkerId、ownerSessionId。当前 startedAt 为开始派发时间；expiresAt 是不可延长的硬截止，leaseUntil 是执行资格短租约。
+
+Worker 内部续租使用 `POST /internal/v1/attempts/updateLease`，请求含 attemptId、runId、leaseVersion、workerId、sessionId，使用结果上报密钥。返回 HTTP 200，包含身份字段与 serverTime、leaseUntil、executionDeadline、hardDeadline；校验失败返回 400，鉴权失败 401，过期/终态/执行者或版本不匹配返回 409 / STALE_LEASE。该接口不经 Gateway 公开。领取与续租不改变原派发消息或 leaseVersion；续租次数无上限，但不可越过 hardDeadline。完整协议及 Handler 幂等/fencing 约定见 [执行租约](execution-leases.md)。
 
 `nextDispatchAt` 也表示下一次派发资格检查时间。目标节点离线、Handler 或路由不匹配时，该时间延后（默认 2s）；未曾派发的 Attempt 保持 READY、dispatchCount 不增加、expiresAt 仍为空。已领取执行租约的重派发等待保留原 expiresAt，过期仍会终结。不会因等待创建额外 Attempt，也不改变本节接口路径、请求参数或响应字段。配置和验证见 [扫描公平性](dispatch-fairness-verification.md)。
 
