@@ -71,9 +71,9 @@
 
 ## 第五步 可靠消息与恢复
 
-当前已实现 Scheduler 派发 Outbox、RabbitMQ 发布确认/不可路由处理、Worker Inbox 提交后消费确认、有限接收重试与死信策略；提供三节点 quorum 集群、独立数据卷、多节点连接及隔离 vhost 验收脚本。2026-10-28 已接入远程真实三节点 Broker，正常和单节点停机场景各 43 项三服务检查通过，确认 quorum 选主、两节点执行及恢复三个在线副本。当前 3.8.34 使用显式兼容策略，至少一次死信转移、在途消息故障窗口、多数派丢失等仍未验收。协议见 [可靠派发](reliable-dispatch.md)，结果见 [本轮验证](mq-verification.md)。固定 Worker 有界续租已实现，见 [执行租约](execution-leases.md)；跨节点回收与更完整故障对账仍待后续实现，不能将第五步整体标为完成。
+当前已实现 Scheduler 派发 Outbox、RabbitMQ 发布确认/不可路由处理、Worker Inbox 提交后消费确认、有限接收重试与死信策略；提供三节点 quorum 集群、独立数据卷、多节点连接及隔离 vhost 验收脚本。2026-10-28 已接入远程真实三节点 Broker，正常和单节点停机场景各 43 项三服务检查通过，确认 quorum 选主、两节点执行及恢复三个在线副本。当前 3.8.34 使用显式兼容策略，至少一次死信转移、在途消息故障窗口、多数派丢失等仍未验收。协议见 [可靠派发](reliable-dispatch.md)，结果见 [本轮验证](mq-verification.md)。固定 Worker 有界续租已实现，见 [执行租约](execution-leases.md)；MQ 独立队列水平扩展、固定 Attempt 目标及租约失效后有限跨节点重试已实现，见 [扩展设计](worker-horizontal-scaling.md) 与 [扩展验证](worker-horizontal-scaling-verification.md)；同一 Attempt 跨 Inbox 接管与更完整故障对账仍待后续实现，不能将第五步整体标为完成。
 
-Worker 节点管理已实现：独立注册/心跳协议与密钥、Scheduler 节点和会话历史、超时离线及乱序/旧会话隔离、固定派发目标检查、Admin 查询和 Vue 工作节点页面。协议及升级见 [节点管理](worker-nodes.md)，验收见 [节点验证](worker-nodes-verification.md)。已按小步补齐 Worker 结果保存重试、恢复上报、耗尽诊断及故障测试，见 [结果保存恢复](worker-result-recovery.md)。后续补充可靠死信与在途故障验证，固定 Worker 执行续租已补齐，后续独立实施失联恢复；节点 generation 和执行 leaseVersion 分别维护，不能将节点心跳视为执行续租。
+Worker 节点管理已实现：独立注册/心跳协议与密钥、Scheduler 节点和会话历史、超时离线及乱序/旧会话隔离、MQ 动态节点选择与固定 Attempt 目标检查、Admin 查询和 Vue 工作节点页面。协议及升级见 [节点管理](worker-nodes.md)，验收见 [节点验证](worker-nodes-verification.md)。已按小步补齐 Worker 结果保存重试、恢复上报、耗尽诊断及故障测试，见 [结果保存恢复](worker-result-recovery.md)。后续补充可靠死信与在途故障验证，固定 Worker 执行续租已补齐，后续独立实施失联恢复；节点 generation 和执行 leaseVersion 分别维护，不能将节点心跳视为执行续租。
 
 - Admin 配置同步保留 HTTP 事务 Outbox；Scheduler 已有独立派发 Outbox。
 - RabbitMQ、发布确认、消费确认和持久化去重已完成真实三节点及单节点停机闭环；旧版死信保障和更完整故障窗口仍待验证。

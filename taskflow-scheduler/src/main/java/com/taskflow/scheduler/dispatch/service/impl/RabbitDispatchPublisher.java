@@ -21,13 +21,15 @@ public class RabbitDispatchPublisher implements IDispatchPublisher {
     @Override
     public void publish(OutboxEvent event) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) throw new IllegalStateException("MQ publish inside SQL transaction");
+        if (event.target() == null || event.target().exchange() == null || event.target().routingKey() == null)
+            throw new IllegalStateException("Dispatch route is missing");
         var message = MessageBuilder.withBody(event.messageJson().getBytes(StandardCharsets.UTF_8))
                 .setContentType(MessageProperties.CONTENT_TYPE_JSON).setContentEncoding("UTF-8")
                 .setDeliveryMode(MessageDeliveryMode.PERSISTENT).setMessageId(event.eventId().toString())
                 .setType("taskflow.dispatch.v1").build();
         var correlation = new CorrelationData(event.eventId() + ":" + event.claimVersion());
         try {
-            rabbit.send(properties.exchange(), properties.routingKey(), message, correlation);
+            rabbit.send(event.target().exchange(), event.target().routingKey(), message, correlation);
             var confirm = correlation.getFuture().get(properties.confirmTimeout().toMillis(), TimeUnit.MILLISECONDS);
             // mandatory return 先于对应 confirm 完成；ack 但不可路由也必须保留重发。
             if (!confirm.ack() || correlation.getReturned() != null) throw new IllegalStateException("MQ publish rejected or unroutable");

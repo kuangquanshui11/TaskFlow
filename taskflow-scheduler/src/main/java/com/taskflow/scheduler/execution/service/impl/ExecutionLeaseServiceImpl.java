@@ -7,7 +7,6 @@ import com.taskflow.scheduler.execution.dto.ExecutionProtocol.*;
 import com.taskflow.scheduler.execution.exception.RunException;
 import com.taskflow.scheduler.execution.mapper.RunDataMapper;
 import com.taskflow.scheduler.execution.service.IExecutionLeaseService;
-import com.taskflow.scheduler.node.config.WorkerNodeProperties;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
@@ -17,11 +16,10 @@ public class ExecutionLeaseServiceImpl implements IExecutionLeaseService {
     private final RunDataMapper mapper;
     private final ExecutionLeaseProperties leases;
     private final JsonMapper json;
-    private final WorkerNodeProperties nodes;
 
     public ExecutionLeaseServiceImpl(RunDataMapper mapper, ExecutionLeaseProperties leases,
-                                     JsonMapper json, WorkerNodeProperties nodes) {
-        this.mapper = mapper; this.leases = leases; this.json = json; this.nodes = nodes;
+                                     JsonMapper json) {
+        this.mapper = mapper; this.leases = leases; this.json = json;
     }
 
     @Override @Transactional
@@ -34,7 +32,7 @@ public class ExecutionLeaseServiceImpl implements IExecutionLeaseService {
         if (!request.runId().equals(run.id()) || run.currentAttempt() != attempt.attemptNumber()
                 || !java.util.Set.of("READY", "RUNNING", "RETRY_WAIT").contains(run.state())
                 || attempt.leaseVersion() != request.leaseVersion()
-                || attempt.ownerWorkerId() == null && !nodes.targetWorkerId().equals(request.workerId())
+                || !request.workerId().equals(attempt.targetWorkerId())
                 || !java.util.Set.of("READY", "DISPATCHING", "RUNNING").contains(attempt.state())
                 || attempt.expiresAt() == null || attempt.startedAt() == null || !attempt.validAt(now)
                 || attempt.ownerWorkerId() != null && (!attempt.ownerWorkerId().equals(request.workerId())

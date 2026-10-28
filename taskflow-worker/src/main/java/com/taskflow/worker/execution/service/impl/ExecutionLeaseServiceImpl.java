@@ -8,6 +8,7 @@ import com.taskflow.worker.execution.config.ExecutionProperties;
 import com.taskflow.worker.execution.dto.ExecutionProtocol.*;
 import com.taskflow.worker.execution.exception.ExecutionException;
 import com.taskflow.worker.execution.model.ExecutionContext;
+import com.taskflow.worker.execution.model.ExecutionOwner;
 import com.taskflow.worker.execution.service.IExecutionLeaseService;
 import com.taskflow.worker.node.config.WorkerRegistrationProperties;
 import jakarta.annotation.PreDestroy;
@@ -30,6 +31,7 @@ public class ExecutionLeaseServiceImpl implements IExecutionLeaseService {
                 Thread.ofPlatform().name("taskflow-lease-", 0).factory());
         renewals.setRemoveOnCancelPolicy(true);
     }
+    @Override public ExecutionOwner owner() { return new ExecutionOwner(node.workerId(), sessionId); }
     @Override public ExecutionContext open(Dispatch dispatch) {
         var request = new LeaseRequest(dispatch.attemptId(), dispatch.runId(), dispatch.leaseVersion(), node.workerId(), sessionId);
         long started = System.nanoTime();

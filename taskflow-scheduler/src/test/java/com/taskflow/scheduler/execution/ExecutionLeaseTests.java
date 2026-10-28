@@ -166,7 +166,7 @@ class ExecutionLeaseTests {
     private RunView dispatched(int timeout) { var run = runs.insert(create(timeout)); runs.dispatchPending(); return runs.selectById(run.id()); }
     private Create create(int timeout) { return new Create(UUID.randomUUID(), new Snapshot(7, 1, "lease-test", "demoSuccess", json.readTree("{}"), timeout, 3, 1, "MANUAL", null, "UTC", "SKIP", false, null)); }
     private LeaseRequest request(RunView run) { var a = run.attempts().getFirst(); return new LeaseRequest(a.id(), run.id(), a.leaseVersion(), workerId, UUID.randomUUID()); }
-    private Result success(LeaseRequest request) { return new Result(request.attemptId(), request.runId(), request.leaseVersion(), "SUCCEEDED", "SUCCEEDED", "done", false); }
+    private Result success(LeaseRequest request) { return new Result(request.attemptId(), request.runId(), request.leaseVersion(), "SUCCEEDED", "SUCCEEDED", "done", false, request.workerId(), request.sessionId()); }
     private void assertStale(Runnable action) { assertThatThrownBy(action::run).isInstanceOfSatisfying(RunException.class, failure -> assertThat(failure.status()).isEqualTo(409)); }
     private HttpResponse<String> post(LeaseRequest request, String token) throws Exception {
         var builder = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/internal/v1/attempts/updateLease"))

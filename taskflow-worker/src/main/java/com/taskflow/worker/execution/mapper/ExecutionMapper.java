@@ -4,6 +4,7 @@ import java.sql.*;
 import java.time.Instant;
 import java.util.*;
 import com.taskflow.worker.execution.model.ExecutionRow;
+import com.taskflow.worker.execution.model.ExecutionOwner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -28,8 +29,9 @@ public class ExecutionMapper {
     public List<ExecutionRow> pending(int limit) {
         return jdbc.query("SELECT * FROM worker_execution WHERE state='ACCEPTED' ORDER BY created_at LIMIT ?", this::read, limit);
     }
-    public boolean claim(UUID id) {
-        return jdbc.update("UPDATE worker_execution SET state='RUNNING' WHERE attempt_id=? AND state='ACCEPTED'", id.toString()) == 1;
+    public boolean claim(UUID id, ExecutionOwner identity) {
+        return jdbc.update("UPDATE worker_execution SET state='RUNNING',report_worker_id=?,report_session_id=? WHERE attempt_id=? AND state='ACCEPTED'",
+                identity.workerId(), identity.sessionId().toString(), id.toString()) == 1;
     }
     public boolean finish(UUID id, String state, String code, String message, boolean retryable, Instant now) {
         return jdbc.update("UPDATE worker_execution SET state=?,result_code=?,message=?,retryable=?,finished_at=?,next_report_at=? WHERE attempt_id=? AND state='RUNNING'",
@@ -53,7 +55,8 @@ public class ExecutionMapper {
         return new ExecutionRow(UUID.fromString(rs.getString("attempt_id")), UUID.fromString(rs.getString("run_id")),
                 rs.getString("fingerprint"), rs.getString("dispatch_json"), rs.getString("state"), rs.getString("result_code"),
                 rs.getString("message"), rs.getBoolean("retryable"), rs.getBoolean("reported"), rs.getInt("report_count"),
-                instant(rs, "next_report_at"), instant(rs, "created_at"), instant(rs, "finished_at"));
+                instant(rs, "next_report_at"), instant(rs, "created_at"), instant(rs, "finished_at"), rs.getString("report_worker_id"),
+                rs.getString("report_session_id") == null ? null : UUID.fromString(rs.getString("report_session_id")));
     }
     private Instant instant(ResultSet rs, String name) throws SQLException {
         var value = rs.getTimestamp(name); return value == null ? null : value.toInstant();

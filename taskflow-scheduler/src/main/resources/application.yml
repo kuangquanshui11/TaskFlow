@@ -93,6 +93,7 @@ eureka:
 taskflow:
   nodes:
     node-token: "${TASKFLOW_NODE_TOKEN:}"
+    # 仅 HTTP 直连及显式关闭节点检查的兼容模式使用；MQ 按节点能力和负载选择。
     target-worker-id: "${TASKFLOW_TARGET_WORKER_ID:worker-default}"
     offline-timeout: 30s
     dispatch-gating-enabled: true
@@ -133,6 +134,7 @@ taskflow:
     dispatch-retry-delay: 2s
     max-dispatch-attempts: 5
     lease-grace: 10s
+    retry-on-lease-loss: "${TASKFLOW_RETRY_ON_LEASE_LOSS:true}"
     lease:
       duration: ${TASKFLOW_EXECUTION_LEASE_DURATION:30s}
     scanning-enabled: true

@@ -65,7 +65,7 @@ public class DispatchRelayServiceImpl implements IDispatchRelayService {
                 || event.state().equals("SENDING") && !event.claimUntil().isAfter(now))) return null;
         if (!event.expiresAt().isAfter(now)) { mapper.cancel(event.attemptId()); return null; }
         var command=json.readValue(event.messageJson(),com.taskflow.scheduler.dispatch.dto.DispatchEvent.class).command();
-        if (!nodes.canDispatch(command.snapshot().handlerKey())) {
+        if (!nodes.canDispatch(event.target(), command.snapshot().handlerKey())) {
             if (!mapper.deferPublication(event, now.plus(properties.nodeRecheckDelay()), now))
                 throw new IllegalStateException("Outbox 状态或领取版本已变化");
             return null;

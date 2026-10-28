@@ -61,7 +61,7 @@ class PlanTriggerTests {
         doAnswer(call -> {
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
             Dispatch dispatch = call.getArgument(0);
-            runs.updateResult(new Result(dispatch.attemptId(),dispatch.runId(),dispatch.leaseVersion(),"SUCCEEDED","SUCCEEDED","ok",false));
+            runs.updateResult(new Result(dispatch.attemptId(),dispatch.runId(),dispatch.leaseVersion(),"SUCCEEDED","SUCCEEDED","ok",false, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001")));
             return null;
         }).when(worker).dispatch(any());
         runs.dispatchPending();
@@ -154,7 +154,7 @@ class PlanTriggerTests {
         assertThat(runs.selectById(scheduled.id()).snapshot()).isEqualTo(scheduled.snapshot());
         runs.dispatchPending();
         var attempt = runs.selectById(scheduled.id()).attempts().getFirst();
-        runs.updateResult(new Result(attempt.id(),scheduled.id(),attempt.leaseVersion(),"FAILED","HANDLER_FAILED","retry",true));
+        runs.updateResult(new Result(attempt.id(),scheduled.id(),attempt.leaseVersion(),"FAILED","HANDLER_FAILED","retry",true, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001")));
         assertThat(runs.selectById(scheduled.id()).attempts()).hasSize(2);
         assertThat(runs.selectById(scheduled.id()).scheduledAt()).isEqualTo(due);
         var manualA = runs.insert(new Create(UUID.randomUUID(),scheduled.snapshot()));

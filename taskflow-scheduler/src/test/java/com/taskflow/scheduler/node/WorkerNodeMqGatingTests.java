@@ -39,7 +39,9 @@ class WorkerNodeMqGatingTests {
     @Test void wrongRouteBlocksPreparationAndExpiredNodeBlocksPublishingWithoutSpendingBudget() {
         var run=runs.insert(new Create(UUID.randomUUID(),new Snapshot(7,1,"mq-node-gate","demoSuccess",json.readTree("{}"),60,1,5,"MANUAL",null,"UTC","SKIP",false,null)));
         var id=run.attempts().getFirst().id();
-        nodes.register(registration("wrong.queue",UUID.randomUUID()));runs.dispatchPending();
+        var wrong = registration("wrong.queue",UUID.randomUUID());
+        nodes.register(new Registration(wrong.workerId(),wrong.displayName(),wrong.sessionId(),wrong.handlerKeys(),2,4,"rabbitmq",
+                "taskflow","wrong.exchange",wrong.dispatchQueue(),wrong.dispatchRoutingKey()));runs.dispatchPending();
         assertThat(outbox.find(id,false).orElseThrow().state()).isEqualTo("WAITING");
         assertThat(nodes.selectById("worker-default").dispatchEligible()).isFalse();
         when(clock.instant()).thenReturn(WorkerNodeTests.BASE.plusSeconds(30));

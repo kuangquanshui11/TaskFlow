@@ -25,6 +25,7 @@ taskflow:
       enabled: false
     initialization-enabled: false
   execution:
+    retry-on-lease-loss: false
     scanning-enabled: false
     control-token: test-control-token
     dispatch-token: test-dispatch-token

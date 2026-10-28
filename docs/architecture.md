@@ -6,7 +6,7 @@
 
 用户要求后续代码按微服务原则拆分模块，职责清楚，便于维护和独立修改。项目采用单代码仓库、Maven 聚合、多个可独立运行和打包的 Spring Boot 服务。
 
-当前已交付三个独立服务、Admin 任务管理与详情缓存、手动执行闭环及 Cron 自动调度。Scheduler 保存计划副本、Run/Attempt、快照、派发 Outbox 和 Worker 节点/会话历史；Worker 保存去重 Inbox 与待上报结果，注册实际 Handler 能力并周期上报心跳及负载。派发默认经 RabbitMQ，管理台通过 Admin 查询 Scheduler 权威状态，新增工作节点页面。三节点 quorum 配置已提供，实际集群验收待执行；执行租约续期和跨节点回收尚未实现。见 [节点管理](worker-nodes.md)、[执行协议](execution-protocol.md) 与 [可靠派发](reliable-dispatch.md)。
+当前已交付三个独立服务、Admin 任务管理与详情缓存、手动执行闭环及 Cron 自动调度。Scheduler 保存计划副本、Run/Attempt、快照、派发 Outbox 和 Worker 节点/会话历史；Worker 保存去重 Inbox 与待上报结果，注册实际 Handler 能力并周期上报心跳及负载。派发默认经 RabbitMQ，管理台通过 Admin 查询 Scheduler 权威状态，新增工作节点页面。三节点 quorum 集群及 Broker 单节点停机已验收，当前旧版 Broker 的死信可靠转移仍有限制；执行有界续租已实现；MQ 按能力和负载选择独立 Worker 队列，Attempt 固定目标，租约失效后按上限新增 Attempt 重新选择节点，详见 [水平扩展](worker-horizontal-scaling.md)。见 [节点管理](worker-nodes.md)、[执行协议](execution-protocol.md) 与 [可靠派发](reliable-dispatch.md)。
 
 Maven 多模块管理构建；独立进程、明确数据归属和协议协作落实服务边界。两个概念需要同时遵守。
 
@@ -24,7 +24,7 @@ Tomcat 使用 Admin 内嵌容器；Redis 由业务代码访问，数据库仍是
 | taskflow-registry | 8761 | Eureka 注册与服务发现，Basic 认证 | 无业务数据库 |
 | taskflow-config-server | 8888 | 非秘密策略配置，native/Git 后端，Basic 认证 | 独立配置仓库 |
 | taskflow-admin | 8080 | 管理台、Job 配置、管理接口；转发运行查询和手动触发请求 | Job 定义、配置版本、配置同步 Outbox |
-| taskflow-scheduler | 8081 | 计划、触发、Run/Attempt、派发、重试、租约校验、节点在线状态和固定目标检查 | 计划副本、配置 Inbox、Run、Attempt、派发 Outbox、节点及会话历史 |
+| taskflow-scheduler | 8081 | 计划、触发、Run/Attempt、派发、重试、租约校验、节点在线状态、MQ 节点选择和固定 Attempt 目标 | 计划副本、配置 Inbox、Run、Attempt、派发 Outbox、节点及会话历史 |
 | taskflow-worker | 8082 | Handler 执行、并发控制、注册/心跳及结果上报 | 本地执行 Inbox、待上报结果；不拥有全局 Run 或节点权威状态 |
 
 Admin 不执行任务；Scheduler 不包含业务 Handler；Worker 不直连 Admin 或 Scheduler 的表。运行查询由 Admin 通过 Scheduler API 获取。
@@ -70,7 +70,7 @@ JobController 负责新增、修改、启停和删除；JobQueryController 负�
 
 数据库接入时为三个服务分别管理迁移目录、连接配置和账号。开发环境可共用一个 MySQL 实例，schema 分别为 taskflow_admin、taskflow_scheduler、taskflow_worker；创建时仅给各自 schema 授权。
 
-Admin 使用自己的 V1 / V2 / V3 迁移，其中 V3 引入配置同步 Outbox。Scheduler V2 引入计划副本与同步 Inbox，V3 持久化 next_fire_time、calculated_at 和计算状态，V4 增加计划轮次唯一键，V5 引入派发 Outbox，V6 引入 Worker 节点和会话历史；Worker 保持 V1 执行迁移。三者拥有自己的 MySQL schema、独立账号，各自 Mapper 不引用其他应用模块。运行环境默认使用 RabbitMQ；测试 profile 使用隔离 H2、HTTP 回归及 MQ 边界故障注入，不依赖外部 Broker。V5/V6 的真实 MySQL 升级及 MQ 集群验收尚待执行。
+Admin 使用自己的 V1 / V2 / V3 迁移，其中 V3 引入配置同步 Outbox。Scheduler V2 引入计划副本与同步 Inbox，V3 持久化 next_fire_time、calculated_at 和计算状态，V4 增加计划轮次唯一键，V5 引入派发 Outbox，V6 引入 Worker 节点和会话历史；Scheduler V7 引入执行短租约，V8 引入 Attempt 目标和 Outbox 路由快照及路由唯一约束；Worker V2 持久化结果所属执行身份。三者拥有自己的 MySQL schema、独立账号，各自 Mapper 不引用其他应用模块。运行环境默认使用 RabbitMQ；测试 profile 使用隔离 H2、HTTP 回归及 MQ 边界故障注入，不依赖外部 Broker。MQ 集群历史验收见 [MQ 验证](mq-verification.md)；V8 与集群派发的验证见 [扩展验证](worker-horizontal-scaling-verification.md)。
 
 Admin Job ID 在 Scheduler 中是逻辑引用，不建立跨 schema 外键。Worker 通过协议上报执行状态，不直接更新 Scheduler 的 Run 表。
 
@@ -86,9 +86,9 @@ Admin Job ID 在 Scheduler 中是逻辑引用，不建立跨 schema 外键。Wor
 
 配置同步已采用 Admin 事务 Outbox 推送版本化 HTTP 事件，不依赖分页拉取或全局游标。保存只提交本地事务；后台专用线程领取持久化发送租约，在事务外调用 Scheduler。Scheduler 用 Inbox 和版本检查处理重复、乱序与删除墓碑。失败有限重试，最新失败版本可人工重试。管理台区分保存、副本已同步、节点触发开关及 Run 结果。完整协议、恢复边界和验证见 [异步配置同步](config-sync.md)。
 
-Scheduler 的 dispatch 模块维护自己的 Outbox、领取版本和有限发布重试，经 correlated confirm 与 mandatory return 判断是否交给 Broker。Worker 的 dispatch 模块校验 v1 事件，复用 execution 模块持久化去重，提交后手动 ACK，永久错误和耗尽接收重试的消息进入死信队列。三节点使用 quorum 队列，应用使用多节点连接地址。Admin 配置同步和 Worker 结果上报仍走 HTTP。固定 Worker 有界续租及 Handler 执行上下文见 [执行租约](execution-leases.md)。全量对账、副本重建及跨 Worker 接管待实现。
+Scheduler 的 dispatch 模块维护自己的 Outbox、领取版本和有限发布重试，经 correlated confirm 与 mandatory return 判断是否交给 Broker。Worker 的 dispatch 模块校验 v1 事件，复用 execution 模块持久化去重，提交后手动 ACK，永久错误和耗尽接收重试的消息进入死信队列。三节点使用 quorum 队列，应用使用多节点连接地址。Admin 配置同步和 Worker 结果上报仍走 HTTP。Worker 有界续租及 Handler 执行上下文见 [执行租约](execution-leases.md)。全量对账、副本重建及同一 Attempt 跨 Inbox 接管待实现；新增 Attempt 可重新选择 Worker。
 
-节点管理使用独立 HTTP 契约及节点密钥。Scheduler V6 保存 worker_node 和不可复用的 worker_node_session，按接收时间计算有效期，较旧心跳不延长存活，新会话只能替代已过期会话。派发准备和 MQ 发布前检查固定目标在线及能力/路由匹配。Worker 的独立心跳线程不会占用执行槽位，Admin 代理查询而不建节点副本或缓存。节点 generation 只约束注册和心跳，不代替执行 leaseVersion，不撤销已派发任务，详见 [节点协议](worker-nodes.md)。
+节点管理使用独立 HTTP 契约及节点密钥。Scheduler V6 保存 worker_node 和不可复用的 worker_node_session，按接收时间计算有效期，较旧心跳不延长存活，新会话只能替代已过期会话。MQ 派发准备按能力/负载选择节点并绑定目标与路由，发布前仅检查原目标在线及能力/路由匹配；HTTP 保留固定目标。Worker 的独立心跳线程不会占用执行槽位，Admin 代理查询而不建节点副本或缓存。节点 generation 只约束注册和心跳，不代替执行 leaseVersion，不撤销已派发任务，详见 [节点协议](worker-nodes.md)。
 
 不同时维护两套默认派发通道。切换方案时更新协议、迁移步骤和故障验收。
 

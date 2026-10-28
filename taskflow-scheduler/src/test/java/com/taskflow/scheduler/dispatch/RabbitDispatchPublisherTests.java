@@ -18,6 +18,8 @@ class RabbitDispatchPublisherTests {
         var rabbit=mock(RabbitTemplate.class); var event=event();
         doAnswer(call -> {
             Message message=call.getArgument(2); CorrelationData data=call.getArgument(3);
+            assertThat(call.getArgument(0, String.class)).isEqualTo("node-exchange");
+            assertThat(call.getArgument(1, String.class)).isEqualTo("worker.second");
             assertThat(message.getMessageProperties().getDeliveryMode()).isEqualTo(MessageDeliveryMode.PERSISTENT);
             assertThat(message.getMessageProperties().getMessageId()).isEqualTo(event.eventId().toString());
             assertThat(message.getMessageProperties().getType()).isEqualTo("taskflow.dispatch.v1");
@@ -46,6 +48,7 @@ class RabbitDispatchPublisherTests {
     }
     private OutboxEvent event() {
         var id=UUID.randomUUID();
-        return new OutboxEvent(id,id,"SENDING","{}",Instant.now().plusSeconds(60),1,Instant.now(),1,Instant.now().plusSeconds(30),null);
+        return new OutboxEvent(id,id,"SENDING","{}",Instant.now().plusSeconds(60),1,Instant.now(),1,Instant.now().plusSeconds(30),null,
+                new com.taskflow.scheduler.node.model.DispatchTarget("worker-second", "taskflow", "node-exchange", "second-queue", "worker.second"));
     }
 }

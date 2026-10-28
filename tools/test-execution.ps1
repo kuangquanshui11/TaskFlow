@@ -1,6 +1,9 @@
-param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$IncludeExecutionLease,
+param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster,
     [ValidateSet('http','rabbitmq')][string]$Transport = 'http', [string]$MqSettingsPath,[string]$PlatformSettingsPath)
 $ErrorActionPreference = 'Stop'
+if ($IncludeWorkerCluster -and ($Transport -ne 'rabbitmq' -or $PlatformSettingsPath)) {
+    throw 'Worker cluster acceptance requires standalone RabbitMQ mode and an isolated test vhost.'
+}
 $repoPath = Split-Path -Parent $PSScriptRoot
 Set-Location $repoPath
 $platform=$null
@@ -15,6 +18,7 @@ if ($Transport -eq 'rabbitmq') {
 }
 $javaExe = (Get-Command java -CommandType Application).Source
 $ports = @{ admin = 19080; scheduler = 19081; worker = 19082; gateway = 19088 }
+if ($IncludeWorkerCluster) { $ports['worker2'] = 19083 }
 $nginxPort = 8091
 foreach ($testPort in @($ports.Values) + @($nginxPort)) {
     $probe = [Net.Sockets.TcpClient]::new()
@@ -150,9 +154,9 @@ function Wait-TestSync([long]$JobId, [string]$State, [long]$Version) {
     }
     throw "Job $JobId sync did not reach $State version $Version."
 }
-function Wait-TestNode([string]$State) {
+function Wait-TestNode([string]$State, [string]$WorkerId = 'worker-default') {
     for ($i=0; $i -lt 80; $i++) {
-        $response=Call-Api 'GET' 'http://127.0.0.1:19080/api/v1/workers/selectById?workerId=worker-default'
+        $response=Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/workers/selectById?workerId=" + $WorkerId)
         if ($response.status -eq 200 -and $response.body.data.status -eq $State) { return $response.body.data }
         Start-Sleep -Milliseconds 250
     }
@@ -201,7 +205,7 @@ try {
             $eurekaYaml="eureka:`n  client:`n    enabled: true`n    registry-fetch-interval-seconds: 1`n    initial-instance-info-replication-interval-seconds: 1`n    instance-info-replication-interval-seconds: 2`n    service-url:`n      defaultZone: `"$($platform.registryUrl)`"`n  instance:`n    lease-renewal-interval-in-seconds: 1`n    lease-expiration-duration-in-seconds: 4"
             $traceYaml="  tracing:`n    sampling:`n      probability: 1.0`n    export:`n      otlp:`n        enabled: true`n  opentelemetry:`n    tracing:`n      export:`n        otlp:`n          endpoint: `"$($platform.traceEndpoint)`"`n  info:`n    env:`n      enabled: true`n  endpoints:`n    web:`n      exposure:`n        include: health,info"
         }
-        $executionLeaseYaml = if ($IncludeExecutionLease) { "    lease:`n      duration: 10s`n      renewal-interval: 500ms" } else { '' }
+        $executionLeaseYaml = if ($IncludeExecutionLease -or $IncludeWorkerCluster) { "    lease:`n      duration: 10s`n      renewal-interval: 500ms" } else { '' }
         $configuration = @"
 spring:
   config:
@@ -431,7 +435,7 @@ info:
     $sameAfterChange = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/runs/insert' $success.request
     Assert-Check ($sameAfterChange.body.data.id -eq $success.run.id) 'Original request remains idempotent after Job changes'
     $attempt = $successResult.attempts[0]
-    $stale = Call-Api 'POST' 'http://127.0.0.1:19081/internal/v1/attempts/updateResult' @{ attemptId = $attempt.id; runId = $success.run.id; leaseVersion = 999; status = 'SUCCEEDED'; resultCode = 'SUCCEEDED'; message = 'late'; retryable = $false } $reportToken
+    $stale = Call-Api 'POST' 'http://127.0.0.1:19081/internal/v1/attempts/updateResult' @{ attemptId = $attempt.id; runId = $success.run.id; leaseVersion = 999; status = 'SUCCEEDED'; resultCode = 'SUCCEEDED'; message = 'late'; retryable = $false; workerId = $attempt.ownerWorkerId; sessionId = $attempt.ownerSessionId } $reportToken
     Assert-Check ($stale.status -eq 409) 'Stale lease cannot overwrite terminal result'
 
     Stop-TestService 'worker'
@@ -545,6 +549,53 @@ info:
     $restoredNode=Wait-TestNode 'ONLINE'
     Assert-Check ($restoredNode.generation -eq $reconnectedNode.generation) 'Scheduler restart retains node generation and accepts the existing Worker session'
 
+    if ($IncludeWorkerCluster) {
+        $secondYaml = Join-Path $runRoot 'worker2.yml'
+        $secondConfiguration = [IO.File]::ReadAllText($serviceFiles['worker'].yaml).
+            Replace('worker-db', 'worker2-db').Replace('  port: 19082', '  port: 19083').
+            Replace('    worker-id: worker-default', '    worker-id: worker-second').
+            Replace('    transport: rabbitmq', "    transport: rabbitmq`n    queue: taskflow.worker.second.v1`n    routing-key: worker.second`n    dead-letter-queue: taskflow.worker.second.dead.v1`n    dead-letter-routing-key: worker.second.dead")
+        [IO.File]::WriteAllText($secondYaml, $secondConfiguration, $utf8)
+        $secondJar = Join-Path $runRoot 'taskflow-worker2.jar'
+        Copy-Item -LiteralPath $serviceFiles['worker'].jar -Destination $secondJar
+        $serviceFiles['worker2'] = @{jar=$secondJar;yaml=$secondYaml}
+        Start-TestService 'worker2'; $null = Wait-TestNode 'ONLINE' 'worker-second'
+        $clusterJob = New-TestJob 'demoSlow' 2 15 2000
+        $clusterRuns = @(1..8 | ForEach-Object { New-TestRun $clusterJob })
+        $completedClusterRuns = @($clusterRuns | ForEach-Object { Wait-TestRun $_.run.id })
+        $owners = @($completedClusterRuns | ForEach-Object { $_.attempts[0].targetWorkerId } | Sort-Object -Unique)
+        Assert-Check ($owners.Count -eq 2 -and @($completedClusterRuns | Where-Object state -ne 'SUCCEEDED').Count -eq 0) 'Two Worker processes with separate queues and Inbox databases both execute assigned runs'
+        foreach ($completedRun in $completedClusterRuns) {
+            $attempt = $completedRun.attempts[0]
+            $ownerPort = if ($attempt.targetWorkerId -eq 'worker-default') { 19082 } else { 19083 }
+            $otherPort = if ($ownerPort -eq 19082) { 19083 } else { 19082 }
+            $local = Call-Api 'GET' ("http://127.0.0.1:$ownerPort/internal/v1/executions/selectById?attemptId=" + $attempt.id) $null $dispatchToken
+            $other = Call-Api 'GET' ("http://127.0.0.1:$otherPort/internal/v1/executions/selectById?attemptId=" + $attempt.id) $null $dispatchToken
+            Assert-Check ($local.status -eq 200 -and $local.body.state -eq 'SUCCEEDED' -and $other.status -eq 404) 'Attempt is present only in its selected Worker Inbox'
+        }
+        $failoverJob = New-TestJob 'demoSlow' 2 15 4000
+        $failoverRun = New-TestRun $failoverJob
+        $running = $null
+        for ($i=0; $i -lt 60; $i++) {
+            $candidate = Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/runs/selectById?id=" + $failoverRun.run.id)
+            if ($candidate.body.data.attempts[0].ownerSessionId) { $running = $candidate.body.data; break }
+            Start-Sleep -Milliseconds 100
+        }
+        if (!$running) { throw 'Worker did not acquire the failover test Attempt.' }
+        $old = $running.attempts[0]
+        $victim = if ($old.targetWorkerId -eq 'worker-default') { 'worker' } else { 'worker2' }
+        Stop-TestService $victim
+        $failedOver = Wait-TestRun $failoverRun.run.id
+        Assert-Check ($failedOver.state -eq 'SUCCEEDED' -and @($failedOver.attempts).Count -eq 2 -and
+            $failedOver.attempts[0].state -eq 'TIMED_OUT' -and $failedOver.attempts[1].targetWorkerId -ne $old.targetWorkerId) 'Expired execution lease creates a new Attempt on the surviving Worker within the same Run'
+        $late = Call-Api 'POST' 'http://127.0.0.1:19081/internal/v1/attempts/updateResult' @{
+            attemptId=$old.id;runId=$running.id;leaseVersion=$old.leaseVersion;status='SUCCEEDED';resultCode='SUCCEEDED';
+            message='late old owner';retryable=$false;workerId=$old.ownerWorkerId;sessionId=$old.ownerSessionId } $reportToken
+        Assert-Check ($late.status -eq 409) 'Old Worker result cannot overwrite the replacement Attempt'
+        Start-TestService $victim
+        $null = Wait-TestNode 'ONLINE' $old.targetWorkerId
+    }
+
     # 只清理这个隔离 Admin 创建的任务配置，运行历史保留供重启检查。
     $testJobs = Call-Api 'GET' 'http://127.0.0.1:19080/api/v1/jobs/select?pageSize=100'
     foreach ($job in $testJobs.body.data.records) {
@@ -580,7 +631,7 @@ info:
     Write-Output ("Execution evidence: " + $runRoot)
 } finally {
     if ($nginxStarted) { & $nginxExe -p $nginxPrefix -c conf/nginx.conf -s quit }
-    foreach ($name in @('gateway','admin','worker','scheduler')) { Stop-TestService $name }
+    foreach ($name in @('gateway','admin','worker2','worker','scheduler')) { Stop-TestService $name }
     foreach ($entry in $mutatedEnvironment.GetEnumerator()) {
         if ($null -eq $entry.Value) { Remove-Item ('Env:' + $entry.Key) -ErrorAction SilentlyContinue }
         else { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process') }

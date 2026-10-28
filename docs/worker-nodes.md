@@ -1,6 +1,6 @@
 # Worker 注册、心跳与节点查询 v1
 
-更新：2026-10-27。本模块负责节点身份、能力、心跳有效期和固定目标派发检查。继续使用 Java 21、Spring Boot 4.1.1、Spring MVC、JdbcTemplate、MySQL/Flyway 和 Vue 3/Vue Router；内部 HTTP 已接入 OpenFeign、LoadBalancer 和 Resilience4j。cloud 模式的 Eureka 负责网络地址发现，本模块仍负责业务在线状态、Handler、会话及固定 Worker 身份，两者不可替代。见 [微服务技术栈](microservice-platform.md)。
+更新：2026-10-27。本模块负责节点身份、能力、心跳有效期和派发资格检查；2026-10-28 增加 MQ 多节点选择，完整规则见 [水平扩展](worker-horizontal-scaling.md)。继续使用 Java 21、Spring Boot 4.1.1、Spring MVC、JdbcTemplate、MySQL/Flyway 和 Vue 3/Vue Router；内部 HTTP 已接入 OpenFeign、LoadBalancer 和 Resilience4j。cloud 模式的 Eureka 负责网络地址发现，本模块仍负责业务在线状态、Handler、会话及 Worker 身份，两者不可替代。见 [微服务技术栈](microservice-platform.md)。
 
 ## 数据归属与包结构
 
@@ -23,19 +23,19 @@ workerId 为稳定配置标识，使用 1–100 个小写字母、数字、点�
 
 注册最多允许 100 个不重复 Handler，parallelism 为 1–64，maxPending 为 parallelism–10000。心跳 runningCount 不得超过 parallelism，runningCount+pendingCount 不得超过 maxPending。负载来自 Worker 本地 Inbox 的 RUNNING/ACCEPTED 记录，是观测值而不是容量预订或精确 Handler 开始时间。
 
-MQ 元数据包含 vhost、exchange、queue 和 routingKey，不包含凭据或回调地址。同一 vhost/queue 只能属于一个 workerId，避免不同身份竞争同一固定队列。每个 Worker 身份仍必须绑定原本的 Inbox 数据库、且只启动一个执行进程；本轮没有实现不同本地数据库之间的接管。
+MQ 元数据包含 vhost、exchange、queue 和 routingKey，不包含凭据或回调地址。同一 vhost/queue 及 vhost/exchange/routingKey 分别只能属于一个 workerId，避免竞争同一 Inbox 边界或向多个队列复制命令。每个 Worker 身份仍必须绑定原本的 Inbox 数据库、且只启动一个执行进程；不提供同一 Attempt 在不同本地数据库之间的接管；故障重试新增 Attempt。
 
 ## 在线判定与派发
 
 有效期由 Scheduler 接收时间计算，不接受 Worker 自报时间。默认 `expiresAt = 最后有效心跳时间 + 30 秒`；注册首次接收也建立有效期。`expiresAt > Scheduler 当前时间` 为 ONLINE，等于或早于则为 OFFLINE。查询和派发实时比较同一权威时间，不依赖后台扫描改状态，也不使用 Redis 存活标记。
 
-Scheduler 默认只向 `taskflow.nodes.target-worker-id` 指定的固定节点派发，并检查在线、Handler 能力、transport、MQ 路由和最近心跳的可用容量。`runningCount + pendingCount >= maxPending` 时节点仍 ONLINE，但 `dispatchEligible=false`，推迟派发准备和 MQ 发布；HTTP 派发仍使用服务配置的 Worker URL，不访问 Worker 上报的任意地址。没有匹配节点或节点满载时，新的 Attempt 保持 READY、Outbox 保持 WAITING，不消耗执行租约或派发次数。负载观察不能替代容量预订，Worker 的本地容量检查与 MQ 背压仍是最终保护。
+Scheduler 在 MQ 模式按在线状态、Handler、transport、允许的 vhost/exchange 和负载选择节点，并在本地事务中绑定 Attempt 目标及 Outbox 路由。HTTP 模式继续使用 `taskflow.nodes.target-worker-id` 指定的固定节点。`runningCount + pendingCount >= maxPending` 时节点仍 ONLINE，但 `dispatchEligible=false`，推迟派发准备和 MQ 发布；HTTP 派发仍使用服务配置的 Worker URL，不访问 Worker 上报的任意地址。没有匹配节点或节点满载时，新的 Attempt 保持 READY、Outbox 保持 WAITING，不消耗执行租约或派发次数。负载观察不能替代容量预订，Worker 的本地容量检查与 MQ 背压仍是最终保护。
 
 资格不满足时，将 Attempt 的 `nextDispatchAt` 持久化推迟，避免同一批不可派发任务反复占据前 100 条。正常任务可在后续轮次进入候选；支持能力恢复后，在原记录的下一次检查时间重新判断，不因一次心跳立即绕过等待时间。原 Attempt 和 leaseVersion 保持不变。
 
 独立 MQ Relay 在发布前再次检查节点，节点过期时推迟 Outbox 的 `nextPublishAt`，不领取发送租约、不增加发布次数。READY 和领取租约已经过期的 SENDING 都遵守这个时间；仍有效的 SENDING 不会被延后或接管。已经准备的 Attempt 继续受原 expiresAt 约束，不能借暂停发布无限延长执行租约。心跳恢复后，尚有效的原 Attempt 在到达下次检查时间后可继续派发。
 
-这些检查是本次准备/发布时的观察，不能与远程消费构成原子操作。离线不会撤回已在 Broker 中的消息，也不取消旧 Handler。节点 generation 只隔离注册/心跳，不能代替 Attempt 的 leaseVersion；执行租约续期和跨节点接管仍是后续业务模块。
+这些检查是本次准备/发布时的观察，不能与远程消费构成原子操作。离线不会撤回已在 Broker 中的消息，也不取消旧 Handler。节点 generation 只隔离注册/心跳，不能代替 Attempt 的 leaseVersion；执行有界续租已实现；租约失效可为同一 Run 新增 Attempt 并重新选择节点，不能把原 Attempt 直接改投。
 
 ## HTTP API
 
@@ -65,7 +65,7 @@ Worker 使用独立 `worker-heartbeat-` 单线程执行固定延迟周期，不�
 | TASKFLOW_NODE_TOKEN | 无默认凭据；Scheduler 与 Worker 共享独立随机密钥 |
 | TASKFLOW_WORKER_ID | worker-default；稳定身份，不应随进程 PID 改变 |
 | TASKFLOW_WORKER_NAME | 默认执行节点；显示名称 |
-| TASKFLOW_TARGET_WORKER_ID | worker-default；Scheduler 的固定派发目标 |
+| TASKFLOW_TARGET_WORKER_ID | worker-default；Scheduler HTTP 模式的固定目标；MQ 动态选择不使用该值 |
 | TASKFLOW_NODE_HEARTBEAT_ENABLED | true；Worker 心跳开关，关闭后节点将按超时离线 |
 | TASKFLOW_SCHEDULER_URL | 从现有服务地址配置读取，供 Worker 上报和 Admin 查询 |
 | taskflow.nodes.heartbeat-interval | Worker 默认 5 秒 |

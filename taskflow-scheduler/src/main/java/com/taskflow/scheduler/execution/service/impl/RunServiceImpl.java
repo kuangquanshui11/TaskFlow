@@ -16,6 +16,7 @@ import com.taskflow.scheduler.execution.service.IRunService;
 import com.taskflow.scheduler.dispatch.config.DispatchProperties;
 import com.taskflow.scheduler.dispatch.dto.DispatchEvent;
 import com.taskflow.scheduler.dispatch.mapper.DispatchOutboxMapper;
+import com.taskflow.scheduler.node.model.DispatchTarget;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -109,7 +110,11 @@ public class RunServiceImpl implements IRunService {
         transactions.executeWithoutResult(status -> {
             var pair = locked(result.attemptId());
             var run = pair.run(); var attempt = pair.attempt();
-            if (!attempt.runId().equals(result.runId()) || attempt.leaseVersion() != result.leaseVersion())
+            if (!attempt.runId().equals(result.runId()) || attempt.leaseVersion() != result.leaseVersion()
+                    || result.workerId() == null || result.sessionId() == null
+                    || !result.workerId().equals(attempt.targetWorkerId())
+                    || attempt.ownerWorkerId() != null && (!attempt.ownerWorkerId().equals(result.workerId())
+                        || !attempt.ownerSessionId().equals(result.sessionId())))
                 throw stale();
             // 已确认的相同终态可以在租约到期或后续重试启动后再次确认，不能再次改变状态。
             if (attempt.terminal()) {
@@ -131,13 +136,14 @@ public class RunServiceImpl implements IRunService {
                 var pair = locked(id);
                 if (!pair.attempt().terminal() && pair.attempt().expiresAt() != null
                         && !pair.attempt().validAt(Instant.now()))
-                    finish(pair.run(), pair.attempt(), "TIMED_OUT", "LEASE_EXPIRED", "执行租约已过期，迟到结果将被拒绝", false);
+                    finish(pair.run(), pair.attempt(), "TIMED_OUT", "LEASE_EXPIRED", "执行租约已过期，迟到结果将被拒绝", properties.retryOnLeaseLoss());
             });
         }
         if (dispatch.rabbitmq()) { prepareMqDispatches(); return; }
         for (var id : mapper.due(Instant.now())) {
-            var command = transactions.execute(status -> claim(id));
-            if (command == null) continue;
+            var prepared = transactions.execute(status -> claim(id));
+            if (prepared == null) continue;
+            var command = prepared.command();
             try {
                 worker.dispatch(command);
             } catch (RuntimeException failure) {
@@ -171,9 +177,9 @@ public class RunServiceImpl implements IRunService {
                 var event = outbox.find(id, true).orElseThrow();
                 switch (event.state()) {
                     case "WAITING" -> {
-                        var command = claim(id);
-                        if (command != null) outbox.prepare(id, json.writeValueAsString(new DispatchEvent(1, id, command)),
-                                command.expiresAt(), Instant.now());
+                        var prepared = claim(id);
+                        if (prepared != null) outbox.prepare(id, json.writeValueAsString(new DispatchEvent(1, id, prepared.command())),
+                                prepared.command().expiresAt(), Instant.now(), prepared.target());
                     }
                     case "PUBLISHED" -> {
                         // 表示代理已接管消息，不代表 Handler 已开始或已成功。
@@ -188,26 +194,35 @@ public class RunServiceImpl implements IRunService {
         }
     }
 
-    private Dispatch claim(UUID id) {
+    private record Prepared(Dispatch command, DispatchTarget target) { }
+    private Prepared claim(UUID id) {
         var pair = locked(id); var run = pair.run(); var attempt = pair.attempt(); var now = Instant.now();
         if (attempt.terminal() || terminal(run) || !java.util.Set.of("READY", "DISPATCHING").contains(attempt.state())
                 || attempt.nextDispatchAt().isAfter(now) || run.currentAttempt() != attempt.attemptNumber()) return null;
         if (attempt.expiresAt() != null && !attempt.validAt(now)) {
-            finish(run, attempt, "TIMED_OUT", "LEASE_EXPIRED", "执行租约已过期", false); return null;
+            finish(run, attempt, "TIMED_OUT", "LEASE_EXPIRED", "执行租约已过期", properties.retryOnLeaseLoss()); return null;
         }
         if (attempt.dispatchCount() >= properties.maxDispatchAttempts()) {
             finish(run, attempt, "FAILED", "DISPATCH_UNCONFIRMED", "有限派发次数已耗尽，未确认业务执行结果", false); return null;
         }
         var snapshot = json.readValue(run.snapshotJson(), Snapshot.class);
-        if (!nodes.canDispatch(snapshot.handlerKey())) {
+        DispatchTarget target = null;
+        if (attempt.targetWorkerId() == null && attempt.expiresAt() == null) {
+            target = nodes.selectTarget(snapshot.handlerKey()).orElse(null);
+        } else if (attempt.targetWorkerId() != null && !dispatch.rabbitmq() && nodes.canDispatch(snapshot.handlerKey())) {
+            // HTTP 保留固定地址直连；重试沿用第一次绑定的身份。
+            target = new DispatchTarget(attempt.targetWorkerId(), null, null, null, null);
+        }
+        if (target == null) {
             // 让本批不可派发记录退出当前候选，后续正常任务才有机会；不领取租约或消耗次数。
             if (!mapper.deferDispatch(attempt, now.plus(dispatch.nodeRecheckDelay()), now)) throw stale();
             return null;
         }
+        if (attempt.targetWorkerId() == null) mapper.bindTarget(id, target.workerId());
         var expires = attempt.expiresAt() == null
                 ? now.plusSeconds(snapshot.timeoutSeconds()).plus(properties.leaseGrace()).truncatedTo(java.time.temporal.ChronoUnit.MILLIS) : attempt.expiresAt();
         mapper.dispatching(id, expires, now.plus(properties.requestTimeout()).plus(properties.dispatchRetryDelay()), now);
-        return new Dispatch(id, run.id(), attempt.attemptNumber(), attempt.leaseVersion(), expires, snapshot);
+        return new Prepared(new Dispatch(id, run.id(), attempt.attemptNumber(), attempt.leaseVersion(), expires, snapshot), target);
     }
 
     private void confirmAccepted(Pair pair, long leaseVersion) {

@@ -11,6 +11,7 @@ import com.taskflow.scheduler.node.dto.WorkerNodeProtocol.*;
 import com.taskflow.scheduler.node.exception.WorkerNodeException;
 import com.taskflow.scheduler.node.mapper.WorkerNodeMapper;
 import com.taskflow.scheduler.node.model.WorkerNode;
+import com.taskflow.scheduler.node.model.DispatchTarget;
 import com.taskflow.scheduler.node.service.IWorkerNodeService;
 import org.springframework.beans.factory.annotation.*;
 import org.springframework.dao.DuplicateKeyException;
@@ -29,6 +30,7 @@ public class WorkerNodeServiceImpl implements IWorkerNodeService {
     private final Clock clock;
     private final JsonMapper json;
     private final TransactionTemplate transactions;
+    private final java.util.concurrent.atomic.AtomicLong selection = new java.util.concurrent.atomic.AtomicLong();
     public WorkerNodeServiceImpl(WorkerNodeMapper mapper,WorkerNodeProperties properties,DispatchProperties dispatch,
             @Value("${spring.rabbitmq.virtual-host}") String vhost,@Qualifier("nodeClock") Clock clock,JsonMapper json,PlatformTransactionManager manager) {
         this.mapper=mapper;this.properties=properties;this.dispatch=dispatch;this.vhost=vhost;this.clock=clock;this.json=json;
@@ -51,6 +53,15 @@ public class WorkerNodeServiceImpl implements IWorkerNodeService {
                 // 历史 session 永久保留，旧进程不能通过重发注册请求取代新进程。
                 if (mapper.sessionExists(request.sessionId())) throw conflict("STALE_NODE_SESSION","节点会话已被替代");
                 if (old.isPresent() && old.get().online(now)) throw conflict("NODE_ID_IN_USE","相同节点标识的进程仍在线");
+                // 有在途 Attempt 时不允许更换身份绑定的能力或路由，避免重发落到不同 Inbox。
+                if (old.isPresent() && mapper.assignedCount(request.workerId()) > 0
+                        && (!handlers(old.get()).equals(request.handlerKeys())
+                        || !Objects.equals(old.get().dispatchVhost(), blankToNull(request.dispatchVhost()))
+                        || !Objects.equals(old.get().dispatchExchange(), blankToNull(request.dispatchExchange()))
+                        || !Objects.equals(old.get().dispatchQueue(), blankToNull(request.dispatchQueue()))
+                        || !Objects.equals(old.get().dispatchRoutingKey(), blankToNull(request.dispatchRoutingKey()))
+                        || !old.get().dispatchTransport().equals(request.dispatchTransport())))
+                    throw conflict("NODE_HAS_ACTIVE_ATTEMPTS", "节点仍有在途任务，不能修改能力或路由");
                 var node=new WorkerNode(request.workerId(),request.displayName(),request.sessionId(),old.map(n->n.generation()+1).orElse(1L),fingerprint,
                         json.writeValueAsString(request.handlerKeys()),request.parallelism(),request.maxPending(),0,0,request.dispatchTransport(),
                         blankToNull(request.dispatchVhost()),blankToNull(request.dispatchExchange()),blankToNull(request.dispatchQueue()),blankToNull(request.dispatchRoutingKey()),
@@ -92,19 +103,48 @@ public class WorkerNodeServiceImpl implements IWorkerNodeService {
     @Override
     public boolean canDispatch(String handlerKey) {
         if (!properties.dispatchGatingEnabled()) return true;
-        return mapper.find(properties.targetWorkerId(),false).filter(n->eligible(n,now())).filter(n->handlers(n).contains(handlerKey)).isPresent();
+        return mapper.online(now()).stream().anyMatch(n -> eligible(n, now()) && handlers(n).contains(handlerKey));
+    }
+    @Override
+    public Optional<DispatchTarget> selectTarget(String handlerKey) {
+        if (!properties.dispatchGatingEnabled()) return Optional.of(new DispatchTarget(properties.targetWorkerId(),
+                vhost, dispatch.exchange(), dispatch.queue(), dispatch.routingKey()));
+        var candidates = mapper.online(now()).stream().filter(n -> eligible(n, now()))
+                .filter(n -> handlers(n).contains(handlerKey)).toList();
+        if (candidates.isEmpty()) return Optional.empty();
+        // 心跳与已绑定但尚未终结的 Attempt 取较大值，减少心跳间隔内集中派发。
+        // 这是负载观察，不构成跨 Scheduler 实例的容量预订。
+        long rotation = Math.floorMod(selection.getAndIncrement(), candidates.size());
+        WorkerNode chosen = null;
+        double lowest = Double.POSITIVE_INFINITY;
+        for (int i = 0; i < candidates.size(); i++) {
+            var node = candidates.get((int)((i + rotation) % candidates.size()));
+            long load = Math.max((long)node.runningCount() + node.pendingCount(), mapper.assignedCount(node.workerId()));
+            double ratio = (double)load / node.maxPending();
+            if (load < node.maxPending() && ratio < lowest) { lowest = ratio; chosen = node; }
+        }
+        return Optional.ofNullable(chosen).map(this::target);
+    }
+    @Override
+    public boolean canDispatch(DispatchTarget target, String handlerKey) {
+        if (target == null) return false;
+        if (!properties.dispatchGatingEnabled()) return true;
+        return mapper.find(target.workerId(), false).filter(n -> eligible(n, now()))
+                .filter(n -> handlers(n).contains(handlerKey)).filter(n -> target(n).equals(target)).isPresent();
+    }
+    private DispatchTarget target(WorkerNode node) {
+        return new DispatchTarget(node.workerId(), node.dispatchVhost(), node.dispatchExchange(), node.dispatchQueue(), node.dispatchRoutingKey());
     }
     private boolean eligible(WorkerNode node,Instant now) {
-        return node.workerId().equals(properties.targetWorkerId()) && node.online(now) && node.dispatchTransport().equals(dispatch.transport())
+        return (dispatch.rabbitmq() || node.workerId().equals(properties.targetWorkerId())) && node.online(now) && node.dispatchTransport().equals(dispatch.transport())
                 // 心跳负载仅用于减少向满载节点派发；不是容量预订，Worker 仍执行本地原子接收检查。
                 && (long)node.runningCount()+node.pendingCount()<node.maxPending()
-                && (!dispatch.rabbitmq() || Objects.equals(node.dispatchVhost(),vhost) && Objects.equals(node.dispatchExchange(),dispatch.exchange())
-                && Objects.equals(node.dispatchQueue(),dispatch.queue()) && Objects.equals(node.dispatchRoutingKey(),dispatch.routingKey()));
+                && (!dispatch.rabbitmq() || Objects.equals(node.dispatchVhost(),vhost) && Objects.equals(node.dispatchExchange(),dispatch.exchange()));
     }
     private View view(WorkerNode n,Instant now) {
         return new View(n.workerId(),n.displayName(),n.generation(),handlers(n),n.parallelism(),n.maxPending(),n.runningCount(),n.pendingCount(),
                 n.dispatchTransport(),n.dispatchVhost(),n.dispatchExchange(),n.dispatchQueue(),n.dispatchRoutingKey(),n.online(now)?"ONLINE":"OFFLINE",
-                n.workerId().equals(properties.targetWorkerId()),eligible(n,now),n.registeredAt(),n.lastHeartbeatAt(),n.expiresAt());
+                !dispatch.rabbitmq() && n.workerId().equals(properties.targetWorkerId()),eligible(n,now),n.registeredAt(),n.lastHeartbeatAt(),n.expiresAt());
     }
     private List<String> handlers(WorkerNode node) { return Arrays.asList(json.readValue(node.handlerKeysJson(),String[].class)); }
     private Acknowledgement acknowledgement(WorkerNode n) { return new Acknowledgement(n.workerId(),n.sessionId(),n.generation(),n.lastSequence(),n.expiresAt()); }

@@ -215,7 +215,7 @@ class WorkerExecutionTests {
     }
     @Test void conflictingOrMissingTerminalRecordIsNotReportedAsSaved(CapturedOutput output) {
         var command = command("demoSuccess", 1, 30, "{}");
-        executions.insert(command); mapper.claim(command.attemptId());
+        executions.insert(command); mapper.claim(command.attemptId(), leases.owner());
         mapper.finish(command.attemptId(), "FAILED", "WORKER_RESTARTED", "unknown", false, Instant.now());
         var conflictsBefore = outcome("conflict");
         var completion = new ExecutionCompletion(command.attemptId(), command.runId(), "SUCCEEDED", "SUCCEEDED", "done", false, Instant.now());
@@ -269,11 +269,11 @@ class WorkerExecutionTests {
     @Test void claimDatabaseFailureReleasesSlotAndCanResumeOriginalAcceptedWork() throws Exception {
         var command = command("demoSuccess", 1, 30, "{}");
         executions.insert(command);
-        doThrow(new org.springframework.dao.DataAccessResourceFailureException("claim failed")).when(mapper).claim(command.attemptId());
+        doThrow(new org.springframework.dao.DataAccessResourceFailureException("claim failed")).when(mapper).claim(command.attemptId(), leases.owner());
         assertThatThrownBy(executions::executePending).isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
         assertThat(mapper.find(command.attemptId()).orElseThrow().state()).isEqualTo("ACCEPTED");
         verify(handlers, never()).execute(any(), any());
-        doCallRealMethod().when(mapper).claim(command.attemptId());
+        doCallRealMethod().when(mapper).claim(command.attemptId(), leases.owner());
         executions.executePending(); finished(command);
         verify(handlers, times(1)).execute(any(), any());
     }
@@ -311,12 +311,24 @@ class WorkerExecutionTests {
     @Test void restartRecoveryPreservesAcceptedAndFailsUnknownRunningWork() throws Exception {
         var unknown = command("demoSuccess", 1, 30, "{}");
         var accepted = command("demoSuccess", 1, 30, "{}");
-        executions.insert(unknown); mapper.claim(unknown.attemptId()); executions.insert(accepted);
+        executions.insert(unknown); mapper.claim(unknown.attemptId(), leases.owner()); executions.insert(accepted);
         executions.recover();
         assertThat(mapper.find(unknown.attemptId()).orElseThrow().resultCode()).isEqualTo("WORKER_RESTARTED");
         assertThat(mapper.find(accepted.attemptId()).orElseThrow().state()).isEqualTo("ACCEPTED");
         executions.executePending(); finished(accepted);
         verify(handlers, times(1)).execute(any(), any());
+    }
+    @Test void restartReportingKeepsThePersistedExecutionOwnerInsteadOfUsingTheNewProcessSession() {
+        var command = command("demoSuccess", 1, 30, "{}");
+        var oldOwner = new com.taskflow.worker.execution.model.ExecutionOwner("worker-default", UUID.randomUUID());
+        executions.insert(command); mapper.claim(command.attemptId(), oldOwner);
+        executions.recover();
+        when(reports.report(any())).thenReturn(true);
+        reportDue(); executions.reportPending();
+        verify(reports).report(argThat(result -> result.workerId().equals(oldOwner.workerId())
+                && result.sessionId().equals(oldOwner.sessionId()) && result.resultCode().equals("WORKER_RESTARTED")));
+        assertThat(mapper.find(command.attemptId()).orElseThrow().reportSessionId()).isEqualTo(oldOwner.sessionId());
+        assertThat(leases.owner().sessionId()).isNotEqualTo(oldOwner.sessionId());
     }
     @Test void unsupportedExpiredOrOverCapacityRequestsAreRejected() {
         assertThatThrownBy(() -> executions.insert(command("notAllowed", 1, 30, "{}"))).isInstanceOf(ExecutionException.class);
@@ -339,7 +351,7 @@ class WorkerExecutionTests {
         var commands = java.util.List.of(command("demoSuccess", 1, 30, "{}"),
                 command("demoFail", 1, 30, "{}"), command("demoSuccess", 1, 30, "{}"));
         for (var command : commands) {
-            executions.insert(command); mapper.claim(command.attemptId());
+            executions.insert(command); mapper.claim(command.attemptId(), leases.owner());
             var state = command.snapshot().handlerKey().equals("demoFail") ? "FAILED" : "SUCCEEDED";
             mapper.finish(command.attemptId(), state, state, "", false, Instant.now().minusSeconds(1));
         }

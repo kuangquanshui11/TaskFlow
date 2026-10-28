@@ -11,11 +11,11 @@
 | 可选处理器查询 | Admin | 已实现，返回配置白名单，不代表 Worker 已在线注册 |
 | 手动触发、Run/Attempt 查询 | Scheduler；Admin 代理 | 已实现，独立状态库、幂等键、完整快照 |
 | Cron 到期扫描、计划去重、错过补偿 | Scheduler | 已实现，Run/首次 Attempt/计划推进同事务，SKIP/FIRE_ONCE |
-| 待派发扫描、有限重试、租约校验 | Scheduler | 已实现；固定 Worker 有界续租已实现，跨节点回收待后续实现 |
+| 待派发扫描、有限重试、租约校验 | Scheduler | 已实现；按能力/负载选择 MQ 节点，租约失效后按上限新增 Attempt 重新选节点 |
 | 事务派发 Outbox、RabbitMQ 发布确认 | Scheduler | 已实现；三节点真实 MQ 闭环与满载背压验收通过，见可靠派发与验证记录 |
-| MQ 消费确认、Inbox 去重、死信处理 | Worker | 已实现；提交后 ACK，满载等待且不消耗故障预算，过期投递 ACK 并由 Scheduler 超时收尾；实际故障有限重试；固定 Worker 队列 |
+| MQ 消费确认、Inbox 去重、死信处理 | Worker | 已实现；提交后 ACK，满载等待且不消耗故障预算，过期投递 ACK 并由 Scheduler 超时收尾；实际故障有限重试；每个 Worker 独立队列，原 Attempt 重发目标不变 |
 | Handler 执行、幂等接收、结果重报 | Worker | 已实现，白名单 Handler、有界执行、独立持久化 |
-| Worker 注册、心跳、会话隔离和在线查询 | Scheduler 权威，Worker 上报，Admin 代理 | 已实现；固定目标派发检查，管理台 /workers 接入 |
+| Worker 注册、心跳、会话隔离和在线查询 | Scheduler 权威，Worker 上报，Admin 代理 | 已实现；MQ 动态选择、固定 Attempt 目标和路由，管理台 /workers 接入 |
 | 运行报表、失败告警、用户权限 | 对应业务服务 | 后续阶段 |
 
 独立 Vue 管理台已接入任务管理接口，Admin 原首页仍为演示页。尚未实现的运行能力不会返回模拟成功。
@@ -243,13 +243,13 @@ POST /api/v1/runs/insert：
 
 GET /api/v1/runs/select 的 jobId 必须为正数，page 默认 1、范围 1–1000000，pageSize 默认 10、范围 1–100。data 为 records、total、page、pageSize；records 包含运行 id、jobId、configVersion、state、attemptCount、resultCode、message 和创建/更新时间。运行历史来自 Scheduler，即使 Job 后来删除也继续保留。
 
-GET /api/v1/runs/selectById 与 selectByRequestKey 返回同一详情结构；不存在返回 404 / RUN_NOT_FOUND。snapshot 包含原配置的名称、描述、处理器、参数、执行策略、Cron、时区和配置版本。后续编辑 Job 不改变已有 Run。attempts 按 attemptNumber 排序，包含 id、runId、leaseVersion、state、dispatchCount、nextDispatchAt、expiresAt、startedAt、finishedAt、resultCode、message，以及 nullable 的 leaseUntil、ownerWorkerId、ownerSessionId。当前 startedAt 为开始派发时间；expiresAt 是不可延长的硬截止，leaseUntil 是执行资格短租约。
+GET /api/v1/runs/selectById 与 selectByRequestKey 返回同一详情结构；不存在返回 404 / RUN_NOT_FOUND。snapshot 包含原配置的名称、描述、处理器、参数、执行策略、Cron、时区和配置版本。后续编辑 Job 不改变已有 Run。attempts 按 attemptNumber 排序，包含 id、runId、leaseVersion、state、dispatchCount、nextDispatchAt、expiresAt、startedAt、finishedAt、resultCode、message，以及 nullable 的 targetWorkerId、leaseUntil、ownerWorkerId、ownerSessionId。当前 startedAt 为开始派发时间；expiresAt 是不可延长的硬截止，leaseUntil 是执行资格短租约。
 
 Worker 内部续租使用 `POST /internal/v1/attempts/updateLease`，请求含 attemptId、runId、leaseVersion、workerId、sessionId，使用结果上报密钥。返回 HTTP 200，包含身份字段与 serverTime、leaseUntil、executionDeadline、hardDeadline；校验失败返回 400，鉴权失败 401，过期/终态/执行者或版本不匹配返回 409 / STALE_LEASE。该接口不经 Gateway 公开。领取与续租不改变原派发消息或 leaseVersion；续租次数无上限，但不可越过 hardDeadline。完整协议及 Handler 幂等/fencing 约定见 [执行租约](execution-leases.md)。
 
 `nextDispatchAt` 也表示下一次派发资格检查时间。目标节点离线、Handler 或路由不匹配时，该时间延后（默认 2s）；未曾派发的 Attempt 保持 READY、dispatchCount 不增加、expiresAt 仍为空。已领取执行租约的重派发等待保留原 expiresAt，过期仍会终结。不会因等待创建额外 Attempt，也不改变本节接口路径、请求参数或响应字段。配置和验证见 [扫描公平性](dispatch-fairness-verification.md)。
 
-Run 的 state 为 READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED。明确的 Handler 失败可按快照配置新增 Attempt 重试；人工再次执行总是新建 Run。接收/派发不确定、执行超时或 Worker 重启的未知执行不自动重做业务。内置 demoSlow 可用 payload.durationMillis 控制耗时，demoFailOnce 的首次尝试失败，后续尝试成功。内部认证、超时、租约和故障边界见 [执行协议](execution-protocol.md)，实际验收见 [执行验证](execution-verification.md)。
+Run 的 state 为 READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED。明确的 Handler 失败可按快照配置新增 Attempt 重试；人工再次执行总是新建 Run。接收/发布不确定不立即创建业务重试；Worker 已上报的超时或重启失败保持非重试。Scheduler 观察到租约失效时，默认按快照上限新增 Attempt，`TASKFLOW_RETRY_ON_LEASE_LOSS=false` 可关闭。内置 demoSlow 可用 payload.durationMillis 控制耗时，demoFailOnce 的首次尝试失败，后续尝试成功。内部认证、超时、租约和故障边界见 [执行协议](execution-protocol.md)，实际验收见 [执行验证](execution-verification.md)。
 
 Worker 本地结果保存失败会有限重试保存同一份结果，不重新执行 Handler，不增加 Run / Attempt 或业务重试次数。恢复后按原租约上报；已失效租约不会被延长或绕过。持续保存失败可能最终表现为 Scheduler 租约超时，不能据此断言业务未执行。公开路径、请求参数与响应结构不变；日志诊断和完整故障边界见 [Worker 结果保存恢复](worker-result-recovery.md)。
 
@@ -295,6 +295,8 @@ Worker 本地结果保存失败会有限重试保存同一份结果，不重新�
 计划查询的 `data` 包含 `jobId/configVersion/deleted/enabled/scheduleType/cronExpression/timeZone/calculationState/nextFireTime/calculatedAt/updatedAt/automaticTriggerEnabled`。`READY` 必须带下一计划时间；其他计算状态无下一时间。automaticTriggerEnabled 表示响应 Scheduler 节点的到期扫描开关，不代表整个集群暂停或 Worker 在线。查询不创建 Run、不重新计算；无副本为 404，Scheduler 不可达或响应格式异常为 503。规则见 [计划计算](plan-calculation.md)。
 
 Run 分页、按 ID 与 requestKey 查询响应新增 `triggerType`（MANUAL/CRON）及 `scheduledAt`（定时轮次 UTC ISO 8601 时间；人工为 null）。人工创建请求格式不变，独立人工请求仍创建新 Run；定时失败重试复用 Run，新增 Attempt。自动触发没有新增对外写接口，由后台扫描完成。并发去重、错过宽限、事务与开关见 [自动调度](automatic-scheduling.md)。
+
+内部 `POST /internal/v1/attempts/updateResult` 请求为 attemptId、runId、leaseVersion、status、resultCode、message、retryable、workerId、sessionId；后两项必填且使用本地持久化的执行身份，使用结果上报密钥。缺少字段为 400，目标/已领取会话/租约/状态不匹配为 409。相同终态重报也须匹配原执行身份。部署及故障语义见 [Worker 水平扩展](worker-horizontal-scaling.md)。
 
 ## Worker 节点管理
 

@@ -7,7 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties("taskflow.execution")
 public record RunProperties(URI workerUrl, String controlToken, String dispatchToken, String reportToken,
         Duration connectTimeout, Duration requestTimeout, int scanInterval, Duration dispatchRetryDelay,
-        int maxDispatchAttempts, Duration leaseGrace, boolean scanningEnabled) {
+        int maxDispatchAttempts, Duration leaseGrace, boolean scanningEnabled, boolean retryOnLeaseLoss) {
     public RunProperties {
         if (workerUrl == null || !java.util.Set.of("http", "https").contains(workerUrl.getScheme())
                 || connectTimeout == null || connectTimeout.isNegative() || connectTimeout.isZero()

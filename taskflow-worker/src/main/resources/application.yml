@@ -133,8 +133,8 @@ taskflow:
     max-dispatch-attempts: 5
     lease-grace: 10s
     scanning-enabled: true
-    parallelism: 4
-    max-pending: 32
+    parallelism: "${TASKFLOW_WORKER_PARALLELISM:4}"
+    max-pending: "${TASKFLOW_WORKER_MAX_PENDING:32}"
     max-report-attempts: 30
     report-retry-delay: 2s
     report-budget: "${TASKFLOW_REPORT_BUDGET:2s}"

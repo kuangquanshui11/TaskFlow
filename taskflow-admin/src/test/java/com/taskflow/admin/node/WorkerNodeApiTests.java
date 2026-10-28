@@ -81,6 +81,17 @@ class WorkerNodeApiTests {
         assertThat(get("selectById?workerId=worker-default").statusCode()).isEqualTo(200);
         assertThat(get("selectById?workerId=other").statusCode()).isEqualTo(503);
     }
+    @Test void mqNodesCanBeEligibleWithoutBeingTheFixedHttpTarget() throws Exception {
+        var now = Instant.parse("2026-10-27T00:00:00Z");
+        var mq = new View("worker-second", "第二节点", 1, List.of("demoSuccess"), 2, 4, 0, 0, "rabbitmq",
+                "taskflow", "taskflow.dispatch.v1", "taskflow.worker.second.v1", "worker.second", "ONLINE", false, true, now, now, now.plusSeconds(30));
+        reply = json.writeValueAsString(new Page(List.of(mq), 1, 1, 10, new Summary(1, 1, 0), now));
+        var response = get("select");
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(json.readTree(response.body()).path("data").path("records").get(0).path("dispatchEligible").asBoolean()).isTrue();
+        reply = json.writeValueAsString(mq);
+        assertThat(get("selectById?workerId=worker-second").statusCode()).isEqualTo(200);
+    }
     private View node() {
         var now=Instant.parse("2026-10-27T00:00:00Z");
         return new View("worker-default","执行节点",1,List.of("demoSuccess"),2,4,1,1,"http",null,null,null,null,"ONLINE",true,true,now,now,now.plusSeconds(30));

@@ -13,12 +13,18 @@ public final class RunRecords {
     public record Attempt(UUID id, UUID runId, int attemptNumber, long leaseVersion, String state,
             int dispatchCount, Instant nextDispatchAt, Instant expiresAt, Instant startedAt,
             Instant finishedAt, String resultCode, String message,
-            Instant leaseUntil, String ownerWorkerId, UUID ownerSessionId) {
+            Instant leaseUntil, String ownerWorkerId, UUID ownerSessionId, String targetWorkerId) {
+        public Attempt(UUID id, UUID runId, int attemptNumber, long leaseVersion, String state,
+                int dispatchCount, Instant nextDispatchAt, Instant expiresAt, Instant startedAt,
+                Instant finishedAt, String resultCode, String message, Instant leaseUntil, String ownerWorkerId, UUID ownerSessionId) {
+            this(id, runId, attemptNumber, leaseVersion, state, dispatchCount, nextDispatchAt, expiresAt,
+                    startedAt, finishedAt, resultCode, message, leaseUntil, ownerWorkerId, ownerSessionId, null);
+        }
         public Attempt(UUID id, UUID runId, int attemptNumber, long leaseVersion, String state,
                 int dispatchCount, Instant nextDispatchAt, Instant expiresAt, Instant startedAt,
                 Instant finishedAt, String resultCode, String message) {
             this(id, runId, attemptNumber, leaseVersion, state, dispatchCount, nextDispatchAt, expiresAt,
-                    startedAt, finishedAt, resultCode, message, null, null, null);
+                    startedAt, finishedAt, resultCode, message, null, null, null, null);
         }
         public boolean validAt(Instant now) {
             return expiresAt != null && expiresAt.isAfter(now) && (leaseUntil == null || leaseUntil.isAfter(now));

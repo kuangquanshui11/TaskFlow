@@ -70,6 +70,10 @@ public class RunDataMapper {
         jdbc.update("UPDATE run_attempt SET state='DISPATCHING', dispatch_count=dispatch_count+1, expires_at=?, next_dispatch_at=?, started_at=COALESCE(started_at,?) WHERE id=? AND state IN ('READY','DISPATCHING')",
                 ts(expires), ts(next), ts(now), id.toString());
     }
+    public void bindTarget(UUID id, String workerId) {
+        if (jdbc.update("UPDATE run_attempt SET target_worker_id=? WHERE id=? AND target_worker_id IS NULL AND expires_at IS NULL AND state='READY'",
+                workerId, id.toString()) != 1) throw new IllegalStateException("Attempt 已绑定目标或已派发");
+    }
     public boolean accepted(Attempt expected, Instant now) {
         return jdbc.update("UPDATE run_attempt SET state='RUNNING' WHERE id=? AND run_id=? AND attempt_number=? AND lease_version=? AND state IN ('READY','DISPATCHING') AND expires_at>? AND (lease_until IS NULL OR lease_until>?)",
                 expected.id().toString(), expected.runId().toString(), expected.attemptNumber(), expected.leaseVersion(), ts(now), ts(now)) == 1;
@@ -107,7 +111,7 @@ public class RunDataMapper {
                 rs.getInt("dispatch_count"), instant(rs, "next_dispatch_at"), instant(rs, "expires_at"),
                 instant(rs, "started_at"), instant(rs, "finished_at"), rs.getString("result_code"), rs.getString("message"),
                 instant(rs, "lease_until"), rs.getString("owner_worker_id"),
-                rs.getString("owner_session_id") == null ? null : UUID.fromString(rs.getString("owner_session_id")));
+                rs.getString("owner_session_id") == null ? null : UUID.fromString(rs.getString("owner_session_id")), rs.getString("target_worker_id"));
     }
     private Instant instant(ResultSet rs, String column) throws SQLException {
         var value = rs.getTimestamp(column); return value == null ? null : value.toInstant();

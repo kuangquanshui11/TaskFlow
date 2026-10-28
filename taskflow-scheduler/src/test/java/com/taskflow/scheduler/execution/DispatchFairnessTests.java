@@ -59,6 +59,11 @@ class DispatchFairnessTests {
         jdbc.update("DELETE FROM run_attempt");
         jdbc.update("DELETE FROM run_execution");
         when(nodes.canDispatch("demoSuccess")).thenReturn(true);
+        when(nodes.selectTarget(anyString())).thenAnswer(call -> nodes.canDispatch(call.getArgument(0, String.class))
+                ? Optional.of(new com.taskflow.scheduler.node.model.DispatchTarget("worker-default", "taskflow",
+                    dispatchProperties.exchange(), dispatchProperties.queue(), dispatchProperties.routingKey())) : Optional.empty());
+        when(nodes.canDispatch(any(com.taskflow.scheduler.node.model.DispatchTarget.class), anyString()))
+                .thenAnswer(call -> nodes.canDispatch(call.getArgument(1, String.class)));
     }
 
     @ParameterizedTest

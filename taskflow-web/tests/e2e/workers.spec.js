@@ -12,7 +12,9 @@ test('真实节点查询、筛选、错误恢复和离开页面停止轮询', as
   const row = page.locator('tr[data-worker-id="worker-default"]');
   await expect(row).toContainText('在线');
   await expect(row).toContainText('demoSuccess');
-  await expect(row).toContainText('当前派发目标');
+  const current = (await (await request.get('/api/v1/workers/selectById?workerId=worker-default')).json()).data;
+  if (current.dispatchTransport === 'http') await expect(row).toContainText('当前派发目标');
+  else await expect(row).not.toContainText('当前派发目标');
   await page.getByRole('checkbox', { name: '自动刷新' }).uncheck();
   if (process.env.TASKFLOW_EXECUTION_EVIDENCE_DIR) {
     await page.screenshot({ path: path.join(process.env.TASKFLOW_EXECUTION_EVIDENCE_DIR, 'workers-desktop.png'), fullPage: true });
@@ -53,7 +55,7 @@ test('375px 节点卡片显示长标识、处理器和队列而不溢出', async
     handlerKeys: ['demoSuccess', 'handler' + 'b'.repeat(93)], parallelism: 4, maxPending: 32, runningCount: 2, pendingCount: 3,
     dispatchTransport: 'rabbitmq', dispatchVhost: 'taskflow', dispatchExchange: 'taskflow.dispatch.v1',
     dispatchQueue: 'taskflow.' + 'q'.repeat(190), dispatchRoutingKey: 'worker.default',
-    status: 'ONLINE', target: true, dispatchEligible: true, registeredAt: now.toISOString(),
+    status: 'ONLINE', target: false, dispatchEligible: true, registeredAt: now.toISOString(),
     lastHeartbeatAt: now.toISOString(), expiresAt: new Date(now.getTime() + 30000).toISOString(),
   };
   await page.route('**/api/v1/workers/select?**', route => route.fulfill({ json: { code: 'OK', data: {
@@ -68,6 +70,27 @@ test('375px 节点卡片显示长标识、处理器和队列而不溢出', async
   if (process.env.TASKFLOW_EXECUTION_EVIDENCE_DIR) {
     await page.screenshot({ path: path.join(process.env.TASKFLOW_EXECUTION_EVIDENCE_DIR, 'workers-mobile.png'), fullPage: true });
   }
+});
+
+test('MQ 节点资格与满载状态不依赖固定 HTTP 目标标记', async ({ page }) => {
+  const now = new Date().toISOString();
+  const base = { displayName: '集群节点', generation: 1, handlerKeys: ['demoSuccess'], parallelism: 2, maxPending: 4,
+    dispatchTransport: 'rabbitmq', dispatchVhost: 'taskflow', dispatchExchange: 'taskflow.dispatch.v1',
+    status: 'ONLINE', target: false, registeredAt: now, lastHeartbeatAt: now, expiresAt: new Date(Date.now() + 30000).toISOString() };
+  const records = [
+    { ...base, workerId: 'worker-a', dispatchQueue: 'taskflow.worker-a.v1', dispatchRoutingKey: 'worker-a', runningCount: 0, pendingCount: 0, dispatchEligible: true },
+    { ...base, workerId: 'worker-b', dispatchQueue: 'taskflow.worker-b.v1', dispatchRoutingKey: 'worker-b', runningCount: 2, pendingCount: 2, dispatchEligible: false },
+  ];
+  await page.route('**/api/v1/workers/select?**', route => route.fulfill({ json: { code: 'OK', data: {
+    records, total: 2, page: 1, pageSize: 10, summary: { total: 2, online: 2, offline: 0 }, observedAt: now,
+  } } }));
+  await page.goto('/workers');
+  const available = page.locator('tr[data-worker-id="worker-a"]');
+  const full = page.locator('tr[data-worker-id="worker-b"]');
+  await expect(available).toContainText('可接收新增派发');
+  await expect(available).not.toContainText('当前派发目标');
+  await expect(full).toContainText('执行容量已满');
+  await expect(full).not.toContainText('未设为派发目标');
 });
 
 test('首次查询失败不显示空列表，重试后能区分未注册节点', async ({ page }) => {

@@ -14,7 +14,7 @@
 | Admin → Scheduler | GET /internal/v1/runs/select、selectById、selectByRequestKey | 查询 Scheduler 权威运行历史 |
 | Scheduler → Worker | POST /internal/v1/executions/insert | attemptId、runId、attemptNumber、leaseVersion、expiresAt、snapshot |
 | Scheduler 诊断 → Worker | GET /internal/v1/executions/selectById?attemptId= | 读取本地接收状态；不作为全局权威运行状态 |
-| Worker → Scheduler | POST /internal/v1/attempts/updateResult | attemptId、runId、leaseVersion、status、resultCode、message、retryable |
+| Worker → Scheduler | POST /internal/v1/attempts/updateResult | attemptId、runId、leaseVersion、status、resultCode、message、retryable、workerId、sessionId |
 | Worker → Scheduler | POST /internal/v1/attempts/updateLease | attemptId、runId、leaseVersion、workerId、sessionId；领取/续租，返回短租约及硬截止，详见 [执行租约](execution-leases.md) |
 
 公开接口沿用 Admin 的 ApiResponse，内部成功响应直接返回版本化 JSON DTO。查询 GET、状态变更 POST。内部请求使用 X-Taskflow-Token，控制、派发、结果上报使用三份独立随机密钥；空密钥拒绝请求。实际密钥只放忽略的本机 YAML 或环境变量，不发送给浏览器。内部地址固定来自配置，Worker 不接受调用方传入的回调 URL。
@@ -33,18 +33,18 @@
 - Worker 派发扫描与结果上报使用两个独立的单线程调度器，节点心跳仍使用独立调度器。结果上报使用 `workerReportScheduler`（线程名前缀 `taskflow-report-`），采用 fixedDelay，上一轮结束后再等待扫描间隔启动下一轮，不并发执行多轮上报；派发与上报均受 `taskflow.execution.scanning-enabled` 控制。
 - 每轮上报从进入 `reportPending()` 时计算 `taskflow.execution.report-budget` 截止时间（默认 2s，必须大于 0 且不超过 30s）。每条记录在 `reportClaim` 之前检查预算，到期则结束本轮，剩余记录不领取、不发送、不消耗重报次数；下轮按原有到期条件继续处理。预算仅在记录之间生效，单条在途请求不会被中断，预算耗尽只记录一次 debug 日志。
 - 结果上报仍为 at-least-once 语义：先持久化 claim，再在事务外发送 HTTP，收到确认才标记已上报；响应丢失时可能重发，Scheduler 幂等接收。有限重报次数与恢复门控保持不变，不承诺无限重试或必然送达。
-- Scheduler 终态写入检查 attemptId、当前 Attempt、状态、leaseVersion 和未过期租约。重复相同终态幂等确认，不接受冲突终态。租约过期不代表旧 Worker 已物理停止。
-- 固定 Worker 在调用 Handler 前领取短租约，绑定 workerId 与独立执行会话；后续独立续租，不更改派发消息或 leaseVersion，不延长硬截止。Handler 接收快照与 ExecutionContext；业务幂等以 runId 为稳定范围，attemptId 用于尝试去重，leaseVersion 仅作为同一 Run 内的 fencing 版本。超时、取消、保存及上报有效期见 [执行租约](execution-leases.md)。
+- Scheduler 终态写入检查 attemptId、当前 Attempt、目标 Worker、已领取执行会话、状态、leaseVersion 和未过期租约。重复相同终态幂等确认，不接受冲突终态。租约过期不代表旧 Worker 已物理停止。
+- Attempt 绑定的 Worker 在调用 Handler 前领取短租约，绑定 workerId 与独立执行会话；后续独立续租，不更改派发消息或 leaseVersion，不延长硬截止。Handler 接收快照与 ExecutionContext；业务幂等以 runId 为稳定范围，attemptId 用于尝试去重，leaseVersion 仅作为同一 Run 内的 fencing 版本。超时、取消、保存及上报有效期见 [执行租约](execution-leases.md)。
 - Scheduler 的状态变更事务统一按 Run → Attempt 加行锁；MQ 确认需要访问 Outbox 时在两者之后加锁。首次普通读取只定位不可变 runId，等待 Run 锁后通过 `SELECT ... FOR UPDATE` 读取 Attempt 当前状态，不使用旧的 REPEATABLE READ 快照作状态决策。HTTP 请求与 MQ 发布仍在 SQL 事务外。
 - HTTP 接收确认和 MQ 发布确认共用状态转换保护：必须匹配当前 Attempt、消息租约版本和有效期；Attempt SQL 更新成功才推进 Run，Run SQL 同时检查原状态和当前 Attempt，终态不允许回退。终态写入、创建重试与 Outbox 变更也检查影响行数，任一转换失败则回滚整个本地事务。本地确认失败不归类为 Worker 拒绝；保留原 Attempt，由既有扫描及租约机制恢复。此修复不自动重写历史异常记录，验证见 [状态并发修复](run-state-concurrency-verification.md)。
-- 明确的 HANDLER_FAILED 可按快照 maxAttempts 和 retryIntervalSeconds 有限重试；不确定派发失败、执行超时、Worker 重启不自动重做业务。业务失败重试必须考虑副作用幂等。
+- 明确的 HANDLER_FAILED 可按快照 maxAttempts 和 retryIntervalSeconds 有限重试；不确定派发失败不立即创建业务重试；已报告的执行超时和 Worker 重启保持原非重试语义。Scheduler 观察到租约失效时，默认按快照上限新增 Attempt，并重新选择节点，可用 `TASKFLOW_RETRY_ON_LEASE_LOSS=false` 关闭。业务失败重试必须考虑副作用幂等。
 - Run 状态为 READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED；Attempt 为 READY、DISPATCHING、RUNNING、SUCCEEDED、FAILED、TIMED_OUT。终态不可被迟到结果覆盖。
 
 ## 超时与故障
 
 连接/请求超时、扫描间隔、有限派发次数、结果重报次数、执行容量和租约宽限统一放各服务 YAML。Admin 不在数据库事务内等待 Scheduler；Scheduler 不在数据库事务内等待 Worker；Worker 不在数据库事务内等待结果回调。超时不等于请求未接收：浏览器保留 requestKey 重试原请求，Scheduler 对不确定派发复用 attemptId。
 
-HTTP 链路使用静态地址与密钥，数据库是权威来源。默认任务派发已接入 RabbitMQ，Broker 权限限定发布方与消费方；显式 HTTP 模式继续使用原派发密钥。[Worker 注册/心跳](worker-nodes.md) 已实现，派发前检查固定目标在线和能力/路由，节点 generation 不代替执行租约。固定 Worker 执行续租和 Handler 上下文已实现，协议与有效性边界见 [执行租约](execution-leases.md)。自动选址、分布式 Worker 故障转移和外部副作用恰好一次均未承诺。前期 HTTP 验收记录保留在 execution-verification.md，后续记录见 [MQ 验证](mq-verification.md) 与 [节点验证](worker-nodes-verification.md)。
+HTTP 链路使用静态地址与密钥，数据库是权威来源。默认任务派发已接入 RabbitMQ，Broker 权限限定发布方与消费方；显式 HTTP 模式继续使用原派发密钥。[Worker 注册/心跳](worker-nodes.md) 已实现，MQ 首次派发按能力和负载选择节点、持久化目标及路由，发布重试只检查原目标；HTTP 继续检查固定目标在线和能力/路由，节点 generation 不代替执行租约。Worker 执行续租和 Handler 上下文已实现，协议与有效性边界见 [执行租约](execution-leases.md)。MQ 动态选址和租约失效后的有限跨节点重试见 [水平扩展](worker-horizontal-scaling.md)；不提供同一 Attempt 跨 Inbox 接管，不承诺外部副作用恰好一次。前期 HTTP 验收记录保留在 execution-verification.md，后续记录见 [MQ 验证](mq-verification.md) 与 [节点验证](worker-nodes-verification.md)。
 
 ```mermaid
 flowchart LR

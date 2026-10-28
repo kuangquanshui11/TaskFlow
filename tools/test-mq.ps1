@@ -1,4 +1,4 @@
-param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$SkipFailover,
+param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$SkipFailover, [switch]$IncludeWorkerCluster,
     [string]$ClusterSettingsPath, [switch]$ManualFailover, [switch]$AllowLegacyBroker)
 $ErrorActionPreference = 'Stop'
 $repoPath = Split-Path -Parent $PSScriptRoot
@@ -47,7 +47,8 @@ function Wait-Topology([int]$OnlineCount, [string]$Label) {
     do {
         $nodes = @(Invoke-Broker 'GET' 'nodes')
         $queues = @(Invoke-Broker 'GET' ("queues/" + $testVhost))
-        $valid = $nodes.Count -eq 3 -and @($nodes | Where-Object running).Count -eq $OnlineCount -and $queues.Count -eq 2
+        $expectedQueues = if ($IncludeWorkerCluster) { 4 } else { 2 }
+        $valid = $nodes.Count -eq 3 -and @($nodes | Where-Object running).Count -eq $OnlineCount -and $queues.Count -eq $expectedQueues
         $valid = $valid -and @($nodes | Where-Object { $_.running -and ($_.mem_alarm -or $_.disk_free_alarm -or @($_.partitions).Count -gt 0) }).Count -eq 0
         foreach ($queue in $queues) {
             $valid = $valid -and $queue.type -eq 'quorum' -and @($queue.members).Count -eq 3 -and @($queue.online).Count -eq $OnlineCount
@@ -66,7 +67,7 @@ function Wait-Topology([int]$OnlineCount, [string]$Label) {
 }
 function Invoke-ExecutionAcceptance([string]$Label, [bool]$SkipPhaseBuild) {
     Write-TestSettings
-    & (Join-Path $PSScriptRoot 'test-execution.ps1') -Transport rabbitmq -MqSettingsPath $settingsPath -SkipBuild:$SkipPhaseBuild -SkipBrowser:$SkipBrowser |
+    & (Join-Path $PSScriptRoot 'test-execution.ps1') -Transport rabbitmq -MqSettingsPath $settingsPath -SkipBuild:$SkipPhaseBuild -SkipBrowser:$SkipBrowser -IncludeWorkerCluster:$IncludeWorkerCluster |
         Tee-Object -FilePath (Join-Path $runPath ($Label + '.log')) | Tee-Object -Variable phaseOutput
     $location = @($phaseOutput | Where-Object { "$_".StartsWith('Execution evidence: ') })
     if ($location.Count -ne 1) { throw 'Execution acceptance did not produce a completed evidence report.' }
@@ -135,6 +136,21 @@ try {
     $null = Invoke-Broker 'POST' ("bindings/$testVhost/e/taskflow.dispatch.v1/q/taskflow.worker.default.v1") @{routing_key='worker.default';arguments=@{}}
     $null = Invoke-Broker 'POST' ("bindings/$testVhost/e/taskflow.dispatch.dead.v1/q/taskflow.worker.default.dead.v1") @{routing_key='worker.default.dead';arguments=@{}}
     $null = Invoke-Broker 'PUT' ("policies/$testVhost/dispatch-safety") (New-MqDispatchSafetyPolicy $capability.legacy)
+    if ($IncludeWorkerCluster) {
+        foreach ($queue in @('taskflow.worker.second.v1','taskflow.worker.second.dead.v1')) {
+            $null = Invoke-Broker 'PUT' ("queues/$testVhost/$queue") @{durable=$true;auto_delete=$false;arguments=@{'x-queue-type'='quorum';'x-quorum-initial-group-size'=3}}
+        }
+        $null = Invoke-Broker 'POST' ("bindings/$testVhost/e/taskflow.dispatch.v1/q/taskflow.worker.second.v1") @{routing_key='worker.second';arguments=@{}}
+        $null = Invoke-Broker 'POST' ("bindings/$testVhost/e/taskflow.dispatch.dead.v1/q/taskflow.worker.second.dead.v1") @{routing_key='worker.second.dead';arguments=@{}}
+        $secondPolicy = New-MqDispatchSafetyPolicy $capability.legacy
+        $secondPolicy.pattern = '^taskflow\.worker\.second\.v1$'
+        $secondPolicy.definition['dead-letter-routing-key'] = 'worker.second.dead'
+        $null = Invoke-Broker 'PUT' ("policies/$testVhost/dispatch-safety-second") $secondPolicy
+        if ($clusterSettings.serviceCredentials) {
+            $workerUser = [Uri]::EscapeDataString($clusterSettings.serviceCredentials.worker.username)
+            $null = Invoke-Broker 'PUT' ("permissions/$testVhost/$workerUser") @{configure='^$';write='^$';read='^taskflow\.worker\.(default|second)\.v1$'}
+        }
+    }
     Wait-Topology 3 'quorum-before'
     Invoke-BackpressureAcceptance
     Invoke-ExecutionAcceptance 'three-nodes' ([bool]$SkipBuild)

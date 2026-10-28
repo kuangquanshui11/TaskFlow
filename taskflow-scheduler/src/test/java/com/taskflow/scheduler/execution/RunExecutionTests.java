@@ -71,7 +71,7 @@ class RunExecutionTests {
         doAnswer(call -> {
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
             Dispatch dispatch = call.getArgument(0);
-            runs.updateResult(new Result(dispatch.attemptId(), dispatch.runId(), dispatch.leaseVersion(), "SUCCEEDED", "SUCCEEDED", "ok", false));
+            runs.updateResult(new Result(dispatch.attemptId(), dispatch.runId(), dispatch.leaseVersion(), "SUCCEEDED", "SUCCEEDED", "ok", false, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001")));
             return null;
         }).when(worker).dispatch(any());
         var run = runs.insert(create(UUID.randomUUID(), "fast", 1));
@@ -96,11 +96,11 @@ class RunExecutionTests {
         var run = runs.insert(create(UUID.randomUUID(), "lease", 1));
         runs.dispatchPending();
         var attempt = runs.selectById(run.id()).attempts().getFirst();
-        assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(), run.id(), 99, "SUCCEEDED", "SUCCEEDED", "ok", false)))
+        assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(), run.id(), 99, "SUCCEEDED", "SUCCEEDED", "ok", false, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001"))))
                 .isInstanceOf(RunException.class);
-        var result = new Result(attempt.id(), run.id(), attempt.leaseVersion(), "SUCCEEDED", "SUCCEEDED", "ok", false);
+        var result = new Result(attempt.id(), run.id(), attempt.leaseVersion(), "SUCCEEDED", "SUCCEEDED", "ok", false, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001"));
         runs.updateResult(result); runs.updateResult(result);
-        assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion(), "FAILED", "HANDLER_FAILED", "bad", true)))
+        assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion(), "FAILED", "HANDLER_FAILED", "bad", true, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001"))))
                 .isInstanceOf(RunException.class);
         assertThat(runs.selectById(run.id()).state()).isEqualTo("SUCCEEDED");
     }
@@ -109,7 +109,7 @@ class RunExecutionTests {
             Dispatch dispatch = call.getArgument(0);
             boolean first = dispatch.attemptNumber() == 1;
             runs.updateResult(new Result(dispatch.attemptId(), dispatch.runId(), dispatch.leaseVersion(),
-                    first ? "FAILED" : "SUCCEEDED", first ? "HANDLER_FAILED" : "SUCCEEDED", first ? "fail" : "ok", first));
+                    first ? "FAILED" : "SUCCEEDED", first ? "HANDLER_FAILED" : "SUCCEEDED", first ? "fail" : "ok", first, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001")));
             return null;
         }).when(worker).dispatch(any());
         var run = runs.insert(create(UUID.randomUUID(), "business-retry", 2));
@@ -140,7 +140,7 @@ class RunExecutionTests {
         jdbc.update("UPDATE run_attempt SET expires_at=? WHERE id=?", Timestamp.from(Instant.now().minusSeconds(1)), attempt.id().toString());
         runs.dispatchPending();
         assertThat(runs.selectById(run.id()).attempts().getFirst().state()).isEqualTo("TIMED_OUT");
-        assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion(), "SUCCEEDED", "SUCCEEDED", "late", false)))
+        assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion(), "SUCCEEDED", "SUCCEEDED", "late", false, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001"))))
                 .isInstanceOf(RunException.class);
     }
     private void makeDue() { jdbc.update("UPDATE run_attempt SET next_dispatch_at=?", Timestamp.from(Instant.now().minusSeconds(1))); }

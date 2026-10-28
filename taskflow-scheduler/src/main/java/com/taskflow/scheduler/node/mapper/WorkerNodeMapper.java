@@ -18,6 +18,13 @@ public class WorkerNodeMapper {
     public boolean sessionExists(UUID id) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM worker_node_session WHERE session_id=?",Long.class,id.toString())>0;
     }
+    public List<WorkerNode> online(Instant now) {
+        return jdbc.query("SELECT * FROM worker_node WHERE expires_at>? ORDER BY worker_id", this::read, ts(now));
+    }
+    public long assignedCount(String workerId) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM run_attempt WHERE target_worker_id=? AND state IN ('READY','DISPATCHING','RUNNING')",
+                Long.class, workerId);
+    }
     public void save(WorkerNode node, boolean insert) {
         if (insert) jdbc.update("INSERT INTO worker_node (worker_id,display_name,session_id,generation,registration_fingerprint,handler_keys_json,parallelism,max_pending,running_count,pending_count,dispatch_transport,dispatch_vhost,dispatch_exchange,dispatch_queue,dispatch_routing_key,last_sequence,registered_at,last_heartbeat_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 node.workerId(),node.displayName(),node.sessionId().toString(),node.generation(),node.registrationFingerprint(),node.handlerKeysJson(),node.parallelism(),node.maxPending(),0,0,

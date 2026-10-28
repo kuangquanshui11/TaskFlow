@@ -8,7 +8,7 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 已补齐微服务技术栈：Gateway WebFlux/Netty、Eureka、Config Server、OpenFeign/LoadBalancer、Resilience4j、Micrometer Tracing/OTLP。新增三个独立基础设施应用；公共 API 统一经 Gateway，cloud 模式通过服务名调用。Java 21 / Boot 4.1.1 保持不变，使用 Cloud 2025.1.4 BOM。启动与边界见 [微服务技术栈](docs/microservice-platform.md)。
 
-独立 Vue 3 管理台已连接真实 Admin 接口，支持任务管理、Cron 预览、手动执行与运行历史，由 Nginx 托管。Admin 已实现 Redis 详情缓存，默认 TTL 60 秒。手动执行已打通 Admin → Scheduler → Worker → 结果上报：Run/Attempt、执行快照、幂等接收、有限重试、超时与重启恢复均有独立持久化。配置异步同步已实现：Admin 事务 Outbox、后台有限重试、Scheduler 版本副本和删除墓碑。Cron 已支持到期扫描、计划轮次去重及 SKIP/FIRE_ONCE。Scheduler 派发 Outbox、RabbitMQ 发布确认、Worker Inbox 提交后消费确认已实现；远程三节点正常与单节点停机场景各 43 项真实 MQ 检查通过，当前 3.8 Broker 使用显式兼容策略，至少一次死信转移仍未验收。Worker 注册、心跳、在线/离线判定及节点查询页面已实现，固定目标派发会检查节点有效期、Handler 和路由；固定 Worker 有界续租和 Handler 执行上下文已实现，见 [执行租约](docs/execution-leases.md)；跨节点回收尚未实现。Java 21 与 Spring Boot 4.1.1 保持不变。
+独立 Vue 3 管理台已连接真实 Admin 接口，支持任务管理、Cron 预览、手动执行与运行历史，由 Nginx 托管。Admin 已实现 Redis 详情缓存，默认 TTL 60 秒。手动执行已打通 Admin → Scheduler → Worker → 结果上报：Run/Attempt、执行快照、幂等接收、有限重试、超时与重启恢复均有独立持久化。配置异步同步已实现：Admin 事务 Outbox、后台有限重试、Scheduler 版本副本和删除墓碑。Cron 已支持到期扫描、计划轮次去重及 SKIP/FIRE_ONCE。Scheduler 派发 Outbox、RabbitMQ 发布确认、Worker Inbox 提交后消费确认已实现；远程三节点正常与单节点停机场景各 43 项真实 MQ 检查通过，当前 3.8 Broker 使用显式兼容策略，至少一次死信转移仍未验收。Worker 注册、心跳、在线/离线判定及节点查询页面已实现，MQ 派发按节点能力和负载选择独立 Worker 队列，Attempt 与 Outbox 固定目标和路由；有界续租和 Handler 执行上下文已实现，见 [执行租约](docs/execution-leases.md)；租约失效后可按快照上限创建新 Attempt 并重新选节点，见 [Worker 水平扩展](docs/worker-horizontal-scaling.md)。Java 21 与 Spring Boot 4.1.1 保持不变。
 
 Worker 结果保存恢复已补齐：同一份结果有限重试写库，恢复后继续上报，耗尽有可定位错误，保存重试不重新调用 Handler；线程池拒绝已领取任务也有收尾。进程崩溃、重试耗尽和过期租约仍有明确限制，见 [结果保存恢复](docs/worker-result-recovery.md)。
 
@@ -38,7 +38,7 @@ Worker 结果保存恢复已补齐：同一份结果有限重试写库，恢复�
 - [Admin Redis 缓存配置与验证](docs/redis.md)
 - [任务详情缓存验证记录](docs/cache-verification.md)
 - [手动执行 HTTP 协议](docs/execution-protocol.md)
-- [固定 Worker 有界续租与 Handler 上下文](docs/execution-leases.md)
+- [Worker 有界续租与 Handler 上下文](docs/execution-leases.md)
 - [执行租约验证](docs/execution-leases-verification.md)
 - [配置异步同步、状态与恢复](docs/config-sync.md)
 - [Scheduler 下一计划时间计算与查询](docs/plan-calculation.md)
@@ -47,6 +47,8 @@ Worker 结果保存恢复已补齐：同一份结果有限重试写库，恢复�
 - [Cron 复测与 MQ 验证边界](docs/mq-verification.md)
 - [Worker 注册、心跳、派发检查与节点页面](docs/worker-nodes.md)
 - [节点模块验证记录](docs/worker-nodes-verification.md)
+- [Worker 水平扩展与部署](docs/worker-horizontal-scaling.md)
+- [Worker 水平扩展验证](docs/worker-horizontal-scaling-verification.md)
 - [手动执行验证与本机运行](docs/execution-verification.md)
 - [分阶段开发与验收计划](docs/development-plan.md)
 - [Admin 任务表与手动建表步骤](docs/database.md)
@@ -108,9 +110,9 @@ init 可在没有 Docker 时生成被忽略的随机凭据、Broker 定义和服
 
 ## Worker 节点管理
 
-管理台新增 `/workers`，支持在线/离线统计、名称或标识筛选、分页、能力和负载展示。Worker 默认每 5 秒上报一次，Scheduler 在最后有效心跳 30 秒后判为离线，派发前检查固定目标 `worker-default` 的状态。节点心跳与执行租约是不同机制，节点恢复不会替旧 Attempt 续租。
+管理台新增 `/workers`，支持在线/离线统计、名称或标识筛选、分页、能力和负载展示。Worker 默认每 5 秒上报一次，Scheduler 在最后有效心跳 30 秒后判为离线，MQ 模式按 Handler 和负载选择合格节点，HTTP 模式仍检查固定目标 `worker-default` 的状态。节点心跳与执行租约是不同机制，节点恢复不会替旧 Attempt 续租。
 
-升级前运行 `.\tools\prepare-node-identity.ps1` 生成被忽略的 `config/taskflow-nodes-local.yml`；已有文件会保留，也可在 Scheduler/Worker 进程中设置相同 `TASKFLOW_NODE_TOKEN`。先升级 Scheduler（Flyway V6），再升级 Worker、Admin 和前端。Worker 注册成功前新任务保留 READY，重启新会话需等待旧会话超时。内部查询仍使用原控制密钥，节点身份密钥不进入浏览器。协议与限制见 [节点文档](docs/worker-nodes.md)。
+升级前运行 `.\tools\prepare-node-identity.ps1` 生成被忽略的 `config/taskflow-nodes-local.yml`；已有文件会保留，也可在 Scheduler/Worker 进程中设置相同 `TASKFLOW_NODE_TOKEN`。水平扩展升级先排空在途和待上报任务，升级 Scheduler（Flyway V8）再升级全部 Worker（Flyway V2）；结果上报新增必填执行身份，不混用旧 Worker。Admin 同步更新 MQ 节点响应校验，前端更新可派发及满载状态文案，需一起发布。Worker 注册成功前新任务保留 READY，重启新会话需等待旧会话超时。内部查询仍使用原控制密钥，节点身份密钥不进入浏览器。协议与限制见 [节点文档](docs/worker-nodes.md)。
 
 ## Admin 数据库配置
 

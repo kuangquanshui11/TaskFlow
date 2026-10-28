@@ -4,6 +4,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.*;
 import com.taskflow.scheduler.dispatch.model.OutboxEvent;
+import com.taskflow.scheduler.node.model.DispatchTarget;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -21,11 +22,18 @@ public class DispatchOutboxMapper {
                 new OutboxEvent(UUID.fromString(rs.getString("event_id")), UUID.fromString(rs.getString("attempt_id")),
                         rs.getString("state"), rs.getString("message_json"), instant(rs.getTimestamp("expires_at")),
                         rs.getInt("publish_attempts"), instant(rs.getTimestamp("next_publish_at")), rs.getLong("claim_version"),
-                        instant(rs.getTimestamp("claim_until")), rs.getString("last_error_code")), id.toString()).stream().findFirst();
+                        instant(rs.getTimestamp("claim_until")), rs.getString("last_error_code"),
+                        rs.getString("target_worker_id") == null ? null : new DispatchTarget(rs.getString("target_worker_id"),
+                                rs.getString("target_vhost"), rs.getString("target_exchange"), rs.getString("target_queue"), rs.getString("target_routing_key"))), id.toString()).stream().findFirst();
     }
     public void prepare(UUID id, String json, Instant expiresAt, Instant now) {
-        if (jdbc.update("UPDATE dispatch_outbox SET state='READY',message_json=?,expires_at=?,next_publish_at=? WHERE event_id=? AND state='WAITING'",
-                json, ts(expiresAt), ts(now), id.toString()) != 1) throw new IllegalStateException("Outbox 已被准备或取消");
+        prepare(id, json, expiresAt, now, null);
+    }
+    public void prepare(UUID id, String json, Instant expiresAt, Instant now, DispatchTarget target) {
+        if (jdbc.update("UPDATE dispatch_outbox SET state='READY',message_json=?,expires_at=?,next_publish_at=?,target_worker_id=?,target_vhost=?,target_exchange=?,target_queue=?,target_routing_key=? WHERE event_id=? AND state='WAITING'",
+                json, ts(expiresAt), ts(now), target == null ? null : target.workerId(), target == null ? null : target.vhost(),
+                target == null ? null : target.exchange(), target == null ? null : target.queue(), target == null ? null : target.routingKey(),
+                id.toString()) != 1) throw new IllegalStateException("Outbox 已被准备或取消");
     }
     public List<UUID> due(Instant now) {
         return jdbc.query("SELECT event_id FROM dispatch_outbox WHERE next_publish_at<=? AND (state='READY' OR (state='SENDING' AND claim_until<=?)) ORDER BY next_publish_at,event_id LIMIT 100",

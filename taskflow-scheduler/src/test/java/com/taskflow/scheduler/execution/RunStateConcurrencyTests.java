@@ -85,7 +85,7 @@ class RunStateConcurrencyTests {
         IRunService service = service(transport);
         var run = service.insert(request());
         var attempt = run.attempts().getFirst();
-        var result = new Result(attempt.id(), run.id(), attempt.leaseVersion(), state, state, "completed", retryable);
+        var result = new Result(attempt.id(), run.id(), attempt.leaseVersion(), state, state, "completed", retryable, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001"));
         var callbackLocked = new CountDownLatch(1);
         var confirmationRead = new CountDownLatch(1);
         var transaction = new TransactionTemplate(manager);
@@ -156,7 +156,7 @@ class RunStateConcurrencyTests {
         runs.dispatchPending();
         var attempt = runs.selectById(run.id()).attempts().getFirst();
         String state = retryable ? "FAILED" : "SUCCEEDED";
-        var result = new Result(attempt.id(), run.id(), attempt.leaseVersion(), state, state, "completed", retryable);
+        var result = new Result(attempt.id(), run.id(), attempt.leaseVersion(), state, state, "completed", retryable, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001"));
         var bothRead = new CountDownLatch(2);
         var observed = java.util.concurrent.ConcurrentHashMap.<Thread>newKeySet();
         doAnswer(call -> {
@@ -225,13 +225,13 @@ class RunStateConcurrencyTests {
         var run = runs.insert(request());
         runs.dispatchPending();
         var attempt = runs.selectById(run.id()).attempts().getFirst();
-        var result = new Result(attempt.id(), run.id(), attempt.leaseVersion(), "SUCCEEDED", "SUCCEEDED", "completed", false);
+        var result = new Result(attempt.id(), run.id(), attempt.leaseVersion(), "SUCCEEDED", "SUCCEEDED", "completed", false, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001"));
         assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion() + 1,
-                "SUCCEEDED", "SUCCEEDED", "completed", false))).isInstanceOfSatisfying(RunException.class,
+                "SUCCEEDED", "SUCCEEDED", "completed", false, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001")))).isInstanceOfSatisfying(RunException.class,
                 failure -> assertThat(failure.status()).isEqualTo(409));
         runs.updateResult(result);
         assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion(),
-                "FAILED", "HANDLER_FAILED", "conflicting", true))).isInstanceOf(RunException.class);
+                "FAILED", "HANDLER_FAILED", "conflicting", true, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001")))).isInstanceOf(RunException.class);
         jdbc.update("UPDATE run_attempt SET expires_at=? WHERE id=?",
                 Timestamp.from(Instant.now().minusSeconds(1)), attempt.id().toString());
         runs.updateResult(result);
@@ -270,7 +270,7 @@ class RunStateConcurrencyTests {
         var attempt = service.selectById(run.id()).attempts().getFirst();
         doReturn(false).when(mapper).runState(any(), eq("RETRY_WAIT"), anyInt(), any(), any(), any());
         assertThatThrownBy(() -> service.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion(),
-                "FAILED", "HANDLER_FAILED", "completed", true))).isInstanceOfSatisfying(RunException.class,
+                "FAILED", "HANDLER_FAILED", "completed", true, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001")))).isInstanceOfSatisfying(RunException.class,
                 failure -> assertThat(failure.code()).isEqualTo("STALE_ATTEMPT"));
         var after = service.selectById(run.id());
         assertThat(after.state()).isEqualTo("READY");
@@ -286,7 +286,7 @@ class RunStateConcurrencyTests {
         var attempt = runs.selectById(run.id()).attempts().getFirst();
         doReturn(false).when(mapper).finish(any(), anyString(), anyString(), anyString(), any());
         assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion(),
-                "FAILED", "HANDLER_FAILED", "completed", true))).isInstanceOf(RunException.class);
+                "FAILED", "HANDLER_FAILED", "completed", true, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001")))).isInstanceOf(RunException.class);
         var after = runs.selectById(run.id());
         assertThat(after.state()).isEqualTo("RUNNING");
         assertThat(after.attempts()).hasSize(1);

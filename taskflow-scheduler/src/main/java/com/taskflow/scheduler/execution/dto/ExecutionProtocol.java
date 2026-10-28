@@ -22,7 +22,9 @@ public final class ExecutionProtocol {
     public record Result(@NotNull UUID attemptId, @NotNull UUID runId, @Positive long leaseVersion,
                          @Pattern(regexp = "SUCCEEDED|FAILED") @NotBlank String status,
                          @NotBlank @Size(max = 64) String resultCode,
-                         @NotNull @Size(max = 1024) String message, boolean retryable) { }
+                         @NotNull @Size(max = 1024) String message, boolean retryable,
+                         @NotBlank @Pattern(regexp = "[a-z0-9][a-z0-9_.-]{0,99}") String workerId,
+                         @NotNull UUID sessionId) { }
     public record Accepted(UUID attemptId, String state) { }
     public record LeaseRequest(@NotNull UUID attemptId, @NotNull UUID runId, @Positive long leaseVersion,
             @NotBlank @Pattern(regexp = "[a-z0-9][a-z0-9_.-]{0,99}") String workerId, @NotNull UUID sessionId) { }

@@ -2,6 +2,8 @@
 
 更新：2026-10-28。已接入远程三节点 RabbitMQ，正常场景及 mq1 停机后各 43 项真实 MQ 三服务检查通过，恢复后队列三个副本全部在线。当前远程 Broker 为 3.8.34，显式使用旧版兼容策略，至少一次死信转移与在途故障窗口仍未验收。实际结果见 [验证记录](mq-verification.md)。
 
+2026-10-28 新增方案 A 水平扩展：MQ 首次派发按能力和负载选择节点，Attempt 绑定目标，Outbox 固定路由；发布重试不改投。结果上报新增 workerId/sessionId，租约失效后可按快照上限新增 Attempt。部署、升级和边界见 [Worker 水平扩展](worker-horizontal-scaling.md)。
+
 ## 服务边界与调用链
 
 Admin 保持 Job 权威数据和 HTTP 配置同步 Outbox；Scheduler 拥有 Run/Attempt 和派发 Outbox；Worker 只写自己的 Inbox 和待上报结果。服务不引用彼此 Maven 应用模块，不共享 Entity、Mapper 或数据库。
@@ -47,7 +49,7 @@ Outbox 的 READY 和过期 SENDING 都必须到达 `next_publish_at` 才能成�
 
 ## 消息协议 v1
 
-交换机 `taskflow.dispatch.v1`、routing key `worker.default`、队列 `taskflow.worker.default.v1`。AMQP 属性必须包含 `type=taskflow.dispatch.v1`、`message_id=eventId`、JSON 内容类型及持久投递模式。
+共享交换机默认 `taskflow.dispatch.v1`。默认节点的 routing key 为 `worker.default`、队列为 `taskflow.worker.default.v1`；其他节点使用各自独立路由和队列，由 Outbox 路由快照决定。AMQP 属性必须包含 `type=taskflow.dispatch.v1`、`message_id=eventId`、JSON 内容类型及持久投递模式。
 
 ```json
 {
@@ -147,7 +149,7 @@ RabbitMQ 3.8/3.9 必须显式添加 `-AllowLegacyBroker`。兼容模式使用这
 | TASKFLOW_MQ_ADDRESSES | 逗号分隔的三个 AMQP 节点地址；TLS 可用 Spring rabbitmq SSL 配置 |
 | TASKFLOW_MQ_VHOST | 默认 taskflow |
 | TASKFLOW_MQ_USERNAME / PASSWORD | 每个进程使用各自角色凭据；默认密码为空 |
-| TASKFLOW_MQ_EXCHANGE / QUEUE / ROUTING_KEY | 固定 Worker 路由契约，两端需一致 |
+| TASKFLOW_MQ_EXCHANGE / QUEUE / ROUTING_KEY | 共享 exchange；Worker queue/routingKey 独立，Scheduler 将所选节点路由持久化到 Outbox |
 | TASKFLOW_MQ_DLX / DLQ / DEAD_ROUTING_KEY | 死信资源名称，Broker 定义需同时配置 |
 
 默认 confirm 等待 5 秒、领取租约 30 秒；AMQP 连接超时 3 秒、heartbeat 15 秒。Broker confirm/return 检查遵循 [Spring AMQP 官方说明](https://docs.spring.io/spring-amqp/reference/amqp/template.html)。声明的死信参数用于部署契约，应用账号不自行创建 Broker 资源，需通过集群定义或部署系统配置。
@@ -156,7 +158,7 @@ RabbitMQ 3.8/3.9 必须显式添加 `-AllowLegacyBroker`。兼容模式使用这
 
 MQ 未部署时可显式用 http，并设置 `TASKFLOW_MQ_HEALTH_ENABLED=false`；未使用共享连接 YAML 的环境也可在 Scheduler 和 Worker 本机 YAML 设置 `management.health.rabbit.enabled: false`。默认测试 profile 已配置此项，不需要 Broker。运行实例是否部署新代码、MQ 是否真实可用与源代码完成度分别验收。
 
-当前队列固定对应一个 Worker 身份、一个执行进程及其数据库。不要让带不同本地 Inbox 的多个 Worker 竞争此队列，否则本地去重无法覆盖跨节点重投。Worker 注册和心跳已实现，见 [节点管理](worker-nodes.md)；派发准备及 Relay 发布前检查固定目标的有效期、Handler 和路由。MQ 三副本不等于 Worker 集群，执行租约续期和跨节点接管仍待后续实现。任何外部业务副作用仍由 Handler 使用业务幂等键处理。
+每条工作队列对应一个 Worker 身份、一个执行进程及其持久化 Inbox。带不同 Inbox 的 Worker 不竞争同一队列。Scheduler 为新 Attempt 按能力/负载选择节点，保存目标和 Outbox 路由，Relay 重发不改投；租约失效按快照上限新增 Attempt 后可选择其他节点。执行有界续租已实现，MQ 三副本与 Worker 多进程是两个独立层次；不提供同一 Attempt 跨 Inbox 接管，外部副作用仍需业务幂等。部署见 [水平扩展](worker-horizontal-scaling.md)。
 
 ## 验收
 

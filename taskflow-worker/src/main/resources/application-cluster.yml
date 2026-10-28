@@ -1,0 +1,20 @@
+# 每个进程使用自己的身份、Inbox 数据库和队列；缺少必要变量时拒绝启动。
+spring:
+  datasource:
+    url: "${TASKFLOW_WORKER_DB_URL}"
+    username: "${TASKFLOW_WORKER_DB_USERNAME}"
+    password: "${TASKFLOW_WORKER_DB_PASSWORD}"
+  rabbitmq:
+    username: "${TASKFLOW_MQ_USERNAME}"
+    password: "${TASKFLOW_MQ_PASSWORD}"
+server:
+  port: "${TASKFLOW_WORKER_PORT}"
+taskflow:
+  nodes:
+    worker-id: "${TASKFLOW_WORKER_ID}"
+  dispatch:
+    transport: rabbitmq
+    queue: "${TASKFLOW_MQ_QUEUE}"
+    routing-key: "${TASKFLOW_MQ_ROUTING_KEY}"
+    dead-letter-queue: "${TASKFLOW_MQ_DLQ}"
+    dead-letter-routing-key: "${TASKFLOW_MQ_DEAD_ROUTING_KEY}"

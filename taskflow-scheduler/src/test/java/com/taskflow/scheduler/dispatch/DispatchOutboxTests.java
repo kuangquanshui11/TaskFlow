@@ -52,11 +52,11 @@ class DispatchOutboxTests {
     }
     @Test void preparationAndLeaseRollbackTogetherAndCanRecover() {
         var run = runs.insert(request());
-        doThrow(new IllegalStateException("injected preparation failure")).when(outbox).prepare(any(), anyString(), any(), any());
+        doThrow(new IllegalStateException("injected preparation failure")).when(outbox).prepare(any(), anyString(), any(), any(), any());
         assertThatThrownBy(runs::dispatchPending).isInstanceOf(IllegalStateException.class);
         assertThat(runs.selectById(run.id()).attempts().getFirst().expiresAt()).isNull();
         assertThat(outbox.find(run.attempts().getFirst().id(), false).orElseThrow().state()).isEqualTo("WAITING");
-        doCallRealMethod().when(outbox).prepare(any(), anyString(), any(), any());
+        doCallRealMethod().when(outbox).prepare(any(), anyString(), any(), any(), any());
         runs.dispatchPending(); relay.relay();
         assertThat(event(run).state()).isEqualTo("PUBLISHED");
     }
@@ -131,14 +131,14 @@ class DispatchOutboxTests {
         jdbc.update("UPDATE run_attempt SET expires_at=?", Timestamp.from(Instant.now().minusSeconds(1)));
         runs.dispatchPending(); relay.relay();
         assertThat(event(run).state()).isEqualTo("CANCELLED");
-        assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(),run.id(),attempt.leaseVersion(),"SUCCEEDED","SUCCEEDED","late",false)))
+        assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(),run.id(),attempt.leaseVersion(),"SUCCEEDED","SUCCEEDED","late",false, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001"))))
                 .isInstanceOf(com.taskflow.scheduler.execution.exception.RunException.class);
         verifyNoInteractions(publisher);
     }
     @Test void explicitBusinessFailureCreatesNewAttemptAndNewOutboxWithinSameRun() {
         var run = runs.insert(request()); runs.dispatchPending(); relay.relay();
         var attempt = runs.selectById(run.id()).attempts().getFirst();
-        runs.updateResult(new Result(attempt.id(),run.id(),attempt.leaseVersion(),"FAILED","HANDLER_FAILED","retry",true));
+        runs.updateResult(new Result(attempt.id(),run.id(),attempt.leaseVersion(),"FAILED","HANDLER_FAILED","retry",true, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001")));
         var waiting = runs.selectById(run.id());
         assertThat(waiting.state()).isEqualTo("RETRY_WAIT");
         assertThat(waiting.attempts()).hasSize(2);

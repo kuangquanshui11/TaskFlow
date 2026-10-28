@@ -99,7 +99,7 @@ public class ExecutionServiceImpl implements IExecutionService {
             if (!slots.tryAcquire()) break;
             boolean claimed = false;
             try {
-                if (!mapper.claim(row.attemptId())) { slots.release(); continue; }
+                if (!mapper.claim(row.attemptId(), leases.owner())) { slots.release(); continue; }
                 claimed = true;
                 var dispatch = json.readValue(row.dispatchJson(), Dispatch.class);
                 pool.execute(() -> execute(dispatch));
@@ -200,7 +200,7 @@ public class ExecutionServiceImpl implements IExecutionService {
             if (!mapper.reportClaim(row.attemptId(), row.reportCount(), Instant.now().plus(properties.reportRetryDelay()))) continue;
             var dispatch = json.readValue(row.dispatchJson(), Dispatch.class);
             var result = new Result(row.attemptId(), row.runId(), dispatch.leaseVersion(), row.state(),
-                    row.resultCode(), row.message(), row.retryable());
+                    row.resultCode(), row.message(), row.retryable(), row.reportWorkerId(), row.reportSessionId());
             boolean confirmed = false;
             try { confirmed = reports.report(result); }
             catch (RuntimeException ignored) { }

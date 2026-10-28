@@ -51,7 +51,8 @@ public class WorkerNodeClient {
                 || n.runningCount()<0 || n.pendingCount()<0 || n.runningCount()>n.parallelism() || (long)n.runningCount()+n.pendingCount()>n.maxPending()
                 || !Set.of("http","rabbitmq").contains(n.dispatchTransport()) || !Set.of("ONLINE","OFFLINE").contains(n.status())
                 || n.registeredAt()==null || n.lastHeartbeatAt()==null || n.expiresAt()==null
-                || !n.expiresAt().isAfter(n.lastHeartbeatAt()) || n.dispatchEligible() && (!n.target() || !n.status().equals("ONLINE"))
+                || !n.expiresAt().isAfter(n.lastHeartbeatAt())
+                || n.dispatchEligible() && (!n.status().equals("ONLINE") || n.dispatchTransport().equals("http") && !n.target())
                 || observedAt!=null && n.status().equals("ONLINE")!=n.expiresAt().isAfter(observedAt)) throw malformed();
         if (n.dispatchTransport().equals("rabbitmq") && (n.dispatchVhost()==null || n.dispatchVhost().isBlank()
                 || n.dispatchExchange()==null || n.dispatchExchange().isBlank() || n.dispatchQueue()==null || n.dispatchQueue().isBlank()
