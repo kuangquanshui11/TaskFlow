@@ -20,6 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@org.springframework.security.test.context.support.WithMockUser(authorities = {"job:write", "job:delete", "job:operate", "run:trigger", "job-sync:retry"})
+@org.springframework.context.annotation.Import(com.taskflow.admin.support.TestSessionConfiguration.class)
 class JobDatabaseUnavailableTests {
     @Autowired
     private HikariDataSource dataSource;
@@ -33,7 +35,7 @@ class JobDatabaseUnavailableTests {
         // 只关闭当前测试上下文的 H2 连接池，不停止外部数据库。
         assertThat(dataSource.getJdbcUrl()).startsWith("jdbc:h2:mem:taskflow-admin-");
         dataSource.close();
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/jobs/selectById?id=1"))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/jobs/selectById?id=1")).header("Authorization", "Bearer " + com.taskflow.admin.support.TestTokens.admin())
                 .timeout(Duration.ofSeconds(10)).GET().build();
         try (var client = HttpClient.newHttpClient()) {
             var response = client.send(request, HttpResponse.BodyHandlers.ofString());

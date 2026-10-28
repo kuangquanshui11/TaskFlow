@@ -47,6 +47,8 @@ import static org.mockito.Mockito.*;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles({"test", "test-cache"})
+@org.springframework.security.test.context.support.WithMockUser(authorities = {"job:write", "job:delete", "job:operate", "run:trigger", "job-sync:retry"})
+@org.springframework.context.annotation.Import(com.taskflow.admin.support.TestSessionConfiguration.class)
 class JobDetailCacheIntegrationTests {
     @Autowired private IJobService jobs;
     @Autowired private IJobDetailService details;
@@ -88,7 +90,7 @@ class JobDetailCacheIntegrationTests {
         clearInvocations(repository);
         try (var client = HttpClient.newHttpClient()) {
             var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port
-                    + "/api/v1/jobs/selectById?id=" + job.id())).timeout(Duration.ofSeconds(10)).GET().build();
+                    + "/api/v1/jobs/selectById?id=" + job.id())).header("Authorization", "Bearer " + com.taskflow.admin.support.TestTokens.admin()).timeout(Duration.ofSeconds(10)).GET().build();
             var first = client.send(request, HttpResponse.BodyHandlers.ofString());
             var second = client.send(request, HttpResponse.BodyHandlers.ofString());
             assertThat(first.statusCode()).isEqualTo(200);

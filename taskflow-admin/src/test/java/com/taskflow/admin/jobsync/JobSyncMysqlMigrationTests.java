@@ -20,6 +20,8 @@ import static org.assertj.core.api.Assertions.*;
 @EnabledIfEnvironmentVariable(named = "TASKFLOW_TEST_DB_URL",
         matches = "jdbc:mysql://(?:localhost|127\\.0\\.0\\.1):[0-9]+/taskflow_it_sync_migration_[A-Za-z0-9_]+(?:\\?.*)?")
 @ContextConfiguration(initializers = JobSyncMysqlMigrationTests.Guard.class)
+@org.springframework.security.test.context.support.WithMockUser(authorities = {"job:write", "job:delete", "job:operate", "run:trigger", "job-sync:retry"})
+@org.springframework.context.annotation.Import(com.taskflow.admin.support.TestSessionConfiguration.class)
 class JobSyncMysqlMigrationTests {
     public static class Guard implements org.springframework.context.ApplicationContextInitializer<org.springframework.context.ConfigurableApplicationContext> {
         @Override public void initialize(org.springframework.context.ConfigurableApplicationContext context) {

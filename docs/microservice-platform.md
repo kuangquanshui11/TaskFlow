@@ -40,14 +40,14 @@ flowchart LR
 
 ## 网关入口约束
 
-- Nginx 的 API 上游改为 Gateway；Gateway 不承担 Handler、SQL、Redis 或调度逻辑。
+- Nginx 的 API 上游为 Gateway；Gateway 不承担 Handler、SQL 或调度逻辑，仅访问自己拥有的 Redis 限流键，不访问 Admin 的会话或业务缓存。
 - 显式路由 `/api/v1/**`，保留动作路径和响应格式，关闭自动按服务名暴露路由；没有 `/taskflow-worker/**` 等隐式入口。
 - 拒绝 `/internal/**`、`/eureka/**`、配置中心路径及非健康 Actuator；拒绝含编码斜线、点路径、反斜线、分号等歧义路径。内部 token 在入口删除，浏览器不能借网关携带控制密钥。
 - 校验/生成 `X-Request-Id`，响应包含请求关联信息和有效时的 `X-Trace-Id`。请求体限制 128KB，连接超时 2 秒、响应超时 8 秒，网关熔断时间限制 9 秒。
 - 下游不可用/熔断返回 503、`GATEWAY_UNAVAILABLE`；没有模拟成功。未配置任何 Retry 过滤器，POST 不因入口故障自动重复提交。
 - `/actuator/health` 及 readiness/liveness 用于进程探测，其余管理端点不经网关开放。
 
-当前没有实现用户登录、RBAC、JWT 或公网 TLS。网关的路由边界已经实现，用户身份认证属于后续业务安全模块。默认所有 Java 服务绑定回环地址；跨主机部署必须配置各服务 `TASKFLOW_*_BIND_ADDRESS`、可达的 `TASKFLOW_INSTANCE_HOST`，并通过网络访问控制仅开放 Nginx。Basic 凭据跨主机传输应置于 TLS/可信内网，不能将内部端口直接发布公网。
+已实现独立 Keycloak 登录、Gateway/Admin 双重 JWT 校验、Admin 角色权限与 Redis JWT 会话（有效请求滑动续期 30 分钟）、Gateway Redis 用户限流及 Nginx IP 粗限流。公开登录配置允许匿名读取，其他业务接口要求有效身份和会话，未配置的路径/方法默认拒绝。issuer 缺失拒绝启动，限流或会话 Redis 故障返回 503。首次配置和权限矩阵见 [登录与入口安全](access-security.md)。本地模板尚未部署公网 TLS，生产必须提供 HTTPS。默认所有 Java 服务绑定回环地址；跨主机部署必须配置各服务 `TASKFLOW_*_BIND_ADDRESS`、可达的 `TASKFLOW_INSTANCE_HOST`，并通过网络访问控制仅开放必要入口。Basic 凭据跨主机传输应置于 TLS/可信内网，不能将内部端口直接发布公网。
 
 ## 配置与启动
 

@@ -8,6 +8,7 @@ public interface IJobSyncService {
     void enqueue(JobDefinition job, boolean deleted);
     void dispatchPending();
     Status selectByJobId(long jobId);
+    @org.springframework.security.access.prepost.PreAuthorize("hasAuthority('job-sync:retry')")
     Status retry(long jobId, long configVersion);
     PlanView selectPlanByJobId(long jobId);
 }

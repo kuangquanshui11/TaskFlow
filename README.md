@@ -4,6 +4,8 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 ## 当前进度
 
+控制台已接入独立 Keycloak 登录、前端登录/退出和权限按钮、Gateway/Admin 双重 JWT 校验与角色权限。Admin 在 Redis 缓存 JWT 会话，每次有效请求续期 30 分钟，闲置过期后要求重新登录；Gateway 使用自有 Redis 分组限流，Nginx 做 IP 粗限流。启动 Admin/Gateway 前需配置 issuer、Keycloak 用户及各自 Redis；缺失配置或 Redis 故障不会放开访问。首次部署及验证边界见 [登录与入口安全](docs/access-security.md)。
+
 已完成三个独立服务骨架，以及 Admin 的 MyBatis-Plus / MySQL / Flyway 接入和任务管理接口：新增、分页查询、详情、修改、启停、软删除、统计、Cron 预览与配置处理器查询。
 
 已补齐微服务技术栈：Gateway WebFlux/Netty、Eureka、Config Server、OpenFeign/LoadBalancer、Resilience4j、Micrometer Tracing/OTLP。新增三个独立基础设施应用；公共 API 统一经 Gateway，cloud 模式通过服务名调用。Java 21 / Boot 4.1.1 保持不变，使用 Cloud 2025.1.4 BOM。启动与边界见 [微服务技术栈](docs/microservice-platform.md)。

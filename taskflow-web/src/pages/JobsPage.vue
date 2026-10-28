@@ -1,4 +1,5 @@
 <script setup>
+import { can } from '../auth/access.js';
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import AppIcon from '../components/AppIcon.vue';
 import JobsTable from '../components/JobsTable.vue';
@@ -36,7 +37,7 @@ watch([page, pageSize, () => workspace.state.revision], load, { immediate: true 
 onBeforeUnmount(() => controller?.abort());
 </script>
 <template>
-  <div class="page-heading"><div><p class="eyebrow">TASK MANAGEMENT</p><h1>任务管理<span class="title-count">{{ formatCount(workspace.state.summary?.total) }}</span></h1><p>集中配置任务、执行时间与失败策略。</p></div><div class="heading-actions"><button class="button secondary" :disabled="loading" @click="workspace.refresh()"><AppIcon name="refresh" :size="16" />刷新</button><button class="button primary" @click="workspace.openEditor()"><AppIcon name="plus" :size="17" />新建任务</button></div></div>
+  <div class="page-heading"><div><p class="eyebrow">TASK MANAGEMENT</p><h1>任务管理<span class="title-count">{{ formatCount(workspace.state.summary?.total) }}</span></h1><p>集中配置任务、执行时间与失败策略。</p></div><div class="heading-actions"><button class="button secondary" :disabled="loading" @click="workspace.refresh()"><AppIcon name="refresh" :size="16" />刷新</button><button v-if="can('job:write')" class="button primary" @click="workspace.openEditor()"><AppIcon name="plus" :size="17" />新建任务</button></div></div>
   <section class="panel task-panel" aria-label="任务列表">
     <div class="panel-heading"><div class="tab-heading"><span>全部任务</span><span class="pill-count">{{ formatCount(workspace.state.summary?.total) }}</span></div><span class="panel-hint">任务配置</span></div>
     <form class="filter-toolbar" @submit.prevent="search">

@@ -1,4 +1,5 @@
 <script setup>
+import { can } from '../auth/access.js';
 import { ref, watch } from 'vue';
 import DialogShell from './DialogShell.vue';
 import StatusBadge from './StatusBadge.vue';
@@ -38,6 +39,6 @@ watch(() => [props.open, props.jobId], async () => {
       <JobPlanPanel v-if="open" :job-id="job.id" :config-version="job.configVersion" />
       <JobRunPanel v-if="open" :key="job.id" :job="job" />
     </template>
-    <template #footer><button class="button secondary" @click="$emit('close')">关闭</button><button v-if="job" class="button secondary" @click="workspace.openEditor(job.id)"><AppIcon name="edit" :size="16" />编辑任务</button></template>
+    <template #footer><button class="button secondary" @click="$emit('close')">关闭</button><button v-if="job && can('job:write')" class="button secondary" @click="workspace.openEditor(job.id)"><AppIcon name="edit" :size="16" />编辑任务</button></template>
   </DialogShell>
 </template>

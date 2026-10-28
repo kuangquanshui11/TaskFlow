@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 @Component
+@org.springframework.core.annotation.Order(org.springframework.core.Ordered.HIGHEST_PRECEDENCE + 10)
 public class RequestIdFilter extends OncePerRequestFilter {
     private final io.micrometer.tracing.Tracer tracer;
     public RequestIdFilter(io.micrometer.tracing.Tracer tracer) { this.tracer=tracer; }

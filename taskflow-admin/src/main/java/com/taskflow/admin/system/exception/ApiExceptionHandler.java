@@ -20,6 +20,14 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 
 @RestControllerAdvice
 public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
+    @ExceptionHandler(com.taskflow.admin.access.exception.AccessSessionException.class)
+    public ResponseEntity<Object> handleSession(com.taskflow.admin.access.exception.AccessSessionException exception) {
+        return ResponseEntity.status(exception.status()).body(ApiResponse.failure(exception.code(), exception.getMessage(), null));
+    }
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<Object> handleAccessDenied(org.springframework.security.access.AccessDeniedException exception) {
+        return ResponseEntity.status(403).body(ApiResponse.failure("ACCESS_DENIED", "当前账号没有此操作权限", null));
+    }
     private static final Logger LOG = LoggerFactory.getLogger(ApiExceptionHandler.class);
     @ExceptionHandler(com.taskflow.admin.node.exception.WorkerNodeException.class)
     public ResponseEntity<Object> handleNode(com.taskflow.admin.node.exception.WorkerNodeException exception) {

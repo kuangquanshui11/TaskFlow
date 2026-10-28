@@ -1,0 +1,7 @@
+# Copy to taskflow-access-local.yml (ignored); replace with your identity provider's public issuer.
+taskflow:
+  access:
+    issuer: "http://localhost:8180/realms/taskflow"
+    audience: taskflow-api
+    client-id: taskflow-console
+# Gateway Redis credentials belong in config/taskflow-gateway-local.yml or TASKFLOW_GATEWAY_REDIS_*.

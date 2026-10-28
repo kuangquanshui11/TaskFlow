@@ -8,6 +8,9 @@ eureka:
   client:
     enabled: false
 management:
+  health:
+    redis:
+      enabled: false
   tracing:
     sampling:
       probability: 1.0
@@ -21,3 +24,8 @@ resilience4j:
         minimum-number-of-calls: 2
         sliding-window-size: 2
         wait-duration-in-open-state: 300ms
+taskflow:
+  access:
+    issuer: https://identity.test/realms/taskflow
+    audience: taskflow-api
+    public-key-location: classpath:access/test-public.pem

@@ -31,7 +31,13 @@ class GatewayTests {
     @Value("${local.server.port}") int port;
     @Autowired JsonMapper json;
     @Autowired CircuitBreakerRegistry breakers;
-    @BeforeEach void reset() { status.set(200);received.clear();breakers.getAllCircuitBreakers().forEach(b->b.reset()); }
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+    com.taskflow.gateway.access.config.SafeRedisRateLimiter limiter;
+    @BeforeEach void reset() {
+        org.mockito.Mockito.doReturn(reactor.core.publisher.Mono.just(new org.springframework.cloud.gateway.filter.ratelimit.RateLimiter.Response(true,Map.of())))
+                .when(limiter).isAllowed(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString());
+        status.set(200);received.clear();breakers.getAllCircuitBreakers().forEach(b->b.reset());
+    }
     @AfterAll static void stop() { first.stop(0);second.stop(0); }
     @Test void publicApiPreservesPathBodyAndRequestIdAndLoadBalances() throws Exception {
         for (int i=0;i<4;i++) assertThat(call("GET","/api/v1/hello",null,Map.of("X-Request-Id","gateway-test")).statusCode()).isEqualTo(200);
@@ -78,8 +84,29 @@ class GatewayTests {
         assertThat(received.peek().get("traceparent")).contains(traceId);
         assertThat(received.peek().get("traceparent").split("-")[2]).isNotEqualTo("1111111111111111");
     }
+    @Test void invalidTokensAreRejectedBeforeRateLimitingOrDispatch() throws Exception {
+        for (var token:List.of("invalid", com.taskflow.gateway.support.TestTokens.token(Map.of("aud",List.of("other-api"))),
+                com.taskflow.gateway.support.TestTokens.token(Map.of("iss","https://other.test/realms/taskflow")),
+                com.taskflow.gateway.support.TestTokens.token(Map.of("exp",Date.from(java.time.Instant.now().minusSeconds(180)))))) {
+            var response=call("GET","/api/v1/jobs/select",null,Map.of("Authorization","Bearer "+token));
+            assertThat(response.statusCode()).isEqualTo(401);
+            assertThat(response.body()).contains("UNAUTHENTICATED", "requestId");
+        }
+        org.mockito.Mockito.verify(limiter,org.mockito.Mockito.never()).isAllowed(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString());
+        assertThat(received).isEmpty();
+    }
+    @Test void rateLimitReturns429WithoutInvokingBusinessOrRetryingPost() throws Exception {
+        org.mockito.Mockito.doReturn(reactor.core.publisher.Mono.just(new org.springframework.cloud.gateway.filter.ratelimit.RateLimiter.Response(false,Map.of())))
+                .when(limiter).isAllowed(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString());
+        var response=call("POST","/api/v1/runs/insert","{}",Map.of());
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(429);
+        assertThat(response.body()).contains("RATE_LIMIT_EXCEEDED");
+        assertThat(response.headers().firstValue("Retry-After")).contains("1");
+        assertThat(received).isEmpty();
+    }
     private HttpResponse<String> call(String method,String path,String body,Map<String,String> headers) throws Exception {
         var builder=HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+port+path)).timeout(Duration.ofSeconds(10));
+        if(!headers.containsKey("Authorization")) builder.header("Authorization", "Bearer " + com.taskflow.gateway.support.TestTokens.admin());
         headers.forEach(builder::header);
         if (body!=null) builder.header("Content-Type","application/json");
         builder.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(body));

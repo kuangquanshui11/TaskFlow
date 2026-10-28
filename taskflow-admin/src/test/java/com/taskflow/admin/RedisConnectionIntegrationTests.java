@@ -19,6 +19,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles({"test-redis-connection", "test"})
 @ContextConfiguration(initializers = IsolatedH2ContextInitializer.class)
 @EnabledIfEnvironmentVariable(named = "TASKFLOW_REDIS_CONNECTION_TEST", matches = "true")
+@org.springframework.security.test.context.support.WithMockUser(authorities = {"job:write", "job:delete", "job:operate", "run:trigger", "job-sync:retry"})
+@org.springframework.context.annotation.Import(com.taskflow.admin.support.TestSessionConfiguration.class)
 class RedisConnectionIntegrationTests {
     @Autowired
     private RedisConnectionFactory connections;

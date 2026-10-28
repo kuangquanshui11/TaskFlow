@@ -1,5 +1,7 @@
 # TaskFlow 微服务架构与维护约定
 
+公共入口安全采用独立 Keycloak 身份服务、Gateway/Admin 双重 JWT 验证、Admin 业务权限及 Redis JWT 会话（有效请求滑动续期 30 分钟）。Gateway 仅管理自有 Redis 限流键，不访问 Admin 会话或业务缓存。身份服务独立持久化账号，业务应用不共享其数据表；Scheduler/Worker 保留服务间协议鉴权。见 [登录与入口安全](access-security.md)。
+
 日期：2026-10-27。
 
 ## 需求与当前状态

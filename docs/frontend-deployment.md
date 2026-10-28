@@ -2,6 +2,8 @@
 
 ## 访问地址与职责
 
+控制台现已要求 Keycloak 登录、JWT 和 Admin Redis 滑动会话。启动平台前先按 [登录与入口安全](access-security.md) 配置 issuer、用户角色及 Gateway/Admin 各自 Redis。未登录显示登录页，30 分钟没有有效请求后下次访问要求重新登录。
+
 正式使用的控制台是独立 taskflow-web：Vue 3 + Vite 构建，Nginx 托管。新发行包入口 http://localhost:8090，API 转发至 Gateway http://127.0.0.1:8088，再发现 Admin；已有运行包不会自动更新。
 
 ```text
@@ -88,6 +90,8 @@ API proxy_pass 保留 /api/v1 路径，明确连接/读取超时，禁止自动�
 Windows Nginx 包用于当前本地学习环境，仅监听回环地址。部署到服务器时使用该系统原生 Nginx，按实际目录配置 root、日志与上游；身份认证和 TLS 在后续交付阶段实现。
 
 ## 验证与故障排查
+
+登录功能的当前验证入口为 taskflow-web/playwright.access.config.js，配置专用测试身份后运行，见 [安全验证](access-security.md#验证)。下面旧版 test-frontend/test-execution/test-platform 脚本生成的隔离 YAML 和匿名请求基于此前无登录环境，不能直接作为新增鉴权后的全链路验收结果；需先补齐其身份会话及真实 Redis 环境。本轮未运行这些旧版匿名脚本。
 
 ```powershell
 # 根目录：隔离测试，不写用户 MySQL

@@ -25,6 +25,8 @@ import static org.awaitility.Awaitility.await;
         "resilience4j.circuitbreaker.configs.default.sliding-window-size=2","resilience4j.circuitbreaker.configs.default.wait-duration-in-open-state=300ms"})
 @ActiveProfiles("test")
 @ContextConfiguration(initializers=com.taskflow.admin.support.IsolatedH2ContextInitializer.class)
+@org.springframework.security.test.context.support.WithMockUser(authorities = {"job:write", "job:delete", "job:operate", "run:trigger", "job-sync:retry"})
+@org.springframework.context.annotation.Import(com.taskflow.admin.support.TestSessionConfiguration.class)
 class RemoteGovernanceTests {
     static final AtomicInteger requests=new AtomicInteger();
     static final AtomicInteger status=new AtomicInteger(200);
@@ -67,7 +69,7 @@ class RemoteGovernanceTests {
     }
     @Test void micrometerPropagatesFeignTraceAndActuallyExportsOtlp() throws Exception {
         var traceId=UUID.randomUUID().toString().replace("-","");
-        var request=java.net.http.HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+port+"/api/v1/workers/selectById?workerId=worker-default"))
+        var request=java.net.http.HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+port+"/api/v1/workers/selectById?workerId=worker-default")).header("Authorization", "Bearer " + com.taskflow.admin.support.TestTokens.admin())
                 .header("traceparent","00-"+traceId+"-1111111111111111-01").GET().build();
         try(var http=java.net.http.HttpClient.newHttpClient()) {
             var response=http.send(request,java.net.http.HttpResponse.BodyHandlers.ofString());

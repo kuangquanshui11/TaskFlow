@@ -1,4 +1,5 @@
 <script setup>
+import { can } from '../auth/access.js';
 import AppIcon from './AppIcon.vue';
 import StatusBadge from './StatusBadge.vue';
 import EmptyState from './EmptyState.vue';
@@ -12,7 +13,7 @@ const workspace = useWorkspace();
   <div v-if="loading" class="table-loading" role="status" aria-label="正在加载任务"><div v-for="row in 5" :key="row" class="skeleton-line"></div></div>
   <EmptyState v-else-if="!rows.length" :title="filtered ? '没有匹配的任务' : '还没有任务'" :description="filtered ? '试试其他名称或筛选条件。' : undefined" :compact="compact">
     <button v-if="filtered" class="button secondary" @click="$emit('reset')">清除筛选</button>
-    <button v-else class="button primary" @click="workspace.openEditor()"><AppIcon name="plus" :size="17" />创建第一个任务</button>
+    <button v-else-if="can('job:write')" class="button primary" @click="workspace.openEditor()"><AppIcon name="plus" :size="17" />创建第一个任务</button>
   </EmptyState>
   <div v-else class="table-scroll">
     <table class="jobs-table" :class="{ compact }">
@@ -25,10 +26,10 @@ const workspace = useWorkspace();
         <td v-if="!compact" data-label="最近更新" class="date-cell">{{ formatDate(job.updatedAt) }}</td>
         <td class="row-actions" data-label="操作">
           <button v-if="!compact" class="table-action" :aria-label="'查看执行记录 ' + job.name" @click="workspace.openDetail(job.id)">执行记录</button>
-          <button class="table-action" :aria-label="'编辑任务 ' + job.name" @click="workspace.openEditor(job.id)">编辑</button>
-          <button v-if="!compact" class="table-action" :disabled="workspace.state.busyId != null" :aria-label="(job.enabled ? '停用任务 ' : '启用任务 ') + job.name" @click="workspace.toggle(job)">{{ workspace.state.busyId === job.id ? '处理中' : job.enabled ? '停用' : '启用' }}</button>
-          <button v-if="!compact" class="table-action danger-text" :aria-label="'删除任务 ' + job.name" @click="workspace.askDelete(job)">删除</button>
-          <button v-else class="table-action" @click="workspace.openDetail(job.id)">查看<AppIcon name="chevron" :size="13" /></button>
+          <button v-if="can('job:write')" class="table-action" :aria-label="'编辑任务 ' + job.name" @click="workspace.openEditor(job.id)">编辑</button>
+          <button v-if="!compact && can('job:operate')" class="table-action" :disabled="workspace.state.busyId != null" :aria-label="(job.enabled ? '停用任务 ' : '启用任务 ') + job.name" @click="workspace.toggle(job)">{{ workspace.state.busyId === job.id ? '处理中' : job.enabled ? '停用' : '启用' }}</button>
+          <button v-if="!compact && can('job:delete')" class="table-action danger-text" :aria-label="'删除任务 ' + job.name" @click="workspace.askDelete(job)">删除</button>
+          <button v-if="compact" class="table-action" @click="workspace.openDetail(job.id)">查看<AppIcon name="chevron" :size="13" /></button>
         </td>
       </tr></tbody>
     </table>

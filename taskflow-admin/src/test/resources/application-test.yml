@@ -22,6 +22,11 @@ management:
       enabled: false
 
 taskflow:
+  access:
+    issuer: https://identity.test/realms/taskflow
+    audience: taskflow-api
+    client-id: taskflow-console
+    public-key-location: classpath:access/test-public.pem
   job-sync:
     enabled: false
     control-token: test-control-token

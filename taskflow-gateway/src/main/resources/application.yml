@@ -7,8 +7,20 @@ spring:
     import:
       - optional:file:./config/taskflow-platform-local.yml
       - optional:file:./config/taskflow-gateway-local.yml
+      - optional:file:./config/taskflow-access-local.yml
   reactor:
     context-propagation: auto
+  data:
+    redis:
+      host: "${TASKFLOW_GATEWAY_REDIS_HOST:localhost}"
+      port: "${TASKFLOW_GATEWAY_REDIS_PORT:6379}"
+      username: "${TASKFLOW_GATEWAY_REDIS_USERNAME:}"
+      password: "${TASKFLOW_GATEWAY_REDIS_PASSWORD:}"
+      database: "${TASKFLOW_GATEWAY_REDIS_DATABASE:1}"
+      connect-timeout: 1s
+      timeout: 1s
+      repositories:
+        enabled: false
   cloud:
     config:
       enabled: false
@@ -30,6 +42,11 @@ spring:
                 - name: RequestSize
                   args:
                     maxSize: 128KB
+                - name: RequestRateLimiter
+                  args:
+                    rate-limiter: "#{@safeRedisRateLimiter}"
+                    key-resolver: "#{@accessRateLimitKeyResolver}"
+                    throw-on-limit: true
                 - name: CircuitBreaker
                   args:
                     name: adminGateway
@@ -93,3 +110,16 @@ resilience4j:
 logging:
   pattern:
     level: "%5p [traceId=%X{traceId:-} spanId=%X{spanId:-}]"
+taskflow:
+  access:
+    issuer: "${TASKFLOW_JWT_ISSUER:}"
+    audience: "${TASKFLOW_JWT_AUDIENCE:taskflow-api}"
+    public-key-location: "${TASKFLOW_JWT_PUBLIC_KEY_LOCATION:}"
+  rate-limit:
+    namespace: "${TASKFLOW_RATE_LIMIT_NAMESPACE:taskflow:gateway:v1}"
+    read-rate: 20
+    read-burst: 40
+    write-rate: 5
+    write-burst: 10
+    execute-rate: 1
+    execute-burst: 3

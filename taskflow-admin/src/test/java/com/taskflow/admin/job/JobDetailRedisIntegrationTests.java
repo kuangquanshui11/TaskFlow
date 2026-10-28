@@ -35,6 +35,8 @@ import static org.mockito.Mockito.*;
 @ActiveProfiles({"test-redis-connection", "test", "test-redis-cache"})
 @ContextConfiguration(initializers = IsolatedH2ContextInitializer.class)
 @EnabledIfEnvironmentVariable(named = "TASKFLOW_REDIS_CACHE_TEST", matches = "true")
+@org.springframework.security.test.context.support.WithMockUser(authorities = {"job:write", "job:delete", "job:operate", "run:trigger", "job-sync:retry"})
+@org.springframework.context.annotation.Import(com.taskflow.admin.support.TestSessionConfiguration.class)
 class JobDetailRedisIntegrationTests {
     @Autowired private IJobService jobs;
     @Autowired private IJobDetailService details;

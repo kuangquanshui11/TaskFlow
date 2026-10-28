@@ -30,6 +30,8 @@ import static org.mockito.ArgumentMatchers.*;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @ContextConfiguration(initializers = com.taskflow.admin.support.IsolatedH2ContextInitializer.class)
+@org.springframework.security.test.context.support.WithMockUser(authorities = {"job:write", "job:delete", "job:operate", "run:trigger", "job-sync:retry"})
+@org.springframework.context.annotation.Import(com.taskflow.admin.support.TestSessionConfiguration.class)
 class JobSyncTests {
     static final JsonMapper JSON = JsonMapper.builder().build();
     static final AtomicInteger responseCode = new AtomicInteger(200);
@@ -161,7 +163,8 @@ class JobSyncTests {
     @Test void twoSendersCompeteForOneEventWhileSavingDoesNotWaitForNetwork() throws Exception {
         var job = jobs.insert(config("slow scheduler", false));
         entered = new CountDownLatch(1); release = new CountDownLatch(1);
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (var executor = new org.springframework.security.concurrent.DelegatingSecurityContextExecutorService(
+                Executors.newVirtualThreadPerTaskExecutor())) {
             var sending = executor.submit(sync::dispatchPending);
             try {
                 assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
@@ -229,7 +232,7 @@ class JobSyncTests {
                 "0 */5 * * * *", "Asia/Shanghai", enabled, 30, 3, 5, MisfirePolicy.SKIP);
     }
     private HttpResponse<String> http(String method, String path, Object body) throws Exception {
-        var builder = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path)).header("Content-Type", "application/json");
+        var builder = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path)).header("Authorization", "Bearer " + com.taskflow.admin.support.TestTokens.admin()).header("Content-Type", "application/json");
         builder.method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(body)));
         try (var http = HttpClient.newHttpClient()) { return http.send(builder.build(), HttpResponse.BodyHandlers.ofString()); }
     }

@@ -23,6 +23,8 @@ import static org.mockito.ArgumentMatchers.*;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @org.springframework.test.context.ContextConfiguration(initializers = com.taskflow.admin.support.IsolatedH2ContextInitializer.class)
+@org.springframework.security.test.context.support.WithMockUser(authorities = {"job:write", "job:delete", "job:operate", "run:trigger", "job-sync:retry"})
+@org.springframework.context.annotation.Import(com.taskflow.admin.support.TestSessionConfiguration.class)
 class RunApiTests {
     @Autowired IJobService jobs;
     @Autowired JdbcTemplate jdbc;
@@ -85,7 +87,7 @@ class RunApiTests {
                 JobDefinition.ScheduleType.MANUAL, null, "Asia/Shanghai", false, 30, 3, 1, JobDefinition.MisfirePolicy.SKIP));
     }
     private HttpResponse<String> post(Object body) throws Exception {
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/runs/insert"))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/runs/insert")).header("Authorization", "Bearer " + com.taskflow.admin.support.TestTokens.admin())
                 .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build();
         try (var client = HttpClient.newHttpClient()) { return client.send(request, HttpResponse.BodyHandlers.ofString()); }
     }

@@ -8,7 +8,7 @@ import org.springframework.web.server.*;
 import reactor.core.publisher.Mono;
 
 @Component
-@Order(-100)
+@Order(org.springframework.core.Ordered.HIGHEST_PRECEDENCE + 10)
 public class PublicApiBoundaryFilter implements WebFilter {
     private final io.micrometer.tracing.Tracer tracer;
     public PublicApiBoundaryFilter(io.micrometer.tracing.Tracer tracer) { this.tracer=tracer; }
@@ -29,6 +29,7 @@ public class PublicApiBoundaryFilter implements WebFilter {
         exchange.getResponse().getHeaders().set("Cache-Control","no-store");
         var request=exchange.getRequest().mutate().headers(headers->{
             headers.remove("X-Taskflow-Token");
+            headers.remove("X-User-Id");headers.remove("X-User-Roles");headers.remove("X-Authenticated-User");
             headers.remove("Forwarded");headers.remove("X-Forwarded-Host");headers.remove("X-Forwarded-Prefix");
             headers.set("X-Request-Id",requestId);
         }).build();

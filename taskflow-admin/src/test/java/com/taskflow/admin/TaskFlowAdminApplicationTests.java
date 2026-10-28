@@ -15,6 +15,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
+@org.springframework.security.test.context.support.WithMockUser(authorities = {"job:write", "job:delete", "job:operate", "run:trigger", "job-sync:retry"})
+@org.springframework.context.annotation.Import(com.taskflow.admin.support.TestSessionConfiguration.class)
 class TaskFlowAdminApplicationTests {
 
     @Value("${local.server.port}")
@@ -37,15 +39,14 @@ class TaskFlowAdminApplicationTests {
     }
 
     @Test
-    void consoleIsServedByAdmin() throws Exception {
+    void legacyConsoleCannotBypassTheAuthenticatedNginxConsole() throws Exception {
         var response = get("/");
 
-        assertThat(response.statusCode()).isEqualTo(200);
-        assertThat(response.body()).contains("TaskFlow", "演示模式");
+        assertThat(response.statusCode()).isEqualTo(403);
     }
 
     private HttpResponse<String> get(String path) throws Exception {
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path)).header("Authorization", "Bearer " + com.taskflow.admin.support.TestTokens.admin())
                 .timeout(Duration.ofSeconds(10))
                 .GET()
                 .build();

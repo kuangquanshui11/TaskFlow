@@ -30,7 +30,7 @@ flowchart TD
 | --- | --- | --- |
 | 浏览器 | 展示界面、校验输入、发起同源 API 请求 | taskflow-web |
 | Nginx | 返回构建后的静态文件；把 /api/ 请求转发给 Gateway | deploy/nginx 与部署包 |
-| Gateway | 公开路由、请求限制、服务发现、熔断和追踪 | taskflow-gateway；不访问缓存或数据库 |
+| Gateway | JWT 校验、用户分组限流、公开路由、服务发现、熔断和追踪 | taskflow-gateway；仅访问自己的 Redis 限流键，不访问业务数据库或 Admin 缓存 |
 | Tomcat | 接收 HTTP 请求，将请求交给 Spring MVC | taskflow-admin 内嵌容器，无需另装独立 Tomcat |
 | 业务代码 | 校验、权限、业务规则、事务、缓存与数据库调用编排 | controller → service 接口 → service/impl → mapper |
 | Redis | 可丢弃、可过期的查询缓存，降低重复数据库读取 | job/mapper/redis 的 Admin 独立缓存实现 |
@@ -40,8 +40,8 @@ flowchart TD
 
 以 GET /api/v1/jobs/selectById?id=123 为例：
 
-1. 浏览器请求 Nginx；Nginx 保留 API 路径转发 Gateway，Gateway 检查公开路径并通过 LoadBalancer 选择 Admin 实例。
-2. Tomcat 接收请求，Controller 校验入参，调用任务查询用例。
+1. 浏览器通过独立 Keycloak 登录后携带 Bearer JWT 请求 Nginx；Nginx 做 IP 粗限流，保留路径转发 Gateway。Gateway 检查公开路径、验证 JWT，按用户及业务分组检查限流 Redis，再通过 LoadBalancer 选择 Admin。
+2. Admin 独立验签，在本服务 Redis 核对缓存 JWT 会话并将 TTL 续期为 30 分钟，然后检查权限。通过后由 Controller 校验入参并调用业务用例；超时返回 401 并由前端显示登录页。具体边界见 [登录与入口安全](access-security.md)。
 3. JobQueryController 调用 IJobDetailService，其实现 JobDetailServiceImpl 通过 JobCacheMapper 读取 Redis，默认 key 为 taskflow:admin:job:detail:v1:123。
 4. 命中且内容有效：返回缓存 DTO，无需本次数据库查询。
 5. 未命中：记录查询开始时间，调用 IJobService / JobServiceImpl 的数据库详情查询，经 JobDataMapper 访问 MySQL。只读事务结束后，通过 JobCacheMapper 将任务快照和绝对过期时间序列化成 JSON 回填 Redis，默认 TTL 为 60 秒；随后返回 JSON。回填只使用从查询开始计算的剩余 TTL，超过有效期的慢查询不再回填。不缓存不存在的任务。

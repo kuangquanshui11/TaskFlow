@@ -23,6 +23,8 @@ import static org.mockito.ArgumentMatchers.*;
 @SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @ContextConfiguration(initializers=com.taskflow.admin.support.IsolatedH2ContextInitializer.class)
+@org.springframework.security.test.context.support.WithMockUser(authorities = {"job:write", "job:delete", "job:operate", "run:trigger", "job-sync:retry"})
+@org.springframework.context.annotation.Import(com.taskflow.admin.support.TestSessionConfiguration.class)
 class WorkerNodeApiTests {
     static final AtomicInteger remoteStatus=new AtomicInteger(200);
     static final AtomicInteger remoteCalls=new AtomicInteger();
@@ -97,7 +99,7 @@ class WorkerNodeApiTests {
         return new View("worker-default","执行节点",1,List.of("demoSuccess"),2,4,1,1,"http",null,null,null,null,"ONLINE",true,true,now,now,now.plusSeconds(30));
     }
     private HttpResponse<String> get(String path) throws Exception {
-        try(var http=HttpClient.newHttpClient()) { return http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+port+"/api/v1/workers/"+path)).GET().build(),HttpResponse.BodyHandlers.ofString()); }
+        try(var http=HttpClient.newHttpClient()) { return http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+port+"/api/v1/workers/"+path)).header("Authorization", "Bearer " + com.taskflow.admin.support.TestTokens.admin()).GET().build(),HttpResponse.BodyHandlers.ofString()); }
     }
     private static HttpServer server() {
         try {

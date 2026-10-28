@@ -1,0 +1,14 @@
+# Local development only; production requires HTTPS, an external database and controlled origins.
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1
+    command: ["start-dev", "--import-realm"]
+    ports: ["127.0.0.1:${TASKFLOW_IDENTITY_PORT:-8180}:8080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:?Set a local bootstrap administrator}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?Set a strong local bootstrap password}
+    volumes:
+      - ./taskflow-realm.json:/opt/keycloak/data/import/taskflow-realm.json:ro
+      - identity-data:/opt/keycloak/data
+volumes:
+  identity-data:

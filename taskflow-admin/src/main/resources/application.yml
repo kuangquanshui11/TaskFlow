@@ -24,6 +24,7 @@ spring:
       - optional:file:./config/taskflow-internal-local.yml
       - classpath:governance.yml
       - optional:file:./config/taskflow-platform-local.yml
+      - optional:file:./config/taskflow-access-local.yml
   datasource:
     url: "${TASKFLOW_ADMIN_DB_URL:jdbc:mysql://localhost:3306/taskflow_admin?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=5000&socketTimeout=10000}"
     username: "${TASKFLOW_ADMIN_DB_USERNAME:root}"
@@ -102,6 +103,16 @@ eureka:
   client:
     enabled: false
 taskflow:
+  access:
+    issuer: "${TASKFLOW_JWT_ISSUER:}"
+    audience: "${TASKFLOW_JWT_AUDIENCE:taskflow-api}"
+    client-id: "${TASKFLOW_OIDC_CLIENT_ID:taskflow-console}"
+    public-key-location: "${TASKFLOW_JWT_PUBLIC_KEY_LOCATION:}"
+    session:
+      idle-timeout: 30m
+      login-window: 2m
+      rotation-grace: 10s
+      key-prefix: "${TASKFLOW_ADMIN_SESSION_KEY_PREFIX:taskflow:admin:access:session:v1:}"
   nodes:
     scheduler-url: "${taskflow.execution.scheduler-url}"
     control-token: "${taskflow.execution.control-token}"

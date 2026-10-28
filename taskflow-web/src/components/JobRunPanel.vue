@@ -1,4 +1,5 @@
 <script setup>
+import { can } from '../auth/access.js';
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import AppIcon from './AppIcon.vue';
 import RunStatusBadge from './RunStatusBadge.vue';
@@ -95,7 +96,7 @@ onBeforeUnmount(() => { alive = false; clearTimeout(timer); reads.abort(); });
 <template>
   <section class="run-panel" aria-label="手动执行与运行记录">
     <div class="run-panel-heading"><div><h3>手动执行</h3><p class="muted">使用当前配置快照运行一次，已停用配置也可手动调试。</p></div>
-      <button class="button primary" :disabled="submitting" @click="submit"><span v-if="submitting" class="spinner"></span><AppIcon v-else name="play" :size="16" />{{ submitting ? '正在提交' : pending ? '重试本次提交' : '立即执行' }}</button>
+      <button v-if="can('run:trigger')" class="button primary" :disabled="submitting" @click="submit"><span v-if="submitting" class="spinner"></span><AppIcon v-else name="play" :size="16" />{{ submitting ? '正在提交' : pending ? '重试本次提交' : '立即执行' }}</button>
     </div>
     <div v-if="pending && !submitting" class="run-pending"><p>上次提交尚未确认。重试会沿用原标识，避免重复创建运行。</p><div class="run-inline-actions"><button class="button secondary" @click="confirm">查验提交状态</button><button class="text-button" @click="abandon">放弃重试</button></div></div>
     <p v-if="info" class="run-feedback" role="status">{{ info }}</p>

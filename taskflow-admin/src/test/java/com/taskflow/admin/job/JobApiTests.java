@@ -29,6 +29,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles(resolver = JobApiTests.DatabaseProfiles.class)
+@org.springframework.security.test.context.support.WithMockUser(authorities = {"job:write", "job:delete", "job:operate", "run:trigger", "job-sync:retry"})
+@org.springframework.context.annotation.Import(com.taskflow.admin.support.TestSessionConfiguration.class)
 class JobApiTests {
     @Value("${local.server.port}")
     private int port;
@@ -317,10 +319,10 @@ class JobApiTests {
 
     @Test
     void unsupportedMethodsMalformedJsonAndUnknownEndpointsAreConsistent() throws Exception {
-        assertThat(request("GET", "/api/v1/jobs/insert", null).statusCode()).isEqualTo(405);
-        assertThat(request("GET", "/api/v1/jobs/missing", null).statusCode()).isEqualTo(404);
+        assertThat(request("GET", "/api/v1/jobs/insert", null).statusCode()).isEqualTo(403);
+        assertThat(request("GET", "/api/v1/jobs/missing", null).statusCode()).isEqualTo(403);
         try (var client = HttpClient.newHttpClient()) {
-            var badJson = HttpRequest.newBuilder(URI.create(url("/api/v1/jobs/insert")))
+            var badJson = HttpRequest.newBuilder(URI.create(url("/api/v1/jobs/insert"))).header("Authorization", "Bearer " + com.taskflow.admin.support.TestTokens.admin())
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString("{")).build();
             var response = client.send(badJson, HttpResponse.BodyHandlers.ofString());
@@ -360,7 +362,7 @@ class JobApiTests {
     }
 
     private HttpRequest http(String method, String path, Object payload) {
-        var request = HttpRequest.newBuilder(URI.create(url(path)))
+        var request = HttpRequest.newBuilder(URI.create(url(path))).header("Authorization", "Bearer " + com.taskflow.admin.support.TestTokens.admin())
                 .timeout(Duration.ofSeconds(10))
                 .header("X-Request-Id", "job-api-test");
         if (payload == null) {

@@ -1,5 +1,11 @@
 # TaskFlow 业务功能与后端接口
 
+## 用户身份与权限
+
+除 GET /api/v1/access/selectConfiguration 和健康探针外，业务接口均要求 Authorization: Bearer <JWT>。登录在独立 Keycloak 完成；POST /api/v1/access/insert 建立或恢复有效会话，POST /api/v1/access/update 携带新 JWT 和 JSON previousToken 轮换，POST /api/v1/access/disable 撤销会话。Admin 从 Redis 核对缓存 JWT 并滑动续期 30 分钟，闲置过期返回 401，刷新令牌不能重新创建超时会话。GET /api/v1/access/selectCurrent 返回 subject、username、roles、permissions。
+
+VIEWER 可查询及 POST 预览；OPERATOR 另可启停、触发 Run 和重试同步；ADMIN 另可新增、修改、删除 Job。Gateway/Admin 各自验签，Admin 按精确动作路径和关键 Service 方法授权。未允许的路径/方法默认 403，可能先于原 404/405 被安全层拒绝。401、403、429、503 的错误格式、完整权限与限流策略见 [登录与入口安全](access-security.md)。
+
 ## 功能归属与交付范围
 
 | 业务功能 | 归属服务 | 当前实现 |

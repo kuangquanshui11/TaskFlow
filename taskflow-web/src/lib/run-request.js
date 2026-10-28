@@ -1,5 +1,7 @@
 const memory = new Map();
-const keyFor = (jobId) => 'taskflow:run:pending:' + jobId;
+let owner = '';
+export function setRunRequestOwner(subject) { owner = subject; memory.clear(); }
+const keyFor = (jobId) => 'taskflow:run:pending:' + (owner ? encodeURIComponent(owner) + ':' : '') + jobId;
 function session() { try { return globalThis.sessionStorage; } catch { return undefined; } }
 
 export function readPendingRun(jobId, storage = session()) {

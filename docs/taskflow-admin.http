@@ -1,11 +1,15 @@
 # 当前本机 YAML 配置使用 18080；其他环境按实际端口修改。
-@baseUrl = http://localhost:18080
+@baseUrl = http://localhost:8088
+# 从已完成 /access/insert 的登录会话获取访问令牌；不要把实际令牌保存到仓库。
+@accessToken = REPLACE_WITH_ACTIVE_SESSION_ACCESS_TOKEN
 
 ### 查询可选处理器（配置白名单）
 GET {{baseUrl}}/api/v1/job-handlers/select
+Authorization: Bearer {{accessToken}}
 
 ### 创建手动任务；将响应中的 id 和 configVersion 用于下方写请求
 POST {{baseUrl}}/api/v1/jobs/insert
+Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
@@ -16,12 +20,15 @@ Content-Type: application/json
 
 ### 分页查询
 GET {{baseUrl}}/api/v1/jobs/select?page=1&pageSize=20
+Authorization: Bearer {{accessToken}}
 
 ### 查询详情，替换为实际 id
 GET {{baseUrl}}/api/v1/jobs/selectById?id=1
+Authorization: Bearer {{accessToken}}
 
 ### 修改：替换为实际 id 和最新版本，job 为完整配置
 POST {{baseUrl}}/api/v1/jobs/update
+Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
@@ -44,27 +51,32 @@ Content-Type: application/json
 
 ### 启用：替换为实际 id 和最新版本
 POST {{baseUrl}}/api/v1/jobs/enable
+Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {"id": 1, "configVersion": 2}
 
 ### 停用：替换为实际 id 和最新版本
 POST {{baseUrl}}/api/v1/jobs/disable
+Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {"id": 1, "configVersion": 3}
 
 ### 删除：软删除，替换为实际 id 和最新版本
 POST {{baseUrl}}/api/v1/jobs/delete
+Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {"id": 1, "configVersion": 4}
 
 ### 查询任务数量
 GET {{baseUrl}}/api/v1/jobs/selectSummary
+Authorization: Bearer {{accessToken}}
 
 ### 预览每天北京时间九点的触发时间
 POST {{baseUrl}}/api/v1/jobs/preview
+Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
@@ -76,6 +88,7 @@ Content-Type: application/json
 
 ### 创建手动运行：使用尚未删除任务的真实 id/version；网络重试保留 requestKey，另一次执行才换新 UUID
 POST {{baseUrl}}/api/v1/runs/insert
+Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
@@ -86,9 +99,12 @@ Content-Type: application/json
 
 ### 按原提交标识确认是否已接收
 GET {{baseUrl}}/api/v1/runs/selectByRequestKey?requestKey=84f1ab0f-c5d8-4ba0-8708-0d1a7737323a
+Authorization: Bearer {{accessToken}}
 
 ### 查询任务运行历史，jobId 按实际值修改
 GET {{baseUrl}}/api/v1/runs/select?jobId=1&page=1&pageSize=10
+Authorization: Bearer {{accessToken}}
 
 ### 将 id 替换为创建运行接口返回的 id，可查看配置快照与每次 Attempt
 GET {{baseUrl}}/api/v1/runs/selectById?id=00000000-0000-4000-8000-000000000000
+Authorization: Bearer {{accessToken}}

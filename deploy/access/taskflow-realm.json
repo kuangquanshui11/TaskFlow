@@ -1,0 +1,111 @@
+{
+  "realm": "taskflow",
+  "enabled": true,
+  "displayName": "TaskFlow",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "sslRequired": "external",
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "passwordPolicy": "length(12) and notUsername(undefined)",
+  "roles": {
+    "client": {
+      "taskflow-api": [
+        {
+          "name": "VIEWER",
+          "description": "Read jobs, runs and workers"
+        },
+        {
+          "name": "OPERATOR",
+          "description": "Read, enable/disable, trigger runs and retry sync"
+        },
+        {
+          "name": "ADMIN",
+          "description": "Manage all TaskFlow job definitions and operations"
+        }
+      ]
+    }
+  },
+  "clientScopeMappings": {
+    "taskflow-api": [{ "client": "taskflow-console", "roles": ["VIEWER", "OPERATOR", "ADMIN"] }]
+  },
+  "clients": [
+    {
+      "clientId": "taskflow-api",
+      "name": "TaskFlow API",
+      "protocol": "openid-connect",
+      "enabled": true,
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    },
+    {
+      "clientId": "taskflow-console",
+      "name": "TaskFlow Console",
+      "protocol": "openid-connect",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": false,
+      "redirectUris": [
+        "http://127.0.0.1:8090/*",
+        "http://localhost:8090/*",
+        "http://127.0.0.1:5173/*",
+        "http://localhost:5173/*"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1:8090",
+        "http://localhost:8090",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://127.0.0.1:8090/##http://localhost:8090/##http://127.0.0.1:5173/##http://localhost:5173/"
+      },
+      "defaultClientScopes": [
+        "basic",
+        "profile",
+        "email",
+        "roles"
+      ],
+      "protocolMappers": [
+        {
+          "name": "taskflow-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "taskflow-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "taskflow-api-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "usermodel.clientRoleMapping.clientId": "taskflow-api",
+            "claim.name": "resource_access.taskflow-api.roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

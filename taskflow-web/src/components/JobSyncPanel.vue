@@ -1,4 +1,5 @@
 <script setup>
+import { can } from '../auth/access.js';
 import { onBeforeUnmount, ref, watch } from 'vue';
 import { jobsApi } from '../api/jobs.js';
 import { fullDate } from '../lib/format.js';
@@ -48,7 +49,7 @@ onBeforeUnmount(() => { generation++; clearTimeout(timer); controller?.abort(); 
     <p class="field-hint">配置保存在管理服务中，只有收到调度服务确认后才显示副本已同步。实际自动触发状态请查看下方调度计划。</p>
     <div class="sync-actions">
       <button class="button secondary" :disabled="loading" @click="load()">{{ loading ? '处理中…' : '刷新同步状态' }}</button>
-      <button v-if="status?.state === 'FAILED'" class="button secondary" :disabled="loading" @click="load(true)">重试同步</button>
+      <button v-if="status?.state === 'FAILED' && can('job-sync:retry')" class="button secondary" :disabled="loading" @click="load(true)">重试同步</button>
     </div>
   </section>
 </template>
