@@ -51,12 +51,15 @@ git switch -c recovery/from-baseline baseline-2026-10-28
 
 Git 回退不会恢复数据库内容、已执行的 Flyway 迁移、本机秘密配置、正在运行的进程或已部署的 JAR。代码回退前仍需确认数据库兼容性，并按需要重新构建和部署。数据库与秘密配置应独立安全备份。
 
-本地 `.git` 目录保存提交历史，应随项目妥善保留；本地版本库不能替代异地备份。需要异地保存时，先在 GitHub 或 Gitee 创建空的私有仓库，再使用实际仓库地址配置并推送：
+本地 `.git` 目录保存提交历史，应随项目妥善保留；本地版本库不能替代异地备份。2026-10-28 已创建 GitHub 私有仓库 [kuangquanshui11/TaskFlow](https://github.com/kuangquanshui11/TaskFlow)，并关联为 `origin`。首次上传包括 `main` 分支和初始版本标签；后续本地提交与远程上传是两个步骤，提交不会自动上传。
+
+检查关联与同步情况：
 
 ```powershell
-git remote add origin <实际仓库地址>
-git push -u origin main
-git push origin baseline-2026-10-28
+git remote -v
+git status -sb
+# 获得上传授权后，将当前主分支提交同步到 GitHub
+git push origin main
 ```
 
-以上尖括号是说明占位符，执行前替换为真实地址。远程仓库创建、账号授权和首次推送另行安排，当前初始化只保存在本机。
+本机使用 GitHub CLI 的账号登录完成认证，不将访问令牌写入仓库、文档或远程 URL。换电脑时需单独登录 GitHub；私有仓库不会备份已被忽略的本机秘密配置和数据库。
