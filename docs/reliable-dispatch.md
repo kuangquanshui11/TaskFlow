@@ -1,6 +1,6 @@
 # 可靠任务派发与 RabbitMQ 集群
 
-更新：2026-10-27。代码、迁移、集群配置和验收脚本已交付；本机无 Docker/Erlang，真实 Broker 验收尚待执行，不能将配置准备视为集群已运行。实际结果见 [验证记录](mq-verification.md)。
+更新：2026-10-28。已接入远程三节点 RabbitMQ，正常场景及 mq1 停机后各 43 项真实 MQ 三服务检查通过，恢复后队列三个副本全部在线。当前远程 Broker 为 3.8.34，显式使用旧版兼容策略，至少一次死信转移与在途故障窗口仍未验收。实际结果见 [验证记录](mq-verification.md)。
 
 ## 服务边界与调用链
 
@@ -106,6 +106,33 @@ init 不覆盖已有凭据。生成的 infra/rabbitmq/.env、runtime/ 和 config
 
 ## 应用参数与切换
 
+### 接入已有外部集群
+
+外部集群不需要在开发机安装 Docker。管理连接保存在被忽略的 `.tools/mq-cluster-settings.json`；从 `infra/rabbitmq/external-cluster.example.json` 复制并填写三个应用地址、三个管理入口、管理员凭据。`serviceCredentials` 可填写本机 `config/taskflow-scheduler-mq-local.yml`、`config/taskflow-worker-mq-local.yml` 中已有的独立角色凭据，供隔离验收使用；删除整个可选字段则沿用原验收脚本的管理员连接方式。不要将实际地址和密码写进受版本管理的模板。
+
+```powershell
+# 只在没有本机角色凭据时执行 init；已有文件会被保留并拒绝覆盖
+.\tools\mq-cluster.ps1 -Action init
+New-Item -ItemType Directory .tools -Force | Out-Null
+Copy-Item infra/rabbitmq/external-cluster.example.json .tools/mq-cluster-settings.json
+# 编辑设置后，向尚无 taskflow vhost 的集群导入本机已有角色和三副本资源
+.\tools\connect-mq.ps1 -ClusterSettingsPath .tools/mq-cluster-settings.json
+```
+
+`connect-mq` 要求三个节点在线，拒绝覆盖已有 `taskflow` vhost、同名角色或共享连接 YAML。该命令导入本机 init 生成的 definitions/topology，不改变现有节点、cookie、卷或网络，也不自动重试管理写请求。导入后检查两个队列的三个在线副本，再保存 `config/taskflow-mq-cluster-local.yml`，由 Scheduler/Worker 在各自角色 YAML 之后读取。共享文件仅覆盖连接地址、vhost、transport 和 Rabbit 健康检查，各服务仍使用自己的账号；重启服务后生效。
+
+RabbitMQ 3.8/3.9 必须显式添加 `-AllowLegacyBroker`。兼容模式使用这两个版本支持的队列策略，不配置 `dead-letter-strategy=at-least-once`；死信转移仍是 at-most-once，目标不可用时可能丢失死信。至少一次死信转移从 RabbitMQ 3.10 才引入，不能把旧版兼容验收等同于仓库 4.x 的完整可靠死信保障，依据 [RabbitMQ 官方说明](https://www.rabbitmq.com/blog/2022/03/29/at-least-once-dead-lettering)。默认不允许静默降低该保障，也不会自动升级现有 Broker。
+
+外部集群使用以下验收命令；3.8/3.9 同样添加 `-AllowLegacyBroker`：
+
+```powershell
+.\tools\test-mq.ps1 -ClusterSettingsPath .tools/mq-cluster-settings.json -ManualFailover -SkipBuild -SkipBrowser
+```
+
+三节点闭环通过后，脚本提示停止第一个管理入口对应的节点。操作人员在服务器终端停止指定容器，再返回验收终端按回车；脚本从第二个管理入口确认同一组队列保留三个成员、只有两个副本在线，再使用全部应用地址重跑闭环。随后按提示恢复节点，确认两个队列都恢复为三个在线副本。外部模式不保存 SSH 凭据，也不从设置文件执行任意命令；失败后的 finally 同样提示恢复节点。`-SkipFailover` 只验证三节点正常场景，报告会标明未测故障。
+
+证据在 `.tools/mq-e2e/<随机测试vhost>/`：`report.json` 记录版本、兼容模式、故障节点和各阶段检查数及执行证据目录；`quorum-before.json`、`quorum-one-node-down.json`、`quorum-restored.json` 保存队列成员和在线副本；阶段日志与三服务报告分别保留。每阶段使用独立 H2，沿用同一个随机 vhost；成功只删除该测试 vhost，保留业务 `taskflow` 资源。
+
 所有连接和重试参数在服务 application.yml，测试使用独立 YAML profile；Java 不硬编码连接地址或凭据。
 
 | 环境变量 | 含义 |
@@ -121,7 +148,7 @@ init 不覆盖已有凭据。生成的 infra/rabbitmq/.env、runtime/ 和 config
 
 升级：暂停所有节点的 Cron 触发并阻止新手动请求，等待旧 HTTP 派发和执行终结；先部署/检查 MQ 三副本资源，再升级 Scheduler 应用 V5 和 Worker、同步切换 transport，确认查询及执行后恢复触发。变更队列名、Worker 身份、数据库或从 MQ 回退 HTTP 同样需要先排空在途工作。不要在两个模式或多个 Worker 身份之间并发投递同一 Attempt。
 
-MQ 未部署时可显式用 http，并在 Scheduler 和 Worker 本机 YAML 设置 `management.health.rabbit.enabled: false`。默认测试 profile 已配置此项，不需要 Broker。运行实例是否部署新代码、MQ 是否真实可用与源代码完成度分别验收。
+MQ 未部署时可显式用 http，并设置 `TASKFLOW_MQ_HEALTH_ENABLED=false`；未使用共享连接 YAML 的环境也可在 Scheduler 和 Worker 本机 YAML 设置 `management.health.rabbit.enabled: false`。默认测试 profile 已配置此项，不需要 Broker。运行实例是否部署新代码、MQ 是否真实可用与源代码完成度分别验收。
 
 当前队列固定对应一个 Worker 身份、一个执行进程及其数据库。不要让带不同本地 Inbox 的多个 Worker 竞争此队列，否则本地去重无法覆盖跨节点重投。Worker 注册和心跳已实现，见 [节点管理](worker-nodes.md)；派发准备及 Relay 发布前检查固定目标的有效期、Handler 和路由。MQ 三副本不等于 Worker 集群，执行租约续期和跨节点接管仍待后续实现。任何外部业务副作用仍由 Handler 使用业务幂等键处理。
 
@@ -135,4 +162,4 @@ MQ 未部署时可显式用 http，并在 Scheduler 和 Worker 本机 YAML 设�
 .\tools\test-mq.ps1 -SkipBuild -SkipBrowser
 ```
 
-test-mq 只对本仓库 Compose 的 rabbit1 做停机并在 finally 恢复，不删除数据卷；测试成功仅删除本轮创建的 taskflow_it_ 随机 vhost，失败保留证据。不会清空 taskflow 业务 vhost。真实 MQ 测试不应使用业务队列或业务数据库。多数派丢失、网络分区与跨主机持久化恢复尚需额外环境演练，不能由 Mock 的 confirm 代替。
+test-mq 默认只对本仓库 Compose 的 rabbit1 做停机并在 finally 恢复，不删除数据卷；外部集群按上文使用人工停止/恢复步骤。测试成功仅删除本轮创建的 taskflow_it_ 随机 vhost，失败保留证据，不会清空 taskflow 业务 vhost。真实 MQ 测试不应使用业务队列或业务数据库。多数派丢失、网络分区与跨主机持久化恢复尚需额外环境演练，不能由 Mock 的 confirm 代替。

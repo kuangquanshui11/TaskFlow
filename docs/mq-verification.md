@@ -1,8 +1,68 @@
 # Cron 复测与可靠派发验证记录
 
-验证日期：2026-10-27。代码及三节点集群部署配置已完成；本机没有 Docker、RabbitMQ 或 Erlang，真实 Broker 尚未启动。本记录区分进程实测、数据库集成测试和 MQ 边界故障注入，不将 Mock 确认当作集群验收。
+初始验证日期：2026-10-27；远程集群、应用接入与节点故障补充验证日期：2026-10-28。已在用户提供的远程 Docker 主机完成三节点入群，并分别在三个节点正常及一个节点停机时，通过真实三服务 MQ 执行验收。本记录区分真实 Broker、数据库集成测试和 Mock 边界故障注入，明确旧版死信与未测故障的限制。
 
-## 本轮结果
+## 2026-10-28 远程集群搭建与验证
+
+用户已有三个 RabbitMQ 3.8.34 / Erlang 24.3.4.1 容器，节点名称分别为 `rabbit@mq1`、`rabbit@mq2`、`rabbit@mq3`。最初三个管理接口各自只返回一个节点。入群前确认没有队列、消息、客户端连接，三个节点的运行时 Erlang cookie 哈希一致，配置中已声明三个发现节点。
+
+问题在于容器仅连接 Docker 默认 `bridge` 网络，不能解析其他容器的节点名称。实施步骤如下：
+
+1. 在服务器 `/root/mq/cluster-backup-VI4tDg5b` 备份三个容器的部署元数据、挂载配置与 RabbitMQ definitions。备份目录仅 root 可访问，不将其中的凭据或账号哈希纳入仓库；definitions 不包含消息内容，本次入群前没有消息。
+2. 创建用户自定义桥接网络 `taskflow-mq`，为三个现有容器添加同名网络别名，验证节点名称解析及 Erlang 节点通信。保留现有数据卷、配置挂载和端口映射。
+3. 保留 `mq1` 为种子节点，依次对 `mq2`、`mq3` 执行 `stop_app`、`reset`、`join_cluster rabbit@mq1`、`start_app`。重置仅针对已确认无队列和消息的两个待加入节点。
+4. 将集群名称设置为 `taskflow-mq`，为三个容器设置 `unless-stopped` 重启策略。
+
+| 实测项目 | 结果 |
+| --- | --- |
+| 应用端口 5672、5673、5674 | 本机 Java AMQP 客户端分别认证成功并建立通道，使用默认 vhost `/` |
+| 管理端口 15672、15673、15674 | 三个入口均返回相同的三个在线节点和集群名称 `taskflow-mq` |
+| 集群健康 | 无网络分区、内存告警或磁盘告警 |
+| 单容器重启 | 实际重启 `mq2`，随后 `await_online_nodes 3` 成功；重启后继续完成三节点认证与收发测试 |
+| 临时 quorum 队列 | 创建随机命名的持久队列，`members` 和 `online` 均包含三个节点 |
+| 跨节点收发 | 经 mq1 发布持久消息并收到 publisher confirm，经 mq3 拉取消费，消息内容一致并完成 ACK |
+| 测试清理 | 删除本次临时队列；最终三个管理入口查询的队列数均为 0 |
+
+上述为集群基础验证阶段，临时 quorum 队列验证完成后已删除。随后已创建 TaskFlow 资源并完成下节中的应用接入及带队列的单节点停机验证。仓库 Compose 模板使用 RabbitMQ 4.x，本次未用该模板重建用户的 3.8 容器，按实际 Broker 版本显式选择兼容策略。
+
+节点入群和 cookie、名称解析要求参考 [RabbitMQ 官方集群指南](https://www.rabbitmq.com/docs/3.13/clustering)。实际操作按远程已有的 3.8 版本执行停应用、重置、入群和启动流程。
+
+## 2026-10-28 应用接入、真实 Broker 与单节点停机验收
+
+接入结果：`connect-mq.ps1` 从本机已有的 init 定义导入 `taskflow` vhost、三个独立角色及资源权限、两个三副本 quorum 队列。Scheduler 仅发布派发交换机，Worker 仅消费固定队列；两个业务服务的真实验收日志分别出现 `taskflow_scheduler`、`taskflow_worker` 连接，应用未使用管理员账号。实际地址放入被忽略的 `config/taskflow-mq-cluster-local.yml`，账号密码仍保留在各服务自己的 MQ YAML，两个 application.yml 已补充共享连接文件的导入。
+
+| 验证 | 实际结果 |
+| --- | --- |
+| 根目录 `mvnw.cmd verify` | BUILD SUCCESS；196 项中 191 项通过、5 项条件跳过，0 失败、0 错误；六个服务 JAR 构建成功 |
+| 三节点正常、真实 MQ 三服务闭环 | 43 项通过；独立 Admin/Scheduler/Worker 与 Gateway 进程，各服务独立文件 H2 |
+| 真实消息路径 | Scheduler 经远程 AMQP 发布、Worker 消费并完成 HTTP 结果上报；重复事件经真实 Broker 路由，原 Run/Attempt 与已完成 Inbox 保持一致 |
+| Cron 与恢复 | 不经人工触发的 Cron 执行成功；业务重试、超时、Worker 注册/离线阻断、服务重启及待派发恢复均通过 |
+| 单节点停机 | 实际 `docker stop --time 20 mq1`；两个队列原 leader 均为 mq1，停机后 leader 均变为 mq2，三个成员保留，在线副本变为 mq2/mq3 |
+| 两节点期间重新运行完整闭环 | 43 项通过；应用仍配置全部三个地址，真实连接日志显示改连 5673，使用原测试 vhost 及原三成员队列 |
+| 节点恢复 | `docker start mq1` 后两个队列恢复三个在线副本；三个管理入口均确认全部节点健康，无分区、内存或磁盘告警 |
+| 清理与业务资源 | 随机测试 vhost 已删除；业务 `taskflow` vhost 与两个三副本队列保留 |
+| 版本保护 | 对真实 3.8 Broker 未传 `AllowLegacyBroker` 时拒绝继续，避免静默降低死信保障 |
+
+5 项跳过仍为 Redis 连接/缓存 4 项和 Admin 专用 MySQL 迁移 1 项，未计入通过项。本轮没有改 Java 业务行为、服务数据归属或公共 HTTP API；新增已有外部集群的配置入口、管理脚本和验收能力，不需要变更 API 路径。
+
+复现命令（管理凭据和独立角色凭据已保存在被忽略的 `.tools/mq-cluster-settings.json`）：
+
+```powershell
+.\tools\test-mq.ps1 -ClusterSettingsPath .tools/mq-cluster-settings.json -AllowLegacyBroker -ManualFailover -SkipBuild -SkipBrowser
+```
+
+外部模式在检查点提示停止和恢复第一个管理入口对应的节点，由服务器终端执行，再回验收终端按回车；脚本验证实际副本数，不凭按回车认定停机成功。成功仅清理本轮随机 vhost；失败保留证据，并在 finally 提示恢复节点。配置和复现说明见 [可靠派发](reliable-dispatch.md)。
+
+边界：RabbitMQ 3.8.34 使用显式旧版兼容策略，死信转移为 at-most-once，不能声称至少一次死信转移已验收；该能力从 3.10 才引入，见 [官方说明](https://www.rabbitmq.com/blog/2022/03/29/at-least-once-dead-lettering)。本轮未验证死信目标不可用时的可靠转移。单节点测试在首轮工作完成后停止 Broker，再启动隔离业务进程重跑，验证两节点多数派及地址切换，不等同于在途消息窗口中的无中断连接恢复或 Relay 崩溃恢复。全部 Broker 位于同一宿主机，宿主机故障、多数派丢失、网络分区、V5 真实 MySQL 升级仍未测。本轮没有重启常驻业务实例或更改业务数据库；连接配置在下一次使用新 JAR/IDE 启动服务时读取。浏览器/UI 没有变更，未重跑浏览器验收。
+
+证据（均位于忽略目录，不提交包含密钥的配置、数据库或日志）：
+
+- `.tools/mq-project-verify.log`：根目录 Maven 结果。
+- `.tools/mq-e2e/taskflow_it_83189c40477a4d8995c30d86ac3121b2/report.json`：两个阶段各 43 项、版本、兼容策略和故障节点。
+- 同目录的 `quorum-before.json`、`quorum-one-node-down.json`、`quorum-restored.json`：同一组队列的三个成员及 3→2→3 在线副本和 leader 变化。
+- `.tools/execution-e2e/20261028-101541-037/report.json`、`.tools/execution-e2e/20261028-101902-588/report.json`：正常与停机阶段的 43 项真实进程证据；同目录日志记录分角色账号及 5672→5673 连接。
+
+## 2026-10-27 初始验证结果（历史）
 
 | 验证 | 实际结果 |
 | --- | --- |
@@ -46,7 +106,7 @@
 
 回归中发现既有 JobSyncTests 的人工重试测试依赖立即扫描，TIMESTAMP(3) 舍入可能令就绪时间暂时晚于 JVM 时间。测试现在先断言次数归零，再显式推进夹具的待发送时间；没有放宽生产重试逻辑或加入等待来掩盖结果。
 
-## 待真实集群验收
+## 2026-10-27 本机 Compose 准备记录（历史）
 
 本轮已运行 `tools/mq-cluster.ps1 -Action init`，生成被忽略的随机 cookie、分角色凭据、引导定义、队列拓扑和 Scheduler/Worker 本机 MQ YAML，没有启动 Broker 或升级当前业务实例。
 

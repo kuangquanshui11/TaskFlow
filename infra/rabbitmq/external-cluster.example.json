@@ -1,0 +1,10 @@
+{
+  "addresses": "mq-host:5672,mq-host:5673,mq-host:5674",
+  "managementUrls": ["http://mq-host:15672", "http://mq-host:15673", "http://mq-host:15674"],
+  "username": "replace-with-management-user",
+  "password": "",
+  "serviceCredentials": {
+    "scheduler": {"username": "taskflow_scheduler", "password": ""},
+    "worker": {"username": "taskflow_worker", "password": ""}
+  }
+}

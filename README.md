@@ -8,7 +8,7 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 已补齐微服务技术栈：Gateway WebFlux/Netty、Eureka、Config Server、OpenFeign/LoadBalancer、Resilience4j、Micrometer Tracing/OTLP。新增三个独立基础设施应用；公共 API 统一经 Gateway，cloud 模式通过服务名调用。Java 21 / Boot 4.1.1 保持不变，使用 Cloud 2025.1.4 BOM。启动与边界见 [微服务技术栈](docs/microservice-platform.md)。
 
-独立 Vue 3 管理台已连接真实 Admin 接口，支持任务管理、Cron 预览、手动执行与运行历史，由 Nginx 托管。Admin 已实现 Redis 详情缓存，默认 TTL 60 秒。手动执行已打通 Admin → Scheduler → Worker → 结果上报：Run/Attempt、执行快照、幂等接收、有限重试、超时与重启恢复均有独立持久化。配置异步同步已实现：Admin 事务 Outbox、后台有限重试、Scheduler 版本副本和删除墓碑。Cron 已支持到期扫描、计划轮次去重及 SKIP/FIRE_ONCE。Scheduler 派发 Outbox、RabbitMQ 发布确认、Worker Inbox 提交后消费确认已实现；三节点集群配置已提供，真实 MQ 验收待集群搭建后执行。Worker 注册、心跳、在线/离线判定及节点查询页面已实现，固定目标派发会检查节点有效期、Handler 和路由；执行租约续期与跨节点回收尚未实现。Java 21 与 Spring Boot 4.1.1 保持不变。
+独立 Vue 3 管理台已连接真实 Admin 接口，支持任务管理、Cron 预览、手动执行与运行历史，由 Nginx 托管。Admin 已实现 Redis 详情缓存，默认 TTL 60 秒。手动执行已打通 Admin → Scheduler → Worker → 结果上报：Run/Attempt、执行快照、幂等接收、有限重试、超时与重启恢复均有独立持久化。配置异步同步已实现：Admin 事务 Outbox、后台有限重试、Scheduler 版本副本和删除墓碑。Cron 已支持到期扫描、计划轮次去重及 SKIP/FIRE_ONCE。Scheduler 派发 Outbox、RabbitMQ 发布确认、Worker Inbox 提交后消费确认已实现；远程三节点正常与单节点停机场景各 43 项真实 MQ 检查通过，当前 3.8 Broker 使用显式兼容策略，至少一次死信转移仍未验收。Worker 注册、心跳、在线/离线判定及节点查询页面已实现，固定目标派发会检查节点有效期、Handler 和路由；执行租约续期与跨节点回收尚未实现。Java 21 与 Spring Boot 4.1.1 保持不变。
 
 Worker 结果保存恢复已补齐：同一份结果有限重试写库，恢复后继续上报，耗尽有可定位错误，保存重试不重新调用 Handler；线程池拒绝已领取任务也有收尾。进程崩溃、重试耗尽和过期租约仍有明确限制，见 [结果保存恢复](docs/worker-result-recovery.md)。
 
@@ -100,7 +100,9 @@ Scheduler / Worker 的运行配置默认使用 RabbitMQ；Admin 配置同步和 
 
 init 可在没有 Docker 时生成被忽略的随机凭据、Broker 定义和服务 YAML，不启动服务。up 创建三节点、独立数据卷并检查 quorum 队列成员。宿主机 AMQP 端口为 5672/5673/5674，管理端口为 15672/15673/15674，只绑定回环地址。同一台主机的三个容器只能验证节点故障，生产应分布到不同主机。
 
-集群尚未搭建时，显式设置 `$env:TASKFLOW_DISPATCH_TRANSPORT='http'`，并在两个服务的本机 YAML 中设置 `management.health.rabbit.enabled: false`，可保留原 HTTP 运行方式。测试 profile 自动关闭 Rabbit 健康探测；切换前必须排空在途工作，操作与协议见 [可靠派发](docs/reliable-dispatch.md)。
+已有外部集群通过 `tools/connect-mq.ps1 -ClusterSettingsPath .tools/mq-cluster-settings.json` 接入；它读取本机 init 已生成的分角色定义、创建三副本资源，并保存被忽略的 `config/taskflow-mq-cluster-local.yml`。Scheduler/Worker 已导入该共享连接配置，账号仍各自独立，使用新 JAR 或 IDE 重启后生效。3.8/3.9 需要显式添加 `-AllowLegacyBroker`，旧版不提供至少一次死信转移保障。外部集群设置模板、人工停机检查点和完整命令见 [已有集群接入与验收](docs/reliable-dispatch.md#接入已有外部集群)，实测结果见 [MQ 验证记录](docs/mq-verification.md)。
+
+集群尚未搭建时，显式设置 `$env:TASKFLOW_DISPATCH_TRANSPORT='http'` 与 `$env:TASKFLOW_MQ_HEALTH_ENABLED='false'`，可保留原 HTTP 运行方式。测试 profile 自动关闭 Rabbit 健康探测；切换前必须排空在途工作，操作与协议见 [可靠派发](docs/reliable-dispatch.md)。
 
 ## Worker 节点管理
 
@@ -243,4 +245,4 @@ TaskFlow/
 
 ## 下一步
 
-任务管理、Cron 自动执行、可靠派发代码、Worker 节点管理和微服务治理基础已实现。Worker 结果保存故障已按重试、恢复上报、耗尽诊断和故障测试补齐。后续先补真实 MQ 验收，再分别推进执行租约续期与失联恢复；Jaeger 容器实测及全量配置对账仍需补齐。平台能力与验证范围见 [微服务技术栈](docs/microservice-platform.md)。
+任务管理、Cron 自动执行、可靠派发代码、Worker 节点管理和微服务治理基础已实现。Worker 结果保存故障已按重试、恢复上报、耗尽诊断和故障测试补齐。真实 MQ 正常与单节点停机闭环已通过；后续补充可靠死信、在途消息故障与多数派丢失验收，并推进执行租约续期与失联恢复；Jaeger 容器实测及全量配置对账仍需补齐。平台能力与验证范围见 [微服务技术栈](docs/microservice-platform.md)。

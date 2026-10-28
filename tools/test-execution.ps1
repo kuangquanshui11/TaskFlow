@@ -183,7 +183,13 @@ try {
         $mqHealth = 'false'
         if ($Transport -eq 'rabbitmq' -and $name -ne 'admin') {
             $mqHealth = 'true'
-            $mqYaml = "  rabbitmq:`n    addresses: $($mqSettings.addresses | ConvertTo-Json -Compress)`n    virtual-host: $($mqSettings.virtualHost | ConvertTo-Json -Compress)`n    username: $($mqSettings.username | ConvertTo-Json -Compress)`n    password: $($mqSettings.password | ConvertTo-Json -Compress)"
+            $mqUser = $mqSettings.username; $mqPassword = $mqSettings.password
+            if ($mqSettings.serviceCredentials -and $mqSettings.serviceCredentials.$name) {
+                $role = $mqSettings.serviceCredentials.$name
+                if (!$role.username -or !$role.password) { throw "Incomplete MQ credentials for $name." }
+                $mqUser = $role.username; $mqPassword = $role.password
+            }
+            $mqYaml = "  rabbitmq:`n    addresses: $($mqSettings.addresses | ConvertTo-Json -Compress)`n    virtual-host: $($mqSettings.virtualHost | ConvertTo-Json -Compress)`n    username: $($mqUser | ConvertTo-Json -Compress)`n    password: $($mqPassword | ConvertTo-Json -Compress)"
         }
         $testImport=''
         $cloudYaml=''

@@ -40,6 +40,7 @@ spring:
       - optional:file:./config/taskflow-nodes-local.yml
       - optional:file:./config/taskflow-worker-local.yml
       - optional:file:./config/taskflow-worker-mq-local.yml
+      - optional:file:./config/taskflow-mq-cluster-local.yml
   datasource:
     url: "${TASKFLOW_WORKER_DB_URL:jdbc:mysql://localhost:3306/taskflow_worker?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=3000&socketTimeout=5000}"
     username: "${TASKFLOW_WORKER_DB_USERNAME:taskflow_worker}"
