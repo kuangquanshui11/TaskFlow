@@ -12,8 +12,8 @@
 | 手动触发、Run/Attempt 查询 | Scheduler；Admin 代理 | 已实现，独立状态库、幂等键、完整快照 |
 | Cron 到期扫描、计划去重、错过补偿 | Scheduler | 已实现，Run/首次 Attempt/计划推进同事务，SKIP/FIRE_ONCE |
 | 待派发扫描、有限重试、租约校验 | Scheduler | 已实现；续租和跨节点回收待后续实现 |
-| 事务派发 Outbox、RabbitMQ 发布确认 | Scheduler | 已实现；三节点集群配置已提供，真实 MQ 验收待执行 |
-| MQ 消费确认、Inbox 去重、死信处理 | Worker | 已实现；提交后 ACK，接收失败有限重试；固定 Worker 队列 |
+| 事务派发 Outbox、RabbitMQ 发布确认 | Scheduler | 已实现；三节点真实 MQ 闭环与满载背压验收通过，见可靠派发与验证记录 |
+| MQ 消费确认、Inbox 去重、死信处理 | Worker | 已实现；提交后 ACK，满载等待且不消耗故障预算，过期投递 ACK 并由 Scheduler 超时收尾；实际故障有限重试；固定 Worker 队列 |
 | Handler 执行、幂等接收、结果重报 | Worker | 已实现，白名单 Handler、有界执行、独立持久化 |
 | Worker 注册、心跳、会话隔离和在线查询 | Scheduler 权威，Worker 上报，Admin 代理 | 已实现；固定目标派发检查，管理台 /workers 接入 |
 | 运行报表、失败告警、用户权限 | 对应业务服务 | 后续阶段 |
@@ -307,7 +307,7 @@ Admin 通过 Scheduler HTTP 查询，不访问 Scheduler 表或 Job 详情缓存
 
 ## 派发通道
 
-任务派发默认使用 `taskflow.dispatch.v1` 消息事件，对外手动执行、运行查询与结果上报 HTTP 路径不变。Broker 确认只表示接管派发，不代表执行成功；死信或未确认派发不会自动新建业务 Run。事件结构、失败语义及切换步骤见 [可靠派发](reliable-dispatch.md)。
+任务派发默认使用 `taskflow.dispatch.v1` 消息事件，对外手动执行、运行查询与结果上报 HTTP 路径不变。Broker 确认只表示接管派发，不代表执行成功；Worker 满载时等待原消息，不计故障重试次数、不转死信；租约过期的合法投递 ACK 清理，原 Attempt 由 Scheduler 收尾为超时，不标记成功。节点查询的 `dispatchEligible` 同时要求最近心跳 `runningCount + pendingCount < maxPending`，满载仍为 ONLINE。非法事件与实际故障耗尽的死信、未确认派发不会自动新建业务 Run。事件结构、失败语义及切换步骤见 [可靠派发](reliable-dispatch.md)。
 
 ## 技术参考
 

@@ -75,6 +75,34 @@ function Invoke-ExecutionAcceptance([string]$Label, [bool]$SkipPhaseBuild) {
     if (!$checks.Count -or @($checks | Where-Object { $_.result -ne 'PASS' }).Count) { throw 'Execution report contains incomplete checks.' }
     $phases.Add([pscustomobject]@{phase=$Label;checks=$checks.Count;evidencePath=$evidencePath;result='PASS'})
 }
+function Invoke-BackpressureAcceptance {
+    $variables = @{
+        TASKFLOW_TEST_MQ_ADDRESSES = $clusterSettings.addresses
+        TASKFLOW_TEST_MQ_VHOST = $testVhost
+        TASKFLOW_TEST_MQ_USERNAME = $clusterSettings.username
+        TASKFLOW_TEST_MQ_PASSWORD = $clusterSettings.password
+    }
+    $previous = @{}
+    $testLog = Join-Path $runPath 'backpressure.log'
+    try {
+        foreach ($key in $variables.Keys) {
+            $previous[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+            [Environment]::SetEnvironmentVariable($key, $variables[$key], 'Process')
+        }
+        & (Join-Path $repoPath 'mvnw.cmd') -pl taskflow-worker '-Dtest=DispatchBackpressureBrokerTests' test *> $testLog
+        if ($LASTEXITCODE -ne 0) { throw "MQ backpressure acceptance failed; inspect $testLog" }
+        $reportPath = Join-Path $repoPath 'taskflow-worker/target/surefire-reports/TEST-com.taskflow.worker.dispatch.DispatchBackpressureBrokerTests.xml'
+        [xml]$report = Get-Content -LiteralPath $reportPath -Raw
+        if ([int]$report.testsuite.tests -ne 1 -or [int]$report.testsuite.skipped -ne 0 -or
+            [int]$report.testsuite.failures -ne 0 -or [int]$report.testsuite.errors -ne 0) {
+            throw 'MQ backpressure acceptance did not execute and pass its real Broker test.'
+        }
+        $phases.Add([pscustomobject]@{phase='capacity-backpressure';checks=1;evidencePath=$testLog;result='PASS'})
+        Write-Output 'PASS real MQ: full Worker waits beyond failure budget, accepts original delivery after capacity returns, and sends no busy/expired delivery to dead letters.'
+    } finally {
+        foreach ($key in $previous.Keys) { [Environment]::SetEnvironmentVariable($key, $previous[$key], 'Process') }
+    }
+}
 function Restore-FaultNode {
     if ($ManualFailover) { $null = Read-Host "Restore node $($capability.node), then press Enter" }
     else { Invoke-Compose @('start','rabbit1') }
@@ -108,6 +136,7 @@ try {
     $null = Invoke-Broker 'POST' ("bindings/$testVhost/e/taskflow.dispatch.dead.v1/q/taskflow.worker.default.dead.v1") @{routing_key='worker.default.dead';arguments=@{}}
     $null = Invoke-Broker 'PUT' ("policies/$testVhost/dispatch-safety") (New-MqDispatchSafetyPolicy $capability.legacy)
     Wait-Topology 3 'quorum-before'
+    Invoke-BackpressureAcceptance
     Invoke-ExecutionAcceptance 'three-nodes' ([bool]$SkipBuild)
     if (!$SkipFailover) {
         $stopped = $true

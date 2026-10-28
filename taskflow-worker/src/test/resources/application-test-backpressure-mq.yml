@@ -1,0 +1,10 @@
+spring:
+  rabbitmq:
+    addresses: "${TASKFLOW_TEST_MQ_ADDRESSES}"
+    virtual-host: "${TASKFLOW_TEST_MQ_VHOST}"
+    username: "${TASKFLOW_TEST_MQ_USERNAME}"
+    password: "${TASKFLOW_TEST_MQ_PASSWORD}"
+taskflow:
+  dispatch:
+    transport: rabbitmq
+    consume-retry-delay: 50ms

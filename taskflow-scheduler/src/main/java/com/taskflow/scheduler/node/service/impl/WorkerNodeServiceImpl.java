@@ -96,6 +96,8 @@ public class WorkerNodeServiceImpl implements IWorkerNodeService {
     }
     private boolean eligible(WorkerNode node,Instant now) {
         return node.workerId().equals(properties.targetWorkerId()) && node.online(now) && node.dispatchTransport().equals(dispatch.transport())
+                // 心跳负载仅用于减少向满载节点派发；不是容量预订，Worker 仍执行本地原子接收检查。
+                && (long)node.runningCount()+node.pendingCount()<node.maxPending()
                 && (!dispatch.rabbitmq() || Objects.equals(node.dispatchVhost(),vhost) && Objects.equals(node.dispatchExchange(),dispatch.exchange())
                 && Objects.equals(node.dispatchQueue(),dispatch.queue()) && Objects.equals(node.dispatchRoutingKey(),dispatch.routingKey()));
     }

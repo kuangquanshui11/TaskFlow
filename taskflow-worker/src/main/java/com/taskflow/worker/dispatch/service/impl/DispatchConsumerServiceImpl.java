@@ -1,6 +1,7 @@
 package com.taskflow.worker.dispatch.service.impl;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.TimeUnit;
 import com.rabbitmq.client.Channel;
@@ -40,19 +41,37 @@ public class DispatchConsumerServiceImpl implements IDispatchConsumerService {
         } catch (IllegalArgumentException | tools.jackson.core.JacksonException invalid) {
             channel.basicReject(tag, false); return;
         }
-        // 接收重试只包围 Inbox 提交，不包含 ACK；ACK 失败交回代理重投并以相同 Attempt 去重。
-        for (int attempt = 1; attempt <= properties.maxConsumeAttempts(); attempt++) {
+        int failures = 0;
+        boolean waitingForCapacity = false;
+        // prefetch=1 时保留当前 delivery 即形成背压，不通过反复 requeue 消耗 Broker 投递次数。
+        // 容量等待不计入故障预算；ACK 不放入 insert 的 try 块，失败后由原 Attempt 去重。
+        while (channel.isOpen()) {
             try {
                 executions.insert(event.command());
             } catch (RuntimeException failed) {
-                boolean permanent = failed instanceof ExecutionException rejected && rejected.status() != 429;
-                if (permanent || attempt == properties.maxConsumeAttempts()
-                        || !event.command().expiresAt().isAfter(Instant.now())) {
+                boolean busy = failed instanceof ExecutionException rejected
+                        && rejected.status() == 429 && "WORKER_BUSY".equals(rejected.code());
+                boolean expired = !event.command().expiresAt().isAfter(Instant.now());
+                boolean leaseExpired = failed instanceof ExecutionException rejected
+                        && "LEASE_EXPIRED".equals(rejected.code());
+                boolean permanent = failed instanceof ExecutionException && !busy && !leaseExpired;
+                if (!permanent && (leaseExpired || expired)) {
+                    // 过期命令不再执行，也不进入死信。权威 Attempt 仍由 Scheduler 的租约扫描收尾。
+                    org.slf4j.LoggerFactory.getLogger(getClass()).warn("Expired dispatch acknowledged without execution. eventId={}", event.eventId());
+                    channel.basicAck(tag, false); return;
+                }
+                if (permanent || (!busy && ++failures >= properties.maxConsumeAttempts())) {
                     org.slf4j.LoggerFactory.getLogger(getClass()).warn("Dispatch sent to dead letter queue. eventId={}, type={}",
                             event.eventId(), failed.getClass().getSimpleName());
                     channel.basicReject(tag, false); return;
                 }
-                try { TimeUnit.MILLISECONDS.sleep(properties.consumeRetryDelay().toMillis()); }
+                if (busy && !waitingForCapacity) {
+                    waitingForCapacity = true;
+                    org.slf4j.LoggerFactory.getLogger(getClass()).info("Dispatch waiting for Worker capacity. eventId={}", event.eventId());
+                }
+                var remaining = Duration.between(Instant.now(), event.command().expiresAt());
+                var delay = remaining.compareTo(properties.consumeRetryDelay()) < 0 ? remaining : properties.consumeRetryDelay();
+                try { if (delay.isPositive()) TimeUnit.NANOSECONDS.sleep(delay.toNanos()); }
                 catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt(); channel.basicNack(tag, false, true); return;
                 }

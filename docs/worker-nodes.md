@@ -29,7 +29,7 @@ MQ 元数据包含 vhost、exchange、queue 和 routingKey，不包含凭据或�
 
 有效期由 Scheduler 接收时间计算，不接受 Worker 自报时间。默认 `expiresAt = 最后有效心跳时间 + 30 秒`；注册首次接收也建立有效期。`expiresAt > Scheduler 当前时间` 为 ONLINE，等于或早于则为 OFFLINE。查询和派发实时比较同一权威时间，不依赖后台扫描改状态，也不使用 Redis 存活标记。
 
-Scheduler 默认只向 `taskflow.nodes.target-worker-id` 指定的固定节点派发，并检查在线、Handler 能力、transport 及 MQ 路由是否匹配。HTTP 派发仍使用服务配置的 Worker URL，不访问 Worker 上报的任意地址。没有匹配节点时，新的 Attempt 保持 READY、Outbox 保持 WAITING，不消耗执行租约或派发次数。
+Scheduler 默认只向 `taskflow.nodes.target-worker-id` 指定的固定节点派发，并检查在线、Handler 能力、transport、MQ 路由和最近心跳的可用容量。`runningCount + pendingCount >= maxPending` 时节点仍 ONLINE，但 `dispatchEligible=false`，推迟派发准备和 MQ 发布；HTTP 派发仍使用服务配置的 Worker URL，不访问 Worker 上报的任意地址。没有匹配节点或节点满载时，新的 Attempt 保持 READY、Outbox 保持 WAITING，不消耗执行租约或派发次数。负载观察不能替代容量预订，Worker 的本地容量检查与 MQ 背压仍是最终保护。
 
 资格不满足时，将 Attempt 的 `nextDispatchAt` 持久化推迟，避免同一批不可派发任务反复占据前 100 条。正常任务可在后续轮次进入候选；支持能力恢复后，在原记录的下一次检查时间重新判断，不因一次心跳立即绕过等待时间。原 Attempt 和 leaseVersion 保持不变。
 

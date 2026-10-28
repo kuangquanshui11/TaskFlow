@@ -37,7 +37,7 @@ WAITING 不提前消耗执行租约。派发准备时与 Attempt 的 DISPATCHING
 
 Relay 每次领取最多扫描 100 条候选，逐条短事务锁定 Outbox、检查状态并推进 claimVersion。发布及 confirm 等待在事务之外；标记成功/失败必须同时匹配 SENDING、claimVersion 和未过期领取租约。数据库出错留下的 SENDING 在领取租约到期后可接管。
 
-节点或 Handler 不满足派发资格时，准备阶段推迟 Attempt 的 `next_dispatch_at`，发布阶段推迟 Outbox 的 `next_publish_at`，默认间隔由 `taskflow.dispatch.node-recheck-delay` 控制为 2s（100ms–5m）。扫描按下次时间和记录 ID 稳定排序，仍保留每批 100 条上限。等待不新建 Attempt、不增加派发/发布次数，不新增或延长执行租约。
+节点或 Handler 不满足派发资格，或最近心跳的 `runningCount + pendingCount >= maxPending` 时，准备阶段推迟 Attempt 的 `next_dispatch_at`，发布阶段推迟 Outbox 的 `next_publish_at`，默认间隔由 `taskflow.dispatch.node-recheck-delay` 控制为 2s（100ms–5m）。扫描按下次时间和记录 ID 稳定排序，仍保留每批 100 条上限。等待不新建 Attempt、不增加派发/发布次数，不新增或延长执行租约。心跳只是负载观察，不是容量预订；已经在途的消息仍需 Worker 本地容量检查。
 
 Outbox 的 READY 和过期 SENDING 都必须到达 `next_publish_at` 才能成为候选。过期 SENDING 延后时保留原 state、claimVersion、claimUntil 和不可变消息；旧 Publisher 仍无法用过期领取租约确认。下一次实际领取才推进 claimVersion 和发布次数。SQL 同时检查状态、版本与到期条件，旧扫描结果不能覆盖已安排的下一次检查、仍有效的新领取或取消状态。等待资格的时间独立于发布失败退避，且不会延长原消息的 expiresAt。验证见 [扫描公平性](dispatch-fairness-verification.md)。
 
@@ -68,9 +68,15 @@ Outbox 的 READY 和过期 SENDING 都必须到达 `next_publish_at` 才能成�
 
 Worker 校验协议版本、消息标识、完整 DTO 约束及 128 KiB 消息上限，随后调用本服务 IExecutionService.insert，先提交 Inbox 再手动 ACK。相同 Attempt、相同命令返回原接收记录；不同内容拒绝，不覆盖旧记录。ACK 丢失允许 Broker 重投；去重记录不自动归档。
 
-接收期间的数据库故障或容量不足最多重试 4 次，间隔 1 秒；只重试 Inbox 提交，不重试 ACK，也不在消费线程执行 Handler。无效事件、未知 Handler、租约过期、冲突内容或接收重试耗尽，reject 且不重新入原队列。Broker 按 policy 转至 `taskflow.worker.default.dead.v1`，使用 quorum 的 at-least-once 死信策略与 reject-publish 溢出策略。应用日志记录事件 ID 与错误类型，不打印消息参数或密码。
+`429 / WORKER_BUSY` 表示容量背压，不计入 `max-consume-attempts`。Worker 保留当前未确认 delivery，每隔 `consume-retry-delay`（默认 1 秒）复查容量；固定单消费者、prefetch=1，使后续消息留在 Broker，不反复 nack/requeue，不占用 Handler 槽位，也不在等待期间持有数据库事务。容量恢复后接收原消息，先提交原 Attempt 的 Inbox 再 ACK，不新建 Run/Attempt、不修改消息或续租。
 
-死信转移不直接更新 Scheduler 权威状态；若没有合法结果上报，原 Attempt 按执行租约超时收敛。MQ 确认后的 RUNNING 表示派发已交由 Broker，不代表 Handler 精确开始时间。消息在 Broker 排队也消耗既有执行租约，不进行续租；长时间积压可能导致 Worker 拒绝过期消息，应结合超时、容量和后续监控规划处理。
+等待期间或首次消费时命令已过期：不执行 Handler、不新写 Inbox，直接 ACK 移除失效投递，不因满载或过期进入死信。ACK 仅表示该消息已处理，不是执行成功；Scheduler 持久化的原 Attempt 继续由租约扫描收尾为 `TIMED_OUT / LEASE_EXPIRED`，Run 为 FAILED。已接收命令的重复投递仍优先按 Inbox 幂等确认。关闭连接后由 Broker 恢复未确认消息；等待被中断时保留中断标记并 nack/requeue，供恢复处理。
+
+数据库等实际接收故障仍累计最多 4 次，间隔默认 1 秒；夹杂的容量等待既不增加也不重置这个预算。只重试 Inbox 提交，不重试 ACK，也不在消费线程执行 Handler。无效事件、未知 Handler、冲突内容或实际接收故障预算耗尽仍 reject 且不重新入原队列，用于隔离无法处理的事件；容量满载不走这个分支。Broker 按部署 policy 转至 `taskflow.worker.default.dead.v1`；当前 3.8.34 环境的死信保障仍以上方旧版兼容说明为准。应用日志记录事件 ID 与错误类型，不打印消息参数或密码。
+
+死信转移不直接更新 Scheduler 权威状态；若没有合法结果上报，原 Attempt 按执行租约超时收敛。MQ 确认后的 RUNNING 表示派发已交由 Broker，不代表 Handler 精确开始时间。消息在 Broker 排队也消耗既有执行租约，不进行续租；长时间积压仍可能使任务超时，不能把“不进死信”解释为无限等待或保证执行成功。满载等待与恢复验收见 [容量背压验证](dispatch-backpressure-verification.md)。
+
+Broker 的 delivery acknowledgement timeout 应大于允许的最大在途租约剩余时间并留出数据库 I/O 余量，否则 Broker 可能在等待期间关闭 channel。3.8 环境需按实际版本设置节点级 `consumer_timeout`；较新版本可按队列配置，见 [RabbitMQ 消费确认超时](https://www.rabbitmq.com/docs/consumers#acknowledgement-timeout)。本次不自动修改远程 Broker 参数或队列策略；部署长超时任务前需核对该值。应用背压不会通过主动反复重投制造 delivery-limit 死信，但连接故障和 Broker 自身策略仍属于独立的运维边界。
 
 PUBLISHED → RUNNING 的本地确认与 HTTP 接收确认使用相同的状态保护，不能覆盖已提交的执行终态。状态事务按 Run → Attempt → Outbox 加锁，Attempt 使用当前锁定读取；Relay 仍只锁 Outbox，不反向锁 Run/Attempt。发布确认到达时，若执行结果已提交，则保留该结果，不重复推进状态。数据库并发验收见 [状态并发修复](run-state-concurrency-verification.md)，其中 MQ 测试模拟 Broker 已确认的持久化边界，不代表真实 Broker 故障测试。
 

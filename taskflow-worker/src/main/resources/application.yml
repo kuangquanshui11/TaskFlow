@@ -110,6 +110,7 @@ taskflow:
     dead-letter-queue: "${TASKFLOW_MQ_DLQ:taskflow.worker.default.dead.v1}"
     dead-letter-routing-key: "${TASKFLOW_MQ_DEAD_ROUTING_KEY:worker.default.dead}"
     max-consume-attempts: 4
+    # Inbox 故障重试与满载容量复查的间隔；WORKER_BUSY 不消耗 max-consume-attempts。
     consume-retry-delay: 1s
     consumer-enabled: true
   execution:

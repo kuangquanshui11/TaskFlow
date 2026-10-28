@@ -52,6 +52,42 @@ class WorkerNodeMqGatingTests {
         jdbc.update("UPDATE dispatch_outbox SET next_publish_at=?",java.sql.Timestamp.from(Instant.now().minusSeconds(1)));relay.relay();
         assertThat(outbox.find(id,false).orElseThrow().state()).isEqualTo("PUBLISHED");verify(publisher,times(1)).publish(any());
     }
+    @Test void fullNodeDefersPreparationAndPublishingUntilCapacityReturnsWithoutNewLeaseOrBudget() {
+        var node = registration("taskflow.worker.default.v1", UUID.randomUUID());
+        nodes.register(node);
+        nodes.heartbeat(new Heartbeat("worker-default", node.sessionId(), 1, 1, 2, 2));
+        assertThat(nodes.selectById("worker-default").status()).isEqualTo("ONLINE");
+        assertThat(nodes.selectById("worker-default").dispatchEligible()).isFalse();
+        var run = runs.insert(new Create(UUID.randomUUID(), new Snapshot(7, 1, "capacity-gate", "demoSuccess",
+                json.readTree("{}"), 60, 1, 5, "MANUAL", null, "UTC", "SKIP", false, null)));
+        var id = run.attempts().getFirst().id();
+        runs.dispatchPending();
+        var waiting = runs.selectById(run.id()).attempts().getFirst();
+        assertThat(waiting.id()).isEqualTo(id);
+        assertThat(waiting.state()).isEqualTo("READY");
+        assertThat(waiting.expiresAt()).isNull();
+        assertThat(waiting.dispatchCount()).isZero();
+        assertThat(outbox.find(id, false).orElseThrow().state()).isEqualTo("WAITING");
+        nodes.heartbeat(new Heartbeat("worker-default", node.sessionId(), 1, 2, 2, 1));
+        jdbc.update("UPDATE run_attempt SET next_dispatch_at=?", java.sql.Timestamp.from(Instant.now().minusSeconds(1)));
+        runs.dispatchPending();
+        var prepared = outbox.find(id, false).orElseThrow();
+        assertThat(prepared.state()).isEqualTo("READY");
+        nodes.heartbeat(new Heartbeat("worker-default", node.sessionId(), 1, 3, 2, 2));
+        relay.relay();
+        var deferred = outbox.find(id, false).orElseThrow();
+        assertThat(deferred.publishAttempts()).isZero();
+        assertThat(deferred.expiresAt()).isEqualTo(prepared.expiresAt());
+        assertThat(deferred.messageJson()).isEqualTo(prepared.messageJson());
+        verifyNoInteractions(publisher);
+        nodes.heartbeat(new Heartbeat("worker-default", node.sessionId(), 1, 4, 0, 0));
+        jdbc.update("UPDATE dispatch_outbox SET next_publish_at=?", java.sql.Timestamp.from(Instant.now().minusSeconds(1)));
+        relay.relay();
+        assertThat(outbox.find(id, false).orElseThrow().state()).isEqualTo("PUBLISHED");
+        assertThat(runs.selectById(run.id()).attempts()).hasSize(1);
+        assertThat(runs.selectById(run.id()).attempts().getFirst().leaseVersion()).isEqualTo(waiting.leaseVersion());
+        verify(publisher).publish(any());
+    }
     private Registration registration(String queue,UUID session) {
         return new Registration("worker-default","mq node",session,List.of("demoSuccess"),2,4,"rabbitmq","taskflow","taskflow.dispatch.v1",queue,"worker.default");
     }
