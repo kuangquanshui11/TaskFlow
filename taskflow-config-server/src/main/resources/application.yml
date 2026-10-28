@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: taskflow-config-server
+  profiles:
+    default: native
+  config:
+    import: optional:file:./config/taskflow-platform-local.yml
+  cloud:
+    config:
+      enabled: false
+      server:
+        accept-empty: false
+        native:
+          search-locations: "${TASKFLOW_CONFIG_REPOSITORY:file:./deploy/config-repo/}"
+server:
+  port: "${TASKFLOW_CONFIG_PORT:8888}"
+  address: "${TASKFLOW_CONFIG_BIND_ADDRESS:127.0.0.1}"
+taskflow:
+  config:
+    username: "${TASKFLOW_CONFIG_USERNAME:taskflow_config}"
+    password: "${TASKFLOW_CONFIG_PASSWORD:}"
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never

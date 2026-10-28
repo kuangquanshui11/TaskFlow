@@ -1,0 +1,13 @@
+spring:
+  datasource:
+    url: "${TASKFLOW_TEST_DB_URL}"
+    username: "${TASKFLOW_TEST_DB_USERNAME:root}"
+    password: "${TASKFLOW_TEST_DB_PASSWORD:}"
+    hikari:
+      connection-init-sql: "SET time_zone = '+00:00'"
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+  sql:
+    init:
+      mode: never

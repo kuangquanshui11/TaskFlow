@@ -1,0 +1,139 @@
+spring:
+  application:
+    name: taskflow-scheduler
+  cloud:
+    config:
+      enabled: false
+    openfeign:
+      circuitbreaker:
+        enabled: true
+      micrometer:
+        enabled: true
+    loadbalancer:
+      retry:
+        enabled: false
+    circuitbreaker:
+      resilience4j:
+        disable-time-limiter: true
+      bulkhead:
+        resilience4j:
+          enabled: false
+  rabbitmq:
+    addresses: "${TASKFLOW_MQ_ADDRESSES:localhost:5672,localhost:5673,localhost:5674}"
+    virtual-host: "${TASKFLOW_MQ_VHOST:taskflow}"
+    username: "${TASKFLOW_MQ_USERNAME:taskflow_scheduler}"
+    password: "${TASKFLOW_MQ_PASSWORD:}"
+    connection-timeout: 3s
+    requested-heartbeat: 15s
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        auto-startup: false
+  config:
+    import:
+      - optional:file:./config/taskflow-internal-local.yml
+      - classpath:governance.yml
+      - optional:file:./config/taskflow-platform-local.yml
+      - optional:file:./config/taskflow-nodes-local.yml
+      - optional:file:./config/taskflow-scheduler-local.yml
+      - optional:file:./config/taskflow-scheduler-mq-local.yml
+  datasource:
+    url: "${TASKFLOW_SCHEDULER_DB_URL:jdbc:mysql://localhost:3306/taskflow_scheduler?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=3000&socketTimeout=5000}"
+    username: "${TASKFLOW_SCHEDULER_DB_USERNAME:taskflow_scheduler}"
+    password: "${TASKFLOW_SCHEDULER_DB_PASSWORD:}"
+    hikari:
+      connection-init-sql: "SET time_zone = '+00:00'"
+      maximum-pool-size: 8
+      connection-timeout: 3000
+  web:
+    resources:
+      add-mappings: false
+server:
+  address: "${TASKFLOW_SCHEDULER_BIND_ADDRESS:127.0.0.1}"
+  port: "${TASKFLOW_SCHEDULER_PORT:8081}"
+management:
+  logging:
+    export:
+      otlp:
+        enabled: false
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  tracing:
+    export:
+      otlp:
+        enabled: "${TASKFLOW_TRACING_EXPORT_ENABLED:false}"
+    sampling:
+      probability: "${TASKFLOW_TRACING_SAMPLING:0.1}"
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: "${TASKFLOW_OTLP_ENDPOINT:http://localhost:4318/v1/traces}"
+          timeout: 3s
+          connect-timeout: 2s
+  health:
+    rabbit:
+      enabled: "${TASKFLOW_MQ_HEALTH_ENABLED:true}"
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+eureka:
+  client:
+    enabled: false
+taskflow:
+  nodes:
+    node-token: "${TASKFLOW_NODE_TOKEN:}"
+    target-worker-id: "${TASKFLOW_TARGET_WORKER_ID:worker-default}"
+    offline-timeout: 30s
+    dispatch-gating-enabled: true
+  dispatch:
+    transport: "${TASKFLOW_DISPATCH_TRANSPORT:rabbitmq}"
+    exchange: "${TASKFLOW_MQ_EXCHANGE:taskflow.dispatch.v1}"
+    queue: "${TASKFLOW_MQ_QUEUE:taskflow.worker.default.v1}"
+    routing-key: "${TASKFLOW_MQ_ROUTING_KEY:worker.default}"
+    dead-letter-exchange: "${TASKFLOW_MQ_DLX:taskflow.dispatch.dead.v1}"
+    dead-letter-queue: "${TASKFLOW_MQ_DLQ:taskflow.worker.default.dead.v1}"
+    dead-letter-routing-key: "${TASKFLOW_MQ_DEAD_ROUTING_KEY:worker.default.dead}"
+    confirm-timeout: 5s
+    claim-lease: 30s
+    retry-delay: 2s
+    max-retry-delay: 30s
+    max-publish-attempts: 5
+    relay-enabled: true
+    node-recheck-delay: "${TASKFLOW_NODE_RECHECK_DELAY:2s}"
+    scan-interval: 500ms
+  plans:
+    trigger:
+      enabled: "${TASKFLOW_PLAN_TRIGGER_ENABLED:true}"
+      scan-interval: 500ms
+      batch-size: 100
+      misfire-grace: 5s
+    initialization-enabled: true
+    scan-interval: 1s
+    batch-size: 100
+  execution:
+    scheduler-url: "${TASKFLOW_SCHEDULER_URL:http://localhost:8081}"
+    worker-url: "${TASKFLOW_WORKER_URL:http://localhost:8082}"
+    control-token: "${TASKFLOW_CONTROL_TOKEN:}"
+    dispatch-token: "${TASKFLOW_DISPATCH_TOKEN:}"
+    report-token: "${TASKFLOW_REPORT_TOKEN:}"
+    connect-timeout: 2s
+    request-timeout: 3s
+    scan-interval: 500
+    dispatch-retry-delay: 2s
+    max-dispatch-attempts: 5
+    lease-grace: 10s
+    scanning-enabled: true
+    parallelism: 4
+    max-pending: 32
+    max-report-attempts: 30
+    report-retry-delay: 2s

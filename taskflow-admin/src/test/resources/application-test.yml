@@ -1,0 +1,30 @@
+spring:
+  cloud:
+    openfeign:
+      circuitbreaker:
+        enabled: false
+  datasource:
+    url: "jdbc:h2:mem:taskflow-admin-${random.uuid};MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"
+    username: sa
+    password: ""
+    hikari:
+      connection-init-sql: "SET TIME ZONE 'UTC'"
+  flyway:
+    enabled: false
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/test-schema.sql
+
+management:
+  health:
+    redis:
+      enabled: false
+
+taskflow:
+  job-sync:
+    enabled: false
+    control-token: test-control-token
+  jobs:
+    detail-cache:
+      enabled: false

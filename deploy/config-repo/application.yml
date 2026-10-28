@@ -1,0 +1,4 @@
+taskflow:
+  platform:
+    name: TaskFlow
+    config-revision: bootstrap-v1

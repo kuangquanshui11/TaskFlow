@@ -1,0 +1,23 @@
+spring:
+  cloud:
+    config:
+      enabled: false
+  reactor:
+    context-propagation: auto
+eureka:
+  client:
+    enabled: false
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+    export:
+      otlp:
+        enabled: false
+resilience4j:
+  circuitbreaker:
+    instances:
+      adminGateway:
+        minimum-number-of-calls: 2
+        sliding-window-size: 2
+        wait-duration-in-open-state: 300ms

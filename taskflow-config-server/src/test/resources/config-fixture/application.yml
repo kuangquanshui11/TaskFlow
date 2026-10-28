@@ -1,0 +1,3 @@
+taskflow:
+  platform:
+    config-revision: isolated-test-v1

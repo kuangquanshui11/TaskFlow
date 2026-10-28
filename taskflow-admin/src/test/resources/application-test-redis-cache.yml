@@ -1,0 +1,7 @@
+taskflow:
+  jobs:
+    detail-cache:
+      enabled: true
+      ttl: 2s
+      key-prefix: "taskflow:admin:it:detail:${random.uuid}:"
+      eviction-attempts: 3

@@ -1,0 +1,95 @@
+spring:
+  application:
+    name: taskflow-gateway
+  profiles:
+    default: local
+  config:
+    import:
+      - optional:file:./config/taskflow-platform-local.yml
+      - optional:file:./config/taskflow-gateway-local.yml
+  reactor:
+    context-propagation: auto
+  cloud:
+    config:
+      enabled: false
+    gateway:
+      server:
+        webflux:
+          discovery:
+            locator:
+              enabled: false
+          httpclient:
+            connect-timeout: 2000
+            response-timeout: 8s
+          routes:
+            - id: taskflow-public-admin
+              uri: lb://taskflow-admin
+              predicates:
+                - Path=/api/v1/**
+              filters:
+                - name: RequestSize
+                  args:
+                    maxSize: 128KB
+                - name: CircuitBreaker
+                  args:
+                    name: adminGateway
+                    fallbackUri: forward:/fallback/unavailable
+                    statusCodes: [500, 502, 503, 504]
+    loadbalancer:
+      retry:
+        enabled: false
+      cache:
+        ttl: 5s
+eureka:
+  client:
+    enabled: false
+server:
+  port: "${TASKFLOW_GATEWAY_PORT:8088}"
+  address: "${TASKFLOW_GATEWAY_BIND_ADDRESS:127.0.0.1}"
+management:
+  logging:
+    export:
+      otlp:
+        enabled: false
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+  tracing:
+    export:
+      otlp:
+        enabled: "${TASKFLOW_TRACING_EXPORT_ENABLED:false}"
+    sampling:
+      probability: "${TASKFLOW_TRACING_SAMPLING:0.1}"
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: "${TASKFLOW_OTLP_ENDPOINT:http://localhost:4318/v1/traces}"
+          timeout: 3s
+          connect-timeout: 2s
+resilience4j:
+  circuitbreaker:
+    instances:
+      adminGateway:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 2
+  timelimiter:
+    instances:
+      adminGateway:
+        timeout-duration: 9s
+logging:
+  pattern:
+    level: "%5p [traceId=%X{traceId:-} spanId=%X{spanId:-}]"

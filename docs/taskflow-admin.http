@@ -1,0 +1,94 @@
+# 当前本机 YAML 配置使用 18080；其他环境按实际端口修改。
+@baseUrl = http://localhost:18080
+
+### 查询可选处理器（配置白名单）
+GET {{baseUrl}}/api/v1/job-handlers/select
+
+### 创建手动任务；将响应中的 id 和 configVersion 用于下方写请求
+POST {{baseUrl}}/api/v1/jobs/insert
+Content-Type: application/json
+
+{
+  "name": "手动演示任务",
+  "handlerKey": "demoSuccess",
+  "payload": {"batchSize": 100}
+}
+
+### 分页查询
+GET {{baseUrl}}/api/v1/jobs/select?page=1&pageSize=20
+
+### 查询详情，替换为实际 id
+GET {{baseUrl}}/api/v1/jobs/selectById?id=1
+
+### 修改：替换为实际 id 和最新版本，job 为完整配置
+POST {{baseUrl}}/api/v1/jobs/update
+Content-Type: application/json
+
+{
+  "id": 1,
+  "configVersion": 1,
+  "job": {
+    "name": "定时演示任务",
+    "handlerKey": "demoSuccess",
+    "payload": {"batchSize": 200},
+    "scheduleType": "CRON",
+    "cronExpression": "0 */5 * * * *",
+    "timeZone": "Asia/Shanghai",
+    "enabled": false,
+    "timeoutSeconds": 30,
+    "maxAttempts": 3,
+    "retryIntervalSeconds": 5,
+    "misfirePolicy": "SKIP"
+  }
+}
+
+### 启用：替换为实际 id 和最新版本
+POST {{baseUrl}}/api/v1/jobs/enable
+Content-Type: application/json
+
+{"id": 1, "configVersion": 2}
+
+### 停用：替换为实际 id 和最新版本
+POST {{baseUrl}}/api/v1/jobs/disable
+Content-Type: application/json
+
+{"id": 1, "configVersion": 3}
+
+### 删除：软删除，替换为实际 id 和最新版本
+POST {{baseUrl}}/api/v1/jobs/delete
+Content-Type: application/json
+
+{"id": 1, "configVersion": 4}
+
+### 查询任务数量
+GET {{baseUrl}}/api/v1/jobs/selectSummary
+
+### 预览每天北京时间九点的触发时间
+POST {{baseUrl}}/api/v1/jobs/preview
+Content-Type: application/json
+
+{
+  "cronExpression": "0 0 9 * * *",
+  "timeZone": "Asia/Shanghai",
+  "from": "2026-10-26T00:00:00Z",
+  "count": 2
+}
+
+### 创建手动运行：使用尚未删除任务的真实 id/version；网络重试保留 requestKey，另一次执行才换新 UUID
+POST {{baseUrl}}/api/v1/runs/insert
+Content-Type: application/json
+
+{
+  "jobId": 1,
+  "configVersion": 1,
+  "requestKey": "84f1ab0f-c5d8-4ba0-8708-0d1a7737323a"
+}
+
+### 按原提交标识确认是否已接收
+GET {{baseUrl}}/api/v1/runs/selectByRequestKey?requestKey=84f1ab0f-c5d8-4ba0-8708-0d1a7737323a
+
+### 查询任务运行历史，jobId 按实际值修改
+GET {{baseUrl}}/api/v1/runs/select?jobId=1&page=1&pageSize=10
+
+### 将 id 替换为创建运行接口返回的 id，可查看配置快照与每次 Attempt
+GET {{baseUrl}}/api/v1/runs/selectById?id=00000000-0000-4000-8000-000000000000

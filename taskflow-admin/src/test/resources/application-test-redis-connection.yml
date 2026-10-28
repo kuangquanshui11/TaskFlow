@@ -1,0 +1,6 @@
+# 此 profile 必须在 test 之前加载：先读取本机连接，再由 test 强制覆盖 SQL 为 H2。
+spring:
+  config:
+    import:
+      - optional:file:./config/taskflow-admin-local.yml
+      - optional:file:../config/taskflow-admin-local.yml

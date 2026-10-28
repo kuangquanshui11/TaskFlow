@@ -1,0 +1,21 @@
+:root {
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  color: #263248;
+  background: #f5f6fa;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --canvas: #f5f6fa;
+  --surface: #fff;
+  --ink: #263248;
+  --muted: #65738a;
+  --line: #e9ecf2;
+  --primary: #6b5ce7;
+  --primary-hover: #5746cf;
+  --primary-tint: #f0edff;
+  --sidebar: #172033;
+  --green: #187b60;
+  --red: #c2414f;
+  --radius: 12px;
+  --mono: "Cascadia Code", Consolas, "SFMono-Regular", monospace;
+}

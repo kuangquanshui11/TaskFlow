@@ -1,0 +1,28 @@
+name: taskflow-platform
+services:
+  registry:
+    build:
+      context: ../..
+      dockerfile: deploy/platform/Dockerfile
+      args: { SERVICE: taskflow-registry }
+    environment:
+      TASKFLOW_REGISTRY_BIND_ADDRESS: 0.0.0.0
+      TASKFLOW_REGISTRY_PASSWORD: ${TASKFLOW_REGISTRY_PASSWORD:?Run tools/prepare-platform.ps1 first}
+    ports: ["127.0.0.1:8761:8761"]
+    restart: unless-stopped
+  config-server:
+    build:
+      context: ../..
+      dockerfile: deploy/platform/Dockerfile
+      args: { SERVICE: taskflow-config-server }
+    environment:
+      TASKFLOW_CONFIG_BIND_ADDRESS: 0.0.0.0
+      TASKFLOW_CONFIG_PASSWORD: ${TASKFLOW_CONFIG_PASSWORD:?Run tools/prepare-platform.ps1 first}
+      TASKFLOW_CONFIG_REPOSITORY: file:/config-repo/
+    volumes: ["../config-repo:/config-repo:ro"]
+    ports: ["127.0.0.1:8888:8888"]
+    restart: unless-stopped
+  jaeger:
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.22.0
+    ports: ["127.0.0.1:16686:16686", "127.0.0.1:4317:4317", "127.0.0.1:4318:4318"]
+    restart: unless-stopped

@@ -1,0 +1,15 @@
+.git
+.idea
+.agents
+.codex
+.aws
+.tools
+config
+**/.env
+infra/rabbitmq/runtime
+dist
+taskflow-web/node_modules
+taskflow-web/test-results
+taskflow-web/playwright-report
+**/target/surefire-reports
+**/target/test-classes

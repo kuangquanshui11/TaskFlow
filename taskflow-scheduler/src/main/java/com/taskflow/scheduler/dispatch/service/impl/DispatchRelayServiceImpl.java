@@ -1,0 +1,81 @@
+package com.taskflow.scheduler.dispatch.service.impl;
+
+import java.time.Instant;
+import java.util.UUID;
+import com.taskflow.scheduler.dispatch.config.DispatchProperties;
+import com.taskflow.scheduler.dispatch.mapper.DispatchOutboxMapper;
+import com.taskflow.scheduler.dispatch.model.OutboxEvent;
+import com.taskflow.scheduler.dispatch.service.*;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+
+@Service
+@ConditionalOnProperty(name = "taskflow.dispatch.transport", havingValue = "rabbitmq", matchIfMissing = true)
+public class DispatchRelayServiceImpl implements IDispatchRelayService {
+    private final DispatchOutboxMapper mapper;
+    private final IDispatchPublisher publisher;
+    private final DispatchProperties properties;
+    private final TransactionTemplate transactions;
+    private final com.taskflow.scheduler.node.service.IWorkerNodeService nodes;
+    private final tools.jackson.databind.json.JsonMapper json;
+    public DispatchRelayServiceImpl(DispatchOutboxMapper mapper, IDispatchPublisher publisher,
+            DispatchProperties properties, PlatformTransactionManager manager,
+            com.taskflow.scheduler.node.service.IWorkerNodeService nodes,tools.jackson.databind.json.JsonMapper json) {
+        this.mapper = mapper; this.publisher = publisher; this.properties = properties;
+        transactions = new TransactionTemplate(manager);
+        this.nodes=nodes; this.json=json;
+    }
+    @Override
+    @Transactional(propagation = Propagation.NEVER)
+    public void relay() {
+        for (UUID id : mapper.due(Instant.now())) {
+            if (Thread.currentThread().isInterrupted()) return;
+            try {
+                var event = transactions.execute(status -> claim(id));
+                if (event == null) continue;
+                try {
+                    // confirm 等待发生在 SQL 事务外；确认后崩溃会重发同一不可变事件。
+                    publisher.publish(event);
+                } catch (RuntimeException failed) {
+                    var now = Instant.now();
+                    long factor = 1L << Math.min(event.publishAttempts() - 1, 16);
+                    var delay = properties.retryDelay().multipliedBy(factor);
+                    if (delay.compareTo(properties.maxRetryDelay()) > 0) delay = properties.maxRetryDelay();
+                    var next = now.plus(delay);
+                    mapper.failed(event, event.publishAttempts() >= properties.maxPublishAttempts(), "MQ_PUBLISH_UNCONFIRMED", next, now);
+                    org.slf4j.LoggerFactory.getLogger(getClass()).warn("MQ publish not confirmed. eventId={}, attempt={}, type={}",
+                            id, event.publishAttempts(), failed.getClass().getSimpleName());
+                    continue;
+                }
+                mapper.published(event, Instant.now());
+            } catch (RuntimeException failed) {
+                // 留下的 SENDING 租约到期后可由其他 Relay 接管；一条失败不阻止其他事件。
+                org.slf4j.LoggerFactory.getLogger(getClass()).warn("Outbox relay failed. eventId={}, type={}", id, failed.getClass().getSimpleName());
+            }
+        }
+    }
+    private OutboxEvent claim(UUID id) {
+        var event = mapper.find(id, true).orElseThrow();
+        var now = Instant.now();
+        if (event.nextPublishAt().isAfter(now) || !(event.state().equals("READY")
+                || event.state().equals("SENDING") && !event.claimUntil().isAfter(now))) return null;
+        if (!event.expiresAt().isAfter(now)) { mapper.cancel(event.attemptId()); return null; }
+        var command=json.readValue(event.messageJson(),com.taskflow.scheduler.dispatch.dto.DispatchEvent.class).command();
+        if (!nodes.canDispatch(command.snapshot().handlerKey())) {
+            if (!mapper.deferPublication(event, now.plus(properties.nodeRecheckDelay()), now))
+                throw new IllegalStateException("Outbox 状态或领取版本已变化");
+            return null;
+        }
+        if (event.publishAttempts() >= properties.maxPublishAttempts()) {
+            // 崩溃也计入次数，最后一次发送结果未知，不自动产生新的业务 Attempt。
+            mapper.exhaust(id);
+            return null;
+        }
+        mapper.claim(id, now.plus(properties.claimLease()));
+        return mapper.find(id, false).orElseThrow();
+    }
+}

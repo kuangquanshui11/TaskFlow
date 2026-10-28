@@ -1,0 +1,8 @@
+spring:
+  cloud:
+    discovery:
+      client:
+        simple:
+          instances:
+            taskflow-admin:
+              - uri: "${TASKFLOW_ADMIN_URL:http://localhost:8080}"

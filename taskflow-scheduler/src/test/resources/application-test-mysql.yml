@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    url: "${TASKFLOW_SCHEDULER_TEST_DB_URL}"
+    username: "${TASKFLOW_SCHEDULER_TEST_DB_USERNAME:root}"
+    password: "${TASKFLOW_SCHEDULER_TEST_DB_PASSWORD:}"
+    hikari:
+      connection-init-sql: "SET time_zone = '+00:00'"

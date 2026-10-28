@@ -1,0 +1,35 @@
+spring:
+  cloud:
+    openfeign:
+      circuitbreaker:
+        enabled: false
+  rabbitmq:
+    dynamic: false
+  datasource:
+    url: "jdbc:h2:mem:taskflow-scheduler-${random.uuid};MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"
+    username: sa
+    password: ""
+    hikari:
+      connection-init-sql: "SET TIME ZONE 'UTC'"
+  flyway:
+    enabled: true
+taskflow:
+  nodes:
+    node-token: test-node-token
+    dispatch-gating-enabled: false
+  dispatch:
+    transport: http
+    relay-enabled: false
+  plans:
+    trigger:
+      enabled: false
+    initialization-enabled: false
+  execution:
+    scanning-enabled: false
+    control-token: test-control-token
+    dispatch-token: test-dispatch-token
+    report-token: test-report-token
+management:
+  health:
+    rabbit:
+      enabled: false

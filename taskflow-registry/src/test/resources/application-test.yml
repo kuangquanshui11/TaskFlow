@@ -1,0 +1,7 @@
+taskflow:
+  registry:
+    username: registry-test
+    password: isolated-registry-test-password-32
+eureka:
+  server:
+    enable-self-preservation: false

@@ -1,0 +1,28 @@
+spring:
+  config:
+    import: "configserver:${TASKFLOW_CONFIG_SERVER_URL:http://localhost:8888}"
+  cloud:
+    config:
+      enabled: true
+      fail-fast: true
+      username: "${TASKFLOW_CONFIG_USERNAME:${taskflow.config.username:taskflow_config}}"
+      password: "${TASKFLOW_CONFIG_PASSWORD:${taskflow.config.password:}}"
+eureka:
+  client:
+    enabled: true
+    register-with-eureka: true
+    fetch-registry: true
+    service-url:
+      defaultZone: "${TASKFLOW_REGISTRY_URL:${taskflow.registry.url:http://localhost:8761/eureka/}}"
+  instance:
+    instance-id: "${spring.application.name}:${TASKFLOW_INSTANCE_ID:${random.uuid}}"
+    prefer-ip-address: false
+    hostname: "${TASKFLOW_INSTANCE_HOST:localhost}"
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+    metadata-map:
+      worker-id: "${taskflow.nodes.worker-id}"
+taskflow:
+  remote:
+    report-url: ""
+    registration-url: ""

@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: taskflow-registry
+  config:
+    import: optional:file:./config/taskflow-platform-local.yml
+server:
+  port: "${TASKFLOW_REGISTRY_PORT:8761}"
+  address: "${TASKFLOW_REGISTRY_BIND_ADDRESS:127.0.0.1}"
+eureka:
+  client:
+    register-with-eureka: false
+    fetch-registry: false
+  server:
+    enable-self-preservation: true
+taskflow:
+  registry:
+    username: "${TASKFLOW_REGISTRY_USERNAME:taskflow_registry}"
+    password: "${TASKFLOW_REGISTRY_PASSWORD:}"
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never

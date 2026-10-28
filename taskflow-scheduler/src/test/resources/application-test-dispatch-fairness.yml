@@ -1,0 +1,3 @@
+taskflow:
+  dispatch:
+    node-recheck-delay: 5m

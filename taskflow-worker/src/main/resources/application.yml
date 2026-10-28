@@ -1,0 +1,134 @@
+spring:
+  application:
+    name: taskflow-worker
+  cloud:
+    config:
+      enabled: false
+    openfeign:
+      circuitbreaker:
+        enabled: true
+      micrometer:
+        enabled: true
+    loadbalancer:
+      retry:
+        enabled: false
+    circuitbreaker:
+      resilience4j:
+        disable-time-limiter: true
+      bulkhead:
+        resilience4j:
+          enabled: false
+  rabbitmq:
+    addresses: "${TASKFLOW_MQ_ADDRESSES:localhost:5672,localhost:5673,localhost:5674}"
+    virtual-host: "${TASKFLOW_MQ_VHOST:taskflow}"
+    username: "${TASKFLOW_MQ_USERNAME:taskflow_worker}"
+    password: "${TASKFLOW_MQ_PASSWORD:}"
+    connection-timeout: 3s
+    requested-heartbeat: 15s
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        auto-startup: false
+  config:
+    import:
+      - optional:file:./config/taskflow-internal-local.yml
+      - classpath:governance.yml
+      - optional:file:./config/taskflow-platform-local.yml
+      - optional:file:./config/taskflow-nodes-local.yml
+      - optional:file:./config/taskflow-worker-local.yml
+      - optional:file:./config/taskflow-worker-mq-local.yml
+  datasource:
+    url: "${TASKFLOW_WORKER_DB_URL:jdbc:mysql://localhost:3306/taskflow_worker?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=3000&socketTimeout=5000}"
+    username: "${TASKFLOW_WORKER_DB_USERNAME:taskflow_worker}"
+    password: "${TASKFLOW_WORKER_DB_PASSWORD:}"
+    hikari:
+      connection-init-sql: "SET time_zone = '+00:00'"
+      maximum-pool-size: 8
+      connection-timeout: 3000
+  web:
+    resources:
+      add-mappings: false
+server:
+  address: "${TASKFLOW_WORKER_BIND_ADDRESS:127.0.0.1}"
+  port: "${TASKFLOW_WORKER_PORT:8082}"
+management:
+  logging:
+    export:
+      otlp:
+        enabled: false
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  tracing:
+    export:
+      otlp:
+        enabled: "${TASKFLOW_TRACING_EXPORT_ENABLED:false}"
+    sampling:
+      probability: "${TASKFLOW_TRACING_SAMPLING:0.1}"
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: "${TASKFLOW_OTLP_ENDPOINT:http://localhost:4318/v1/traces}"
+          timeout: 3s
+          connect-timeout: 2s
+  health:
+    rabbit:
+      enabled: "${TASKFLOW_MQ_HEALTH_ENABLED:true}"
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+eureka:
+  client:
+    enabled: false
+taskflow:
+  nodes:
+    enabled: "${TASKFLOW_NODE_HEARTBEAT_ENABLED:true}"
+    worker-id: "${TASKFLOW_WORKER_ID:worker-default}"
+    display-name: "${TASKFLOW_WORKER_NAME:默认执行节点}"
+    scheduler-url: "${taskflow.execution.scheduler-url}"
+    node-token: "${TASKFLOW_NODE_TOKEN:}"
+    connect-timeout: 2s
+    request-timeout: 3s
+    heartbeat-interval: 5s
+    initial-delay: 200ms
+  dispatch:
+    transport: "${TASKFLOW_DISPATCH_TRANSPORT:rabbitmq}"
+    exchange: "${TASKFLOW_MQ_EXCHANGE:taskflow.dispatch.v1}"
+    queue: "${TASKFLOW_MQ_QUEUE:taskflow.worker.default.v1}"
+    routing-key: "${TASKFLOW_MQ_ROUTING_KEY:worker.default}"
+    dead-letter-exchange: "${TASKFLOW_MQ_DLX:taskflow.dispatch.dead.v1}"
+    dead-letter-queue: "${TASKFLOW_MQ_DLQ:taskflow.worker.default.dead.v1}"
+    dead-letter-routing-key: "${TASKFLOW_MQ_DEAD_ROUTING_KEY:worker.default.dead}"
+    max-consume-attempts: 4
+    consume-retry-delay: 1s
+    consumer-enabled: true
+  execution:
+    result-persistence:
+      max-attempts: "${TASKFLOW_RESULT_SAVE_MAX_ATTEMPTS:5}"
+      retry-delay: "${TASKFLOW_RESULT_SAVE_RETRY_DELAY:500ms}"
+    scheduler-url: "${TASKFLOW_SCHEDULER_URL:http://localhost:8081}"
+    worker-url: "${TASKFLOW_WORKER_URL:http://localhost:8082}"
+    control-token: "${TASKFLOW_CONTROL_TOKEN:}"
+    dispatch-token: "${TASKFLOW_DISPATCH_TOKEN:}"
+    report-token: "${TASKFLOW_REPORT_TOKEN:}"
+    connect-timeout: 2s
+    request-timeout: 3s
+    scan-interval: 500
+    dispatch-retry-delay: 2s
+    max-dispatch-attempts: 5
+    lease-grace: 10s
+    scanning-enabled: true
+    parallelism: 4
+    max-pending: 32
+    max-report-attempts: 30
+    report-retry-delay: 2s
+    report-budget: "${TASKFLOW_REPORT_BUDGET:2s}"

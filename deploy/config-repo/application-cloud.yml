@@ -1,0 +1,23 @@
+taskflow:
+  platform:
+    config-revision: governance-v1
+spring:
+  cloud:
+    loadbalancer:
+      retry:
+        enabled: false
+    circuitbreaker:
+      resilience4j:
+        disable-time-limiter: true
+      bulkhead:
+        resilience4j:
+          enabled: false
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 2

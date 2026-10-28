@@ -1,0 +1,68 @@
+name: taskflow-mq
+
+x-rabbit: &rabbit
+  image: rabbitmq:4.3.6-management
+  restart: unless-stopped
+  environment: &rabbit-env
+    RABBITMQ_ERLANG_COOKIE: ${TASKFLOW_MQ_COOKIE:?Run tools/mq-cluster.ps1 -Action init first}
+    RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 2:2"
+  volumes:
+    - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    - ./runtime/definitions.json:/etc/rabbitmq/definitions.json:ro
+    - ./runtime/topology.json:/etc/rabbitmq/topology.json:ro
+  healthcheck:
+    test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+    interval: 10s
+    timeout: 10s
+    retries: 12
+    start_period: 30s
+  networks: [taskflow-mq]
+
+services:
+  rabbit1:
+    <<: *rabbit
+    hostname: rabbit1
+    environment:
+      <<: *rabbit-env
+      RABBITMQ_NODENAME: rabbit@rabbit1
+    ports: ["127.0.0.1:5672:5672", "127.0.0.1:15672:15672"]
+    volumes:
+      - rabbit1-data:/var/lib/rabbitmq
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./runtime/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./runtime/topology.json:/etc/rabbitmq/topology.json:ro
+  rabbit2:
+    <<: *rabbit
+    hostname: rabbit2
+    depends_on:
+      rabbit1: {condition: service_healthy}
+    environment:
+      <<: *rabbit-env
+      RABBITMQ_NODENAME: rabbit@rabbit2
+    ports: ["127.0.0.1:5673:5672", "127.0.0.1:15673:15672"]
+    volumes:
+      - rabbit2-data:/var/lib/rabbitmq
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./runtime/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./runtime/topology.json:/etc/rabbitmq/topology.json:ro
+  rabbit3:
+    <<: *rabbit
+    hostname: rabbit3
+    depends_on:
+      rabbit1: {condition: service_healthy}
+    environment:
+      <<: *rabbit-env
+      RABBITMQ_NODENAME: rabbit@rabbit3
+    ports: ["127.0.0.1:5674:5672", "127.0.0.1:15674:15672"]
+    volumes:
+      - rabbit3-data:/var/lib/rabbitmq
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./runtime/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./runtime/topology.json:/etc/rabbitmq/topology.json:ro
+
+networks:
+  taskflow-mq:
+volumes:
+  rabbit1-data:
+  rabbit2-data:
+  rabbit3-data:

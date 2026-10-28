@@ -1,0 +1,10 @@
+taskflow:
+  config:
+    username: config-test
+    password: isolated-config-test-password-32
+spring:
+  cloud:
+    config:
+      server:
+        native:
+          search-locations: classpath:config-fixture/
