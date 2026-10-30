@@ -13,7 +13,7 @@
 - Admin WorkerNodeApiTests 5 项：真实 HTTP Client、SQL 事务外查询、过滤编码、400/404/503、错误/不一致响应检查和详情身份检查。
 - Worker WorkerRegistrationTests 3 项：实际能力与负载上报、递增序号、注册超时后复用原 session、记录缺失后原 session 重注册，不绕过会话隔离。
 
-Flyway 在隔离 H2 从空库应用到 V6，既有 V2/V4 升级测试也应用最新迁移并通过。V6 的真实 MySQL 升级尚未执行，不声称业务 MySQL 已升级。
+Flyway 在隔离 H2 从空库应用到 V6，既有 V2/V4 升级测试也应用最新迁移并通过。V6 的真实 MySQL 升级尚未执行，业务数据库未升级。
 
 回归发现派发时间有纳秒而数据库为 TIMESTAMP(3)，向上舍入可能令“立即就绪”的 Attempt/Outbox 暂时落在未来。RunDataMapper 与 DispatchOutboxMapper 现在在 SQL 边界统一截断到毫秒，新增 999999ns 边界用例，保证在同一持久化毫秒内即可扫描到；没有放宽状态、租约或心跳有效期检查。
 
@@ -43,11 +43,11 @@ Flyway 在隔离 H2 从空库应用到 V6，既有 V2/V4 升级测试也应用�
 - 首次查询失败不显示“还没有注册节点”，重试后的真实空状态有独立提示。
 - 已实际查看桌面与 375px 全页截图，标题、统计、表格/卡片、错误状态设计和长字段换行符合现有设计规范。真实节点页测试未出现 JavaScript 页面错误。
 
-没有 Shiplight MCP 浏览器工具，本轮使用项目已有 Playwright/Chrome 并检查本地截图，不依赖未连接的外部验证服务。
+浏览器验收使用项目内的 Playwright/Chrome，页面布局通过桌面和移动端截图复核。
 
 ## 本机状态与证据
 
-本轮生成被忽略的 `config/taskflow-nodes-local.yml`，不覆盖已有控制、派发、上报或 MQ 凭据，没有升级/重启现有业务实例，没有迁移业务数据库。启动/升级需按 [节点协议](worker-nodes.md) 先部署 Scheduler V6，再部署 Worker、Admin 和前端。
+节点密钥保存在被忽略的 `config/taskflow-nodes-local.yml`，已有控制、派发、上报和 MQ 凭据保持不变。验证未升级或重启业务实例，未迁移业务数据库。启动/升级需按 [节点协议](worker-nodes.md) 先部署 Scheduler V6，再部署 Worker、Admin 和前端。
 
 被忽略的 `.tools/nodes-final-verify.log` 保存最终根构建日志，`.tools/nodes-process-browser.log` 保存进程和浏览器结果。证据目录为 `.tools/execution-e2e/20261027-095809-022/`，包含 report.json、隔离服务 YAML、服务日志、workers-desktop.png 和 workers-mobile.png；各模块 target/surefire-reports 保存 JUnit 报告。
 

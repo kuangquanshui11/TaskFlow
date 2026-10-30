@@ -63,7 +63,7 @@ JobController / JobQueryController
 .\tools\test-frontend.ps1
 ```
 
-真实 MySQL 测试沿用 `TASKFLOW_TEST_DB_URL`、`TASKFLOW_TEST_DB_USERNAME`、`TASKFLOW_TEST_DB_PASSWORD`。JobApiTests 校验 URL 后启用 `test,test-mysql`，且在执行清理 SQL 前再次校验实际连接，只允许本机 `taskflow_it_` 前缀的专用数据库。禁止指向用户的 taskflow_admin 库。H2 不替代真实 MySQL JSON 和 Flyway 验证。
+真实 MySQL 测试沿用 `TASKFLOW_TEST_DB_URL`、`TASKFLOW_TEST_DB_USERNAME`、`TASKFLOW_TEST_DB_PASSWORD`。JobApiTests 校验 URL 后启用 `test,test-mysql`，且在执行清理 SQL 前再次校验实际连接，只允许本机 `taskflow_it_` 前缀的专用数据库。禁止指向业务 taskflow_admin 库。H2 不替代真实 MySQL JSON 和 Flyway 验证。
 
 ## 官方参考
 

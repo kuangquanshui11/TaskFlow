@@ -1,8 +1,8 @@
 # TaskFlow 项目协作与代码约定
 
-## 用户的长期要求
+## 架构原则
 
-用户明确要求：后续生成的代码和功能板块遵循微服务原则，每个模块分块，保持代码可维护、修改简单。所有后续开发、重构、示例和文档都应遵守以下约定。
+项目按微服务原则划分模块，以明确职责、独立维护和局部修改为目标。开发、重构、示例和文档统一遵守以下约定。
 
 ## 服务边界
 
@@ -16,7 +16,7 @@
 
 ## 数据和一致性
 
-- 用户确认浏览器访问目标：Nginx 静态直返 / API 转发 → Gateway（WebFlux/Netty）→ Admin 内嵌 Tomcat → 业务用例 → Redis 查询缓存 → 未命中查询本服务数据库并回填。详见 docs/request-flow.md。
+- 浏览器访问链路：Nginx 静态直返 / API 转发 → Gateway（WebFlux/Netty）→ Admin 内嵌 Tomcat → 业务用例 → Redis 查询缓存 → 未命中查询本服务数据库并回填。详见 docs/request-flow.md。
 - 基础设施模块 taskflow-gateway、taskflow-registry、taskflow-config-server 分别负责入口路由、Eureka 注册发现和集中配置，不承担调度业务、不访问业务数据库。cloud profile 使用服务名发现、OpenFeign/LoadBalancer、Resilience4j 和 Micrometer OTel；local/test 保留显式直连模式。Gateway 仅开放 /api/v1/** 与健康探针，不代理内部协议或注册/配置管理端点。
 - 远程 POST 禁止自动重放；传输层重试与持久化 Outbox 业务重试分别管理。配置中心存放非秘密策略，本机凭据保存在忽略的 YAML 或环境变量；配置更新默认重启生效，不声称完整热刷新。详见 docs/microservice-platform.md。
 - 数据库为权威来源。写入提交后使缓存失效；声明 TTL、缓存故障降级与非原子一致性边界，不通过缓存绕过服务数据归属。
@@ -31,7 +31,7 @@
 
 ## 服务内部组织
 
-用户最新要求：先按业务能力分包，每个业务模块使用 controller、service、mapper 结构，例如 job/controller、job/service、job/service/impl、job/mapper。该组织方式替代原 interfaces/application/domain/infrastructure 目录约定，微服务边界与数据归属不变。
+先按业务能力分包，每个业务模块使用 controller、service、mapper 结构，例如 job/controller、job/service、job/service/impl、job/mapper。业务能力内聚在同一模块，职责分层限制依赖方向，微服务边界与数据归属不变。
 
 - controller：按业务功能拆分 Controller 类，声明请求路径、接收和校验前端参数、转换响应，并调用 Service 接口；不直接访问 Mapper、数据库或 Redis，不执行实际 Handler。
 - service：统一存放 IxxxService 接口；service/impl 子目录放 XxxServiceImpl，通过 implements 实现对应接口，负责业务编排、校验、事务与 Mapper 调用。Controller 和其他 Service 注入接口。
@@ -46,10 +46,10 @@
 
 - 项目使用本地 Git 管理版本。每次开始修改前检查 `git status` 和现有差异，保留用户未提交的修改，不混入无关提交。
 - 每完成一个可验收的修改单元，执行适用验证后提交该单元的代码与文档；最终回复报告提交短哈希、修改内容和验证结果。未完成或未验证通过的工作不得描述成已验收。
-- 提交前检查暂存差异，不提交本机凭据、忽略的配置、数据库文件、日志、构建产物或本机安装的 Agent 技能。没有用户明确要求，不推送远程、不强制推送、不重写已有历史。
+- 提交前检查暂存差异，不提交本机凭据、忽略的配置、数据库文件、日志、构建产物或本机安装的 Agent 技能。未经用户明确授权，不推送远程、不强制推送、不重写已有历史。
 - 回退已提交修改优先使用 `git revert` 产生新的回退提交，操作前检查工作区；不擅自使用 `git reset --hard`、`git clean` 或丢弃未提交修改。Git 回退只覆盖纳入版本管理的文件，不能代替数据库和本机配置备份。
 
-- 用户要求接口路径与业务动作匹配：查询使用 /select，新增 /insert，修改 /update，删除 /delete，启停 /enable 和 /disable。查询使用 GET，状态变更使用 POST；具体路径和参数记录在 docs/api.md。
+- 接口路径与业务动作匹配：查询使用 /select，新增 /insert，修改 /update，删除 /delete，启停 /enable 和 /disable。查询使用 GET，状态变更使用 POST；具体路径和参数记录在 docs/api.md。
 
 - 保留 Java 21 与当前 Spring Boot 版本；依赖按服务声明，通用版本由父 POM / Boot BOM 管理。
 - Maven 依赖和版本写入根或服务 pom.xml；数据库、Redis、MyBatis 和连接池参数统一写入各服务 application*.yml，测试使用独立 YAML profile，不在业务 Java 或启动脚本中重复硬编码连接参数。实际凭据通过被忽略的本机 YAML 或环境变量提供，不提交密码、个人绝对路径或硬编码服务地址。
@@ -57,4 +57,10 @@
 - 结构调整执行根目录 ./mvnw.cmd verify；修改服务行为执行对应模块测试并补充相关集成验证。
 - 本地启动、端口和前置设施以 README.md 为准。
 - 架构与分阶段计划分别见 docs/architecture.md、docs/development-plan.md。
-- 原 Word 计划中的单应用、共享状态库、APP_ROLE 方案已被本次用户要求替代；后续以本文件和最新 Markdown 架构为准。
+- 架构以本文件和 docs/architecture.md 为准：服务独立运行、数据独立归属，不采用单应用、共享权威状态库或 APP_ROLE 切换角色的方案。
+
+## 文档约定
+
+- 设计文档以开发者第一人称叙述决策，说明结论、理由和适用边界；不记录对话指令、需求确认或逐轮交付过程。
+- 验证记录使用明确日期、环境、命令、结果、证据和未验证范围，避免依赖对话上下文的时间指代；历史结果不得表述为当前重新验收。
+- 部署文档说明前置条件、操作步骤和失败处理；工具可用性、协作过程及完成汇报不进入设计正文。

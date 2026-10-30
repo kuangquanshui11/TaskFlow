@@ -51,4 +51,4 @@ java -jar taskflow-worker/target/taskflow-worker-0.0.1-SNAPSHOT.jar --server.por
 
 ## 验证边界
 
-当前验证证明服务骨架可以独立构建、启动，管理端资源归属正确。尚未接入 MySQL、RabbitMQ、服务间调用或真实任务，因此不对任务持久化、消息可靠性、执行隔离或故障恢复作完成声明。
+2026-10-26 的骨架验证覆盖独立构建、启动和管理端资源归属。当时尚未接入 MySQL、RabbitMQ、服务间调用或真实任务，任务持久化、消息可靠性、执行隔离和故障恢复不在验证范围内。

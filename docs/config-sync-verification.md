@@ -11,7 +11,7 @@
 
 ## 三个独立进程
 
-运行 `tools/test-execution.ps1 -SkipBuild`，每服务使用本轮独立 H2 文件数据库、独立 YAML 与随机内部密钥。测试过程中不写用户 MySQL、Redis 或正在使用的服务。
+运行 `tools/test-execution.ps1 -SkipBuild`，每服务使用独立 H2 文件数据库、独立 YAML 与随机内部密钥。测试过程中不写业务 MySQL、Redis 或业务服务。
 
 23 项进程验收通过，包含原有手动执行闭环，以及新增配置同步检查：
 
@@ -23,7 +23,7 @@
 6. 删除后迟到的旧事件返回最新版本，不复活计划。
 7. Scheduler 重启保留副本和删除墓碑。
 
-H2 的默认延迟落盘会使强制停止后的最近提交在测试中丢失；本轮测试 YAML 已设置 `WRITE_DELAY=0`，让进程强制退出验收使用立即落盘。该设置只作用于隔离测试环境。
+H2 的默认延迟落盘会使强制停止后的最近提交在测试中丢失；隔离测试 YAML 设置 `WRITE_DELAY=0`，让进程强制退出验收使用立即落盘。该设置只作用于隔离测试环境。
 
 ## 前端
 
@@ -34,4 +34,4 @@ H2 的默认延迟落盘会使强制停止后的最近提交在测试中丢失�
 
 本机证据保存在被忽略的 `.tools/verification/job-sync-*.log` 和 `.tools/execution-e2e/20261026-192738-418/`，后者包含 `report.json`、服务日志和 `sync-mobile.png`；测试数据及密钥不打包进业务 JAR。
 
-本次未对当前运行中的业务实例执行升级。部署时先升级 Scheduler，再升级 Admin，并更新 Nginx 静态构建；Flyway 各自应用新增迁移。
+验证未升级业务实例。部署时先升级 Scheduler，再升级 Admin，并更新 Nginx 静态构建；Flyway 各自应用新增迁移。

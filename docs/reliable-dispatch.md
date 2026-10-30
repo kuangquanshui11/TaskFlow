@@ -78,7 +78,7 @@ Worker 校验协议版本、消息标识、完整 DTO 约束及 128 KiB 消息�
 
 死信转移不直接更新 Scheduler 权威状态；若没有合法结果上报，原 Attempt 按执行租约超时收敛。MQ 确认后的 RUNNING 表示派发已交由 Broker，不代表 Handler 精确开始时间。消息在 Broker 排队也消耗既有执行租约，不进行续租；长时间积压仍可能使任务超时，不能把“不进死信”解释为无限等待或保证执行成功。满载等待与恢复验收见 [容量背压验证](dispatch-backpressure-verification.md)。
 
-Broker 的 delivery acknowledgement timeout 应大于允许的最大在途租约剩余时间并留出数据库 I/O 余量，否则 Broker 可能在等待期间关闭 channel。3.8 环境需按实际版本设置节点级 `consumer_timeout`；较新版本可按队列配置，见 [RabbitMQ 消费确认超时](https://www.rabbitmq.com/docs/consumers#acknowledgement-timeout)。本次不自动修改远程 Broker 参数或队列策略；部署长超时任务前需核对该值。应用背压不会通过主动反复重投制造 delivery-limit 死信，但连接故障和 Broker 自身策略仍属于独立的运维边界。
+Broker 的 delivery acknowledgement timeout 应大于允许的最大在途租约剩余时间并留出数据库 I/O 余量，否则 Broker 可能在等待期间关闭 channel。3.8 环境需按实际版本设置节点级 `consumer_timeout`；较新版本可按队列配置，见 [RabbitMQ 消费确认超时](https://www.rabbitmq.com/docs/consumers#acknowledgement-timeout)。Broker 参数和队列策略由部署环境管理；部署长超时任务前需核对该值。应用背压不会通过主动反复重投制造 delivery-limit 死信，但连接故障和 Broker 自身策略仍属于独立的运维边界。
 
 PUBLISHED → RUNNING 的本地确认与 HTTP 接收确认使用相同的状态保护，不能覆盖已提交的执行终态。状态事务按 Run → Attempt → Outbox 加锁，Attempt 使用当前锁定读取；Relay 仍只锁 Outbox，不反向锁 Run/Attempt。发布确认到达时，若执行结果已提交，则保留该结果，不重复推进状态。数据库并发验收见 [状态并发修复](run-state-concurrency-verification.md)，其中 MQ 测试模拟 Broker 已确认的持久化边界，不代表真实 Broker 故障测试。
 
@@ -170,4 +170,4 @@ MQ 未部署时可显式用 http，并设置 `TASKFLOW_MQ_HEALTH_ENABLED=false`�
 .\tools\test-mq.ps1 -SkipBuild -SkipBrowser
 ```
 
-test-mq 默认只对本仓库 Compose 的 rabbit1 做停机并在 finally 恢复，不删除数据卷；外部集群按上文使用人工停止/恢复步骤。测试成功仅删除本轮创建的 taskflow_it_ 随机 vhost，失败保留证据，不会清空 taskflow 业务 vhost。真实 MQ 测试不应使用业务队列或业务数据库。多数派丢失、网络分区与跨主机持久化恢复尚需额外环境演练，不能由 Mock 的 confirm 代替。
+test-mq 默认只对本仓库 Compose 的 rabbit1 做停机并在 finally 恢复，不删除数据卷；外部集群按上文使用人工停止/恢复步骤。测试成功仅删除脚本创建的 taskflow_it_ 随机 vhost，失败保留证据，不会清空 taskflow 业务 vhost。真实 MQ 测试不应使用业务队列或业务数据库。多数派丢失、网络分区与跨主机持久化恢复尚需额外环境演练，不能由 Mock 的 confirm 代替。

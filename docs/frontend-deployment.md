@@ -87,11 +87,11 @@ stop 使用 Nginx 的 quit 信号优雅退出；若端口尚未释放，稍等�
 
 API proxy_pass 保留 /api/v1 路径，明确连接/读取超时，禁止自动上游重试。HTML 使用 no-cache，带哈希的 assets 长期缓存；/jobs 等历史路由支持直接访问和刷新，缺失的 assets 返回 404。静态页面不需要启动 Node.js。
 
-Windows Nginx 包用于当前本地学习环境，仅监听回环地址。部署到服务器时使用该系统原生 Nginx，按实际目录配置 root、日志与上游；身份认证和 TLS 在后续交付阶段实现。
+Windows Nginx 包用于当前本地学习环境，仅监听回环地址。部署到服务器时使用该系统原生 Nginx，按实际目录配置 root、日志与上游；身份认证及生产 TLS 的部署要求见 [登录与入口安全](access-security.md)。
 
 ## 验证与故障排查
 
-登录功能的当前验证入口为 taskflow-web/playwright.access.config.js，配置专用测试身份后运行，见 [安全验证](access-security.md#验证)。下面旧版 test-frontend/test-execution/test-platform 脚本生成的隔离 YAML 和匿名请求基于此前无登录环境，不能直接作为新增鉴权后的全链路验收结果；需先补齐其身份会话及真实 Redis 环境。本轮未运行这些旧版匿名脚本。
+登录功能的当前验证入口为 taskflow-web/playwright.access.config.js，配置专用测试身份后运行，见 [安全验证](access-security.md#验证)。下面旧版 test-frontend/test-execution/test-platform 脚本生成的隔离 YAML 和匿名请求基于此前无登录环境，不能直接作为新增鉴权后的全链路验收结果；需先补齐其身份会话及真实 Redis 环境。2026-10-28 安全验证未运行这些旧版匿名脚本。
 
 ```powershell
 # 根目录：隔离测试，不写用户 MySQL
@@ -102,9 +102,9 @@ Windows Nginx 包用于当前本地学习环境，仅监听回环地址。部署
 .\tools\test-platform.ps1 -SkipBuild
 ```
 
-测试脚本先确认 19080/19081/19082/19088/8091 空闲，启动隔离的 Gateway 和三个业务服务，并从启动日志确认各自 H2 文件库，再运行可写的 API/浏览器测试。使用本机 Chrome，无需额外下载测试浏览器；退出时只清理本次创建的进程。
+测试脚本先确认 19080/19081/19082/19088/8091 空闲，启动隔离的 Gateway 和三个业务服务，并从启动日志确认各自 H2 文件库，再运行可写的 API/浏览器测试。使用本机 Chrome，无需额外下载测试浏览器；退出时只清理脚本创建且身份匹配的进程。
 
-隔离多服务测试由 test-execution.ps1 生成本轮临时 YAML，连接、端口、凭据与日志保存在被忽略的 `.tools/execution-e2e/<时间戳>`；数据库和 Redis 配置不在业务 Java 中硬编码。test-platform.ps1 另启动 Eureka 19161、Config 19188 和 OTLP 测试接收器 19118。
+隔离多服务测试由 test-execution.ps1 为每次测试生成独立 YAML，连接、端口、凭据与日志保存在被忽略的 `.tools/execution-e2e/<时间戳>`；数据库和 Redis 配置不在业务 Java 中硬编码。test-platform.ps1 另启动 Eureka 19161、Config 19188 和 OTLP 测试接收器 19118。
 
 - 页面可打开但接口失败：先检查 Gateway 8088 健康，再检查 Admin 实际端口和 Eureka 注册；核对 Nginx 上游为 Gateway。
 - 启动报端口占用：检查是否已有本项目实例，不要直接结束不明进程；可重新打包使用其他 HttpPort。

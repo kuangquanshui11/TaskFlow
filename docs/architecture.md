@@ -1,20 +1,20 @@
 # TaskFlow 微服务架构与维护约定
 
-公共入口安全采用独立 Keycloak 身份服务、Gateway/Admin 双重 JWT 验证、Admin 业务权限及 Redis JWT 会话（有效请求滑动续期 30 分钟）。Gateway 仅管理自有 Redis 限流键，不访问 Admin 会话或业务缓存。身份服务独立持久化账号，业务应用不共享其数据表；Scheduler/Worker 保留服务间协议鉴权。见 [登录与入口安全](access-security.md)。
+我们按任务配置、调度状态和业务执行划分 Admin、Scheduler、Worker 三个服务，使各自的代码、数据和部署可以独立维护。项目使用单代码仓库和 Maven 聚合构建，各服务独立运行、独立打包，通过版本化协议协作。
 
-日期：2026-10-27。
+Maven 模块负责构建组织；进程隔离、数据归属和协议约束共同构成服务边界。服务之间不共享业务实现、数据表或本地事务。
 
-## 需求与当前状态
+## 能力与边界
 
-用户要求后续代码按微服务原则拆分模块，职责清楚，便于维护和独立修改。项目采用单代码仓库、Maven 聚合、多个可独立运行和打包的 Spring Boot 服务。
+Admin 提供任务管理与详情缓存；Scheduler 接收手动触发，负责 Cron 自动调度和运行状态；Worker 注册 Handler 能力并执行任务。Scheduler 保存计划副本、Run/Attempt、配置快照、派发 Outbox 和 Worker 节点/会话历史；Worker 保存去重 Inbox 与待上报结果，周期上报心跳及负载。
 
-当前已交付三个独立服务、Admin 任务管理与详情缓存、手动执行闭环及 Cron 自动调度。Scheduler 保存计划副本、Run/Attempt、快照、派发 Outbox 和 Worker 节点/会话历史；Worker 保存去重 Inbox 与待上报结果，注册实际 Handler 能力并周期上报心跳及负载。派发默认经 RabbitMQ，管理台通过 Admin 查询 Scheduler 权威状态，新增工作节点页面。三节点 quorum 集群及 Broker 单节点停机已验收，当前旧版 Broker 的死信可靠转移仍有限制；执行有界续租已实现；MQ 按能力和负载选择独立 Worker 队列，Attempt 固定目标，租约失效后按上限新增 Attempt 重新选择节点，详见 [水平扩展](worker-horizontal-scaling.md)。见 [节点管理](worker-nodes.md)、[执行协议](execution-protocol.md) 与 [可靠派发](reliable-dispatch.md)。
+我们默认通过 RabbitMQ 派发任务，按能力和负载选择独立 Worker 队列，并固定每个 Attempt 的目标。执行支持有界续租；租约失效后，在尝试次数上限内新增 Attempt 并重新选择节点。管理台通过 Admin 查询 Scheduler 的权威运行状态和节点状态。三节点 quorum 集群及 Broker 单节点停机的验证结果见 [MQ 验证](mq-verification.md)；旧版 Broker 的死信可靠转移仍有限制。协议与恢复边界见 [水平扩展](worker-horizontal-scaling.md)、[节点管理](worker-nodes.md)、[执行协议](execution-protocol.md) 与 [可靠派发](reliable-dispatch.md)。
 
-Maven 多模块管理构建；独立进程、明确数据归属和协议协作落实服务边界。两个概念需要同时遵守。
+公共入口采用独立 Keycloak 身份服务、Gateway/Admin 双重 JWT 验证、Admin 业务权限及 Redis JWT 会话（有效请求滑动续期 30 分钟）。Gateway 仅管理自有 Redis 限流键，不访问 Admin 会话或业务缓存。身份服务独立持久化账号，业务应用不共享其数据表；Scheduler/Worker 使用服务间协议鉴权。见 [登录与入口安全](access-security.md)。
 
-## 浏览器访问与缓存目标
+## 浏览器访问与缓存
 
-用户确认的目标链路为：**浏览器 → Nginx（静态直返 / API 转发）→ Gateway（WebFlux/Netty）→ Admin Tomcat → Redis（命中则返回）→ MySQL（未命中查询并回填缓存）→ 逐层返回**。
+我们将静态资源交给 Nginx，API 请求经 Gateway 进入 Admin，以集中处理入口路由和安全策略。任务详情查询链路为：**浏览器 → Nginx → Gateway（WebFlux/Netty）→ Admin Tomcat → Redis（命中则返回）→ MySQL（未命中查询并回填缓存）→ 逐层返回**。
 
 Tomcat 使用 Admin 内嵌容器；Redis 由业务代码访问，数据库仍是权威来源。详情查询经独立查询用例先读缓存，未命中查数据库并回填。写用例始终读取数据库，提交后通过事务事件删除缓存；缓存不承担跨服务共享状态。默认 TTL 60 秒，失效失败有限重试后依靠过期淘汰；完整分支、并发旧数据边界与故障行为见 [访问与缓存流程](request-flow.md)。
 
@@ -62,11 +62,11 @@ com.taskflow.admin
    └─ exception/           业务异常
 ```
 
-这是用户最新要求的 Controller / Service / Mapper 结构，替代原 interfaces/application/domain/infrastructure 目录。调用方向为 Controller → Service 接口 → service/impl 实现 → Mapper。所有 Service 接口统一放在业务模块的 service 下，对应实现放在其 impl 子目录，通过 implements 实现；Controller 和其他 Service 依赖接口。没有数据访问需求的业务不创建 Mapper。system 业务包含独立 Controller、Service 接口与实现，以及响应、异常和过滤器。
+我们先按业务能力分包，再在模块内使用 Controller / Service / Mapper 分层，使相关改动集中在同一业务目录，并限制依赖方向。调用方向为 Controller → Service 接口 → service/impl 实现 → Mapper。所有 Service 接口统一放在业务模块的 service 下，对应实现放在其 impl 子目录，通过 implements 实现；Controller 和其他 Service 依赖接口。没有数据访问需求的业务不创建 Mapper。system 业务包含独立 Controller、Service 接口与实现，以及响应、异常和过滤器。
 
 Admin 使用 MyBatis-Plus 的 Spring Boot 4 Starter。Entity 放在 entity，Mapper 放在 mapper，分页和缓存装配放在 config，业务模型与 API DTO 不添加持久化注解。SQL 接口 JobMapper 标注 @Mapper，扫描只注册该注解对应接口，避免将 JobDataMapper、JobCacheMapper 误注册为 SQL 代理。根 POM 管理 MyBatis-Plus BOM 版本，仅 Admin 声明当前需要的依赖。数据库、Redis 与 MyBatis 参数统一放在 YAML，实际凭据通过忽略的本机 YAML 或环境变量提供，详见 [持久层约定](persistence.md)。
 
-JobController 负责新增、修改、启停和删除；JobQueryController 负责分页、详情和统计；SchedulePreviewController 负责 Cron 预览；HandlerController 负责处理器查询。具体类和验证见 [结构调整记录](structure-verification.md)。所有路径与 JSON 协议保持不变。
+JobController 负责新增、修改、启停和删除；JobQueryController 负责分页、详情和统计；SchedulePreviewController 负责 Cron 预览；HandlerController 负责处理器查询。具体类和验证见 [结构调整记录](structure-verification.md)，路径与 JSON 协议见 [接口文档](api.md)。
 
 ## 数据隔离
 
@@ -80,9 +80,9 @@ Admin Job ID 在 Scheduler 中是逻辑引用，不建立跨 schema 外键。Wor
 
 下一计划时间由 Scheduler 结合配置时区计算，与副本版本在同一事务中保存；查询和重启不重新计算。Admin 通过内部 HTTP 查询实际副本，不从展示缓存推测时间。到期扫描在本地事务中创建 Run/首次 Attempt、MQ 发送意图并推进计划，以数据库唯一键保护同一 Job/计划时间。补算、触发、派发准备和 MQ Relay 使用独立线程，具体见 [计划计算](plan-calculation.md) 与 [自动调度](automatic-scheduling.md)。
 
-## 分阶段通信方案
+## 通信与故障处理
 
-第一条业务链路已使用 HTTP 实现：Admin 接受手动触发，携带请求幂等键和数据库配置快照调用 Scheduler；Scheduler 在本地事务中保存 Run 与首次 Attempt，再扫描异步派发。Worker 先持久化去重记录并确认接收，执行完成后保存结果，再扫描上报。
+手动触发通过 HTTP 接入：Admin 携带请求幂等键和数据库配置快照调用 Scheduler；Scheduler 在本地事务中保存 Run 与首次 Attempt，再扫描异步派发。Worker 先持久化去重记录并确认接收，执行完成后保存结果，再扫描上报。
 
 手动触发接口返回 HTTP 202 与运行 id，接收成功不代表任务成功。Scheduler 扫描已提交但尚未成功派发的 Attempt，恢复进程退出留下的待执行工作。Worker 重启将之前 RUNNING 的记录标为未知副作用失败，不盲目重做；ACCEPTED 记录可继续执行。
 
@@ -117,11 +117,11 @@ Scheduler 的 dispatch 模块维护自己的 Outbox、领取版本和有限发�
 
 三个服务均暴露 /actuator/health，仅 Admin 提供管理台。Scheduler、Worker 的内部业务接口使用 /internal/v1，与 Admin 通过三份独立密钥协作；默认健康检查不公开连接或密钥。
 
-## 对已有计划的调整
+## 平台治理与部署模式
 
-保留原 Word 计划的 Job/Run/Attempt、Outbox、有限重试、租约和故障验证目标。单应用、APP_ROLE 和各角色共用权威状态库的实现路径改为三个独立服务；不跨服务共用数据库事务。
+我们将网关、注册发现和配置中心部署为独立基础设施应用，集中处理入口和服务治理；三个业务服务继续独立拥有数据和事务，平台应用不访问业务数据库。
 
-按用户最新要求增加网关、注册发现、配置中心和服务治理。保留 Java 21 / Boot 4.1.1，父 POM 引入兼容的 Spring Cloud 2025.1.4 BOM；新增三个基础设施应用，业务模块仍无相互 Maven 依赖。cloud 模式使用 Eureka 服务名、OpenFeign/LoadBalancer、Resilience4j、Micrometer OTel/OTLP；默认本地直连模式不依赖注册与配置中心。具体启动、认证、失败语义及验证边界见 [微服务技术栈](microservice-platform.md)。
+Java 21 / Boot 4.1.1 与 Spring Cloud 2025.1.4 BOM 由父 POM 管理版本，六个应用分别打包，业务模块之间无 Maven 依赖。cloud 模式使用 Eureka 服务名、OpenFeign/LoadBalancer、Resilience4j、Micrometer OTel/OTLP；默认本地直连模式不依赖注册与配置中心，便于独立开发和隔离测试。具体启动、认证、失败语义及验证边界见 [微服务技术栈](microservice-platform.md)。
 
 ## 技术参考
 

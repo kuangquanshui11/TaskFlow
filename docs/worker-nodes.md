@@ -35,7 +35,7 @@ Scheduler 在 MQ 模式按在线状态、Handler、transport、允许的 vhost/e
 
 独立 MQ Relay 在发布前再次检查节点，节点过期时推迟 Outbox 的 `nextPublishAt`，不领取发送租约、不增加发布次数。READY 和领取租约已经过期的 SENDING 都遵守这个时间；仍有效的 SENDING 不会被延后或接管。已经准备的 Attempt 继续受原 expiresAt 约束，不能借暂停发布无限延长执行租约。心跳恢复后，尚有效的原 Attempt 在到达下次检查时间后可继续派发。
 
-这些检查是本次准备/发布时的观察，不能与远程消费构成原子操作。离线不会撤回已在 Broker 中的消息，也不取消旧 Handler。节点 generation 只隔离注册/心跳，不能代替 Attempt 的 leaseVersion；执行有界续租已实现；租约失效可为同一 Run 新增 Attempt 并重新选择节点，不能把原 Attempt 直接改投。
+这些检查只反映准备或发布时的节点状态，不能与远程消费构成原子操作。离线不会撤回已在 Broker 中的消息，也不取消旧 Handler。节点 generation 只隔离注册/心跳，不能代替 Attempt 的 leaseVersion；执行有界续租已实现；租约失效可为同一 Run 新增 Attempt 并重新选择节点，不能把原 Attempt 直接改投。
 
 ## HTTP API
 
@@ -81,7 +81,7 @@ Worker 使用独立 `worker-heartbeat-` 单线程执行固定延迟周期，不�
 
 ## 页面与部署
 
-管理台新增 `/workers`，侧栏“工作节点”已启用，沿用原 Vue 3、设计令牌和系统字体。支持节点统计、关键字与状态筛选、分页、手动/自动刷新、Handler 与路由展示。页面展示更新时间和 Asia/Shanghai 时区；离开页面或隐藏标签页会取消请求并停止轮询。查询失败保留上次数据，状态显示“待刷新”，不继续宣称在线；首次失败和真实空列表有不同提示。移动端转为节点卡片，长标识、队列和 Handler 可换行。
+管理台新增 `/workers`，侧栏“工作节点”已启用，沿用原 Vue 3、设计令牌和系统字体。支持节点统计、关键字与状态筛选、分页、手动/自动刷新、Handler 与路由展示。页面展示更新时间和 Asia/Shanghai 时区；离开页面或隐藏标签页会取消请求并停止轮询。查询失败保留上次数据，状态显示“待刷新”，不继续显示为在线；首次失败和真实空列表有不同提示。移动端转为节点卡片，长标识、队列和 Handler 可换行。
 
 升级前准备同一份节点身份密钥：
 
@@ -93,6 +93,6 @@ Worker 使用独立 `worker-heartbeat-` 单线程执行固定延迟周期，不�
 
 先升级 Scheduler 应用 V6，再升级 Worker 和 Admin，并更新前端静态文件。首次升级时，Scheduler 在 Worker 注册成功前保留新任务为 READY。Worker 重启的新会话需要等旧会话超时，默认可能等待 30 秒；不要靠不断更换 workerId 绕过身份检查。MQ 尚未部署时继续按 [可靠派发](reliable-dispatch.md) 显式选择 HTTP 模式。
 
-本轮不自动升级当前业务实例或业务数据库。实现测试与运行验证见 [节点验证记录](worker-nodes-verification.md)。
+业务实例和数据库需按上述顺序显式升级。实现测试与运行验证见 [节点验证记录](worker-nodes-verification.md)。
 
 2026-10-27 补充扫描公平性修复，超过单批容量的资格不匹配任务不再阻塞后续正常任务。复现、MySQL 回归和租约边界见 [派发扫描公平性验证](dispatch-fairness-verification.md)。

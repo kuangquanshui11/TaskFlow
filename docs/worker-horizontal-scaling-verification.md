@@ -26,7 +26,7 @@
 
 脚本创建只监听回环地址的临时 MySQL 8.0.34 实例和随机测试 schema，不读取业务库配置。REPEATABLE READ 下 44 项全部通过：状态竞争 15、执行租约 11、派发公平性 9、Worker 集群派发 9。Scheduler V8 在该 MySQL 空库完成迁移，节点队列及路由唯一约束、目标绑定和回滚均真实执行 SQL。
 
-日志：`.tools/worker-scaling-mysql.log` 与 `.tools/run-state-mysql/20261028-160552-280/tests.log`。结束后临时实例已停止，文件证据保留。Worker V2 在 H2 迁移和进程验证中检查，本轮没有把它描述成真实 Worker MySQL 升级验收。
+日志：`.tools/worker-scaling-mysql.log` 与 `.tools/run-state-mysql/20261028-160552-280/tests.log`。结束后临时实例已停止，文件证据保留。Worker V2 仅在 H2 迁移和进程验证中检查，真实 Worker MySQL 升级尚未验收。
 
 ## 配置与脚本
 
@@ -45,7 +45,7 @@
 
 在现有 RabbitMQ 3.8.34 三节点集群创建随机隔离 vhost，四条 quorum 工作/死信队列各有三个在线副本。没有停止 Broker、修改业务 vhost 或升级业务实例。真实背压专项 1 项通过；Admin/Gateway/Scheduler/双 Worker 进程检查共 55 项通过，包含原有手动执行、Cron、配置同步、重启恢复与浏览器验收。
 
-本次扩展的实测结果：
+水平扩展实测结果：
 
 - 两个 Worker 使用不同队列、独立进程和独立 H2 文件 Inbox，同时完成 8 个 Run，两节点均实际执行业务 Handler。
 - 逐个核对 8 个 Attempt：目标 Worker 查询返回 SUCCEEDED，另一个 Worker 查询返回 404，未出现跨 Inbox 复制。
@@ -61,4 +61,4 @@
 
 Playwright 17 项全部通过，覆盖真实节点查询与错误恢复、离页停止轮询、MQ 非固定目标资格与满载文案、375px 长节点标识/队列换行，以及既有任务、执行和 Cron 页面。已检查桌面双节点截图及移动端长内容截图，未发现横向溢出或固定目标误标。截图位于同轮进程证据目录的 `workers-desktop.png`、`workers-mobile.png`。
 
-本轮使用 `-SkipFailover`，没有重跑 Broker 节点停机场景；Worker 进程故障已实际注入。旧版 Broker 的死信策略仍为 at-most-once，不宣称至少一次死信转移通过。本轮没有验证机器永久丢盘、跨 Inbox 接管、网络分区下任意 Handler 物理停止或外部副作用恰好一次。升级前排空及业务幂等要求仍然适用。
+集群验证使用 `-SkipFailover`，没有重跑 Broker 节点停机场景；Worker 进程故障已实际注入。旧版 Broker 的死信策略仍为 at-most-once，至少一次死信转移未验收。未验证机器永久丢盘、跨 Inbox 接管、网络分区下任意 Handler 物理停止或外部副作用恰好一次。升级前排空及业务幂等要求仍然适用。

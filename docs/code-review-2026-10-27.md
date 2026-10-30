@@ -1,16 +1,16 @@
 # 2026-10-27 代码审查
 
-本轮发现 3 个已复现的问题。现有自动化测试通过，不能据此认为并发和故障恢复已经完整覆盖。本轮没有修改业务实现；复现程序和日志保存在忽略目录 `.tools/review-20261027/`。
+审查复现了 3 个并发与故障恢复问题，现有自动化测试未覆盖这些场景。复现程序和日志保存在忽略目录 `.tools/review-20261027/`，结果对应修复前版本。
 
-后续状态：问题 1 已按用户确认采用 MySQL 行锁修复，见 [状态并发修复验证](run-state-concurrency-verification.md)；问题 2 已通过持久化延后检查修复，见 [扫描公平性验证](dispatch-fairness-verification.md)；问题 3 已补充结果保存的有限重试、恢复上报、耗尽诊断及线程池拒绝收尾，见 [结果保存恢复](worker-result-recovery.md)。以下保留原审查原因与复现记录。
+后续状态：问题 1 已采用 MySQL 行锁修复，见 [状态并发修复验证](run-state-concurrency-verification.md)；问题 2 已通过持久化延后检查修复，见 [扫描公平性验证](dispatch-fairness-verification.md)；问题 3 已补充结果保存的有限重试、恢复上报、耗尽诊断及线程池拒绝收尾，见 [结果保存恢复](worker-result-recovery.md)。以下保留原审查原因与复现记录。
 
 ## 范围和限制
 
-2026-10-28 后续进展：固定 Worker 的有界执行续租、执行者校验及 Handler 执行上下文已实现，见 [执行租约](execution-leases.md)；跨节点接管和任意外部副作用恰好一次仍不在交付范围。本文后续建议保留为原审查时的记录。
+2026-10-28 后续进展：固定 Worker 的有界执行续租、执行者校验及 Handler 执行上下文已实现，见 [执行租约](execution-leases.md)；跨节点接管和任意外部副作用恰好一次仍不在该续租机制的保障范围。本文后续建议保留为原审查时的记录。
 
-当前目录没有 `.git`，不能可靠计算“今天提交的 diff”。按 2026-10-27 的文件修改时间检查可靠派发、Worker 注册/心跳、Feign/发现/网关、执行与结果上报、启动配置及相关测试，并沿调用链读取关联代码。因此，以下问题属于当前版本，不能断言全部由今天的修改引入。
+审查范围包括可靠派发、Worker 注册/心跳、Feign/发现/网关、执行与结果上报、启动配置及相关测试。审查时尚未建立 Git 仓库，范围依据 2026-10-27 的文件修改时间和调用链确定；缺少提交差异，无法将问题归因于某次提交。
 
-根构建、前端单元测试和前端生产构建为本轮重新执行。浏览器端到端测试和真实 RabbitMQ 集群本轮未重跑，不沿用旧报告宣称本轮通过。MySQL 复现使用全新隔离的数据目录、13387 端口及测试 schema，不连接业务 MySQL；实例已停止。
+2026-10-27 执行了根构建、前端单元测试和前端生产构建；浏览器端到端测试和真实 RabbitMQ 集群验收未执行。MySQL 复现使用全新隔离的数据目录、13387 端口及测试 schema，不连接业务 MySQL；实例已停止。
 
 ## 1. P1：并发时已成功的 Run 会退回 RUNNING
 
@@ -36,7 +36,7 @@ REVIEW CONCURRENT_CALLBACK: run=RUNNING, attempt=SUCCEEDED, expected both SUCCEE
 
 建议：保持 Run → Attempt 的统一锁顺序，取得 Run 锁后对 Attempt 使用当前锁定读取；状态 SQL 同时保护状态/当前 Attempt/租约，并返回影响行数。只有 Attempt 的状态转换成功才允许推进 Run，Run 更新也必须拒绝终态回退。补充真实 MySQL 的并发回调、重复回调和派发确认竞争测试，不能仅依赖 H2。
 
-证据：`.tools/review-20261027/mysql-probe.log`；复现代码 `ReviewProbe.concurrentCallback()`。本轮隔离空 MySQL 也成功应用 Scheduler V1–V6，不能替代已有数据库的增量升级验证。
+证据：`.tools/review-20261027/mysql-probe.log`；复现代码 `ReviewProbe.concurrentCallback()`。隔离空 MySQL 成功应用 Scheduler V1–V6，不能替代已有数据库的增量升级验证。
 
 ## 2. P1：100 条不可派发任务会挡住后面的正常任务
 
@@ -75,7 +75,7 @@ REVIEW FINISH_FAILURE: worker state=RUNNING, reportCount=0, handlerCalls=1
 
 证据：`.tools/review-20261027/probe-worker.log`；复现代码 `ReviewProbe.workerFinishFailure()`。
 
-## 本轮验证
+## 2026-10-27 验证结果
 
 | 项目 | 结果 |
 | --- | --- |
@@ -91,13 +91,13 @@ REVIEW FINISH_FAILURE: worker state=RUNNING, reportCount=0, handlerCalls=1
 
 根验证日志：`.tools/review-20261027-verify.log`。额外复现是在确认当前缺陷仍存在，不属于修复后的回归测试通过。
 
-## 后续按小步推进
+## 修复顺序与验收条件
 
-1. **先修并发状态回退。** 本次只调整 Scheduler 状态读取和转换保护。验收：真实 MySQL 并发下 Run/Attempt 都保持正确终态，重复回调幂等，旧租约拒绝。
+1. **先修并发状态回退。** 修复范围限于 Scheduler 状态读取和转换保护。验收：真实 MySQL 并发下 Run/Attempt 都保持正确终态，重复回调幂等，旧租约拒绝。
 2. **再修扫描公平性。** 为不可派发任务持久化安排后续检查。验收：前面至少 100 条不可派发时，后面的正常任务仍能派发；等待不增加 Attempt 或派发次数。
 3. **补 Worker 结果保存恢复。** 结果保存独立于 Handler 执行。验收：短暂 SQL 故障恢复后，真实终态可保存和上报，Handler 始终只执行一次。
-4. **补真实基础设施验收。** 先验证隔离 MySQL 从旧 V4/V5 增量升级，再验证真实 RabbitMQ 三节点的确认、消费确认、重复投递和单节点故障。每次一种故障，保留实际证据；环境未就绪时不宣称完成。
+4. **补真实基础设施验收。** 先验证隔离 MySQL 从旧 V4/V5 增量升级，再验证真实 RabbitMQ 三节点的确认、消费确认、重复投递和单节点故障。每次一种故障，保留实际证据；环境未就绪的项目标记为未验证。
 5. **单独实现执行续租。** 固定 Worker 内先完成 Attempt 心跳、状态/leaseVersion/身份检查和有效期延长；Worker 节点心跳继续只表示节点存活。
 6. **最后做失联恢复。** 先明确副作用未知时哪些任务允许重试，再实现旧租约隔离与故障对账；跨节点接管另开验收范围。
 
-第 1、2、3 步已按用户确认实施，第 3 步的次数上限、进程崩溃与副作用未知边界见 [结果保存恢复](worker-result-recovery.md)。后续先补真实基础设施验收，再分别实施执行续租和失联恢复。固定 Worker 路由、没有跨节点接管、没有完整配置对账与真实 MQ 集群验收属于已记录的阶段边界，本轮没有把它们重复包装成新发现的缺陷。
+第 1、2、3 步的修复已完成，第 3 步的次数上限、进程崩溃与副作用未知边界见 [结果保存恢复](worker-result-recovery.md)。上述顺序记录审查时的修复计划；真实 MQ 和执行续租的后续进展见 [MQ 验证](mq-verification.md) 与 [执行租约](execution-leases.md)。跨节点接管、完整配置对账等能力需独立设计与故障验收。

@@ -31,7 +31,7 @@
 - Worker 将终态和待上报标记一起持久化，再由扫描器有限重报。Worker 重启后保留 ACCEPTED 工作；之前 RUNNING 的执行转为失败/WORKER_RESTARTED，不盲目重做未知外部副作用。
 - Worker 对同一份已完成结果有限重试本地保存，默认总共 5 次、间隔 500ms，不重新调用 Handler；原执行槽位保留到保存结束。提交成功但确认丢失时核对相同终态，冲突不覆盖。耗尽或中断记录可按 Run / Attempt 定位的错误；数据库可能仍为 RUNNING，重启继续表示副作用未知。线程池拒绝已领取任务时以 EXECUTOR_REJECTED 收尾。配置、诊断和验证见 [结果保存恢复](worker-result-recovery.md)。
 - Worker 派发扫描与结果上报使用两个独立的单线程调度器，节点心跳仍使用独立调度器。结果上报使用 `workerReportScheduler`（线程名前缀 `taskflow-report-`），采用 fixedDelay，上一轮结束后再等待扫描间隔启动下一轮，不并发执行多轮上报；派发与上报均受 `taskflow.execution.scanning-enabled` 控制。
-- 每轮上报从进入 `reportPending()` 时计算 `taskflow.execution.report-budget` 截止时间（默认 2s，必须大于 0 且不超过 30s）。每条记录在 `reportClaim` 之前检查预算，到期则结束本轮，剩余记录不领取、不发送、不消耗重报次数；下轮按原有到期条件继续处理。预算仅在记录之间生效，单条在途请求不会被中断，预算耗尽只记录一次 debug 日志。
+- 每轮上报从进入 `reportPending()` 时计算 `taskflow.execution.report-budget` 截止时间（默认 2s，必须大于 0 且不超过 30s）。每条记录在 `reportClaim` 之前检查预算，到期则结束当前上报扫描，剩余记录不领取、不发送、不消耗重报次数；下轮按原有到期条件继续处理。预算仅在记录之间生效，单条在途请求不会被中断，预算耗尽只记录一次 debug 日志。
 - 结果上报仍为 at-least-once 语义：先持久化 claim，再在事务外发送 HTTP，收到确认才标记已上报；响应丢失时可能重发，Scheduler 幂等接收。有限重报次数与恢复门控保持不变，不承诺无限重试或必然送达。
 - Scheduler 终态写入检查 attemptId、当前 Attempt、目标 Worker、已领取执行会话、状态、leaseVersion 和未过期租约。重复相同终态幂等确认，不接受冲突终态。租约过期不代表旧 Worker 已物理停止。
 - Attempt 绑定的 Worker 在调用 Handler 前领取短租约，绑定 workerId 与独立执行会话；后续独立续租，不更改派发消息或 leaseVersion，不延长硬截止。Handler 接收快照与 ExecutionContext；业务幂等以 runId 为稳定范围，attemptId 用于尝试去重，leaseVersion 仅作为同一 Run 内的 fencing 版本。超时、取消、保存及上报有效期见 [执行租约](execution-leases.md)。
@@ -76,4 +76,4 @@ flowchart LR
 
 连接超时默认 2 秒、HTTP 请求超时 3 秒；扫描间隔 500ms。Scheduler 派发总尝试次数默认 5，传输重试间隔 2 秒，租约宽限 10 秒；业务重试从快照读取。Worker 并行执行槽位默认 4、待处理上限 32，结果重报总次数 30、间隔 2 秒。Java 不硬编码服务地址、数据库参数或密钥。
 
-单轮上报的网络等待按预算 B 加最后一条在途请求的最大耗时 T 估算，上界为 B + T；若单条请求最多 3s，默认约为 2s + 3s = 5s，而非 100 × 3s = 300s。当前 Feign 分别使用 connect-timeout 作为连接超时、request-timeout 作为读取超时；将这两个阶段的超时相加，保守估算为 2s + (2s + 3s) = 7s。此估算另需加数据库访问、DNS、本地处理与线程调度开销；读取超时也不等于整个 HTTP 调用的硬截止时间，因此不是整个方法耗时的硬实时保证。fixedDelay 的 500ms 是轮次之间的等待，不计入本轮耗时。上报等待不会占用派发扫描线程。
+单轮上报的网络等待按预算 B 加最后一条在途请求的最大耗时 T 估算，上界为 B + T；若单条请求最多 3s，默认约为 2s + 3s = 5s，而非 100 × 3s = 300s。当前 Feign 分别使用 connect-timeout 作为连接超时、request-timeout 作为读取超时；将这两个阶段的超时相加，保守估算为 2s + (2s + 3s) = 7s。此估算另需加数据库访问、DNS、本地处理与线程调度开销；读取超时也不等于整个 HTTP 调用的硬截止时间，因此不是整个方法耗时的硬实时保证。fixedDelay 的 500ms 是轮次之间的等待，不计入单轮执行耗时。上报等待不会占用派发扫描线程。

@@ -41,18 +41,18 @@ Scheduler 新增 1 项测试覆盖：满载仍 ONLINE 但不可派发、首次�
 
 Broker 专项使用真实 Spring AMQP listener、手动 ACK、prefetch=1 和 Worker 独立 H2 Inbox：填满本地容量后投递消息，确认等待超过 4 次仍未返回、Inbox 尚无新记录且死信队列为空；释放一个容量后接收原 Attempt；再次投递相同事件仍只保留一条 Inbox；首次投递已过期事件也不新增 Inbox，最终死信队列仍为空。
 
-本轮使用远程 RabbitMQ 3.8.34 三节点、三副本 quorum 测试队列：
+真实 Broker 验证使用远程 RabbitMQ 3.8.34 三节点、三副本 quorum 测试队列：
 
 | 验证 | 结果 |
 | --- | --- |
 | 真实 Broker 满载背压专项 | 1 项通过，0 失败、0 错误、0 跳过；满载/过期处理后死信队列为空 |
 | 真实三服务 MQ 闭环 | 43 项通过，包含执行、业务重试、重复事件、配置同步、Cron、服务重启恢复与节点检查 |
-| 隔离资源清理 | 测试进程退出，本轮随机测试 vhost 删除成功 |
+| 隔离资源清理 | 测试进程退出，脚本创建的随机测试 vhost 删除成功 |
 
 证据：`.tools/capacity-backpressure-mq.log`、`.tools/mq-e2e/taskflow_it_85647b60a6ac4e34819b698a982b5c1c/report.json` 及同目录 `backpressure.log`、`.tools/execution-e2e/20261028-113322-031/report.json`。日志和含凭据的测试配置保持忽略，不纳入提交。
 
 ## 边界
 
-此次不自动重启常驻应用、不更新业务数据库、不改远程 Broker 参数或业务队列策略。验收只使用自己的随机测试 vhost 和数据库，不进行 Broker 停机注入；成功后脚本仅删除本轮测试 vhost。
+验收仅使用隔离的随机 vhost 和数据库，不注入 Broker 停机故障。常驻应用、业务数据库、远程 Broker 参数和业务队列策略未变更；成功后脚本仅删除测试 vhost。
 
 心跳 gating 不等于容量预订，已准备和已发布消息仍受原执行租约约束。没有实现无限等待、自动续租或执行成功保证。Broker 的消费确认超时需要覆盖允许的最长在途租约并留出数据库 I/O 余量；连接故障及 Broker 的 delivery-limit 等策略是独立边界。当前远程 3.8.34 的旧版死信转移保障不因本修复改变，见 [可靠派发](reliable-dispatch.md) 和 [MQ 验收](mq-verification.md)。

@@ -66,6 +66,6 @@
 
 数据库 URL、认证参数入口、会话时区与 REPEATABLE READ 统一声明在 `application-test-run-state-mysql.yml`；脚本通过测试专用环境变量选择端口与随机 schema，不读取业务本机 YAML 的连接信息。测试初始化器在创建数据源和执行 Flyway 前，只允许隔离 H2 或具有专用 schema 前缀的本机 MySQL URL。默认 Maven 验证不需要 MySQL。
 
-MQ 测试执行真实 Scheduler 事务和 Outbox 读取，模拟 Broker 已确认的数据库边界；未连接真实 RabbitMQ，不宣称完成 Broker 集群验收。本轮没有重跑浏览器或整套跨服务进程验收，没有替换运行中的业务服务。
+MQ 测试执行真实 Scheduler 事务和 Outbox 读取，模拟 Broker 已确认的数据库边界；未连接真实 RabbitMQ，Broker 集群不在验证范围内。浏览器和整套跨服务进程验收未执行，业务服务未替换。
 
-本次预防后续状态回退，不会自动修复此前已经不一致的历史记录。历史数据需另行对账后修复，不能盲目重跑业务任务。后续已完成 [扫描公平性修复](dispatch-fairness-verification.md)，本文件保留该阶段的原测试计数；Worker 结果保存失败仍在 [审查报告](code-review-2026-10-27.md) 中保留为后续工作。
+行锁和条件更新用于防止后续状态回退，不会自动修复此前已经不一致的历史记录。历史数据需另行对账后修复，不能盲目重跑业务任务。后续已完成 [扫描公平性修复](dispatch-fairness-verification.md)，本文件保留该阶段的原测试计数；Worker 结果保存失败仍在 [审查报告](code-review-2026-10-27.md) 中保留为后续工作。

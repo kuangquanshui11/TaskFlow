@@ -12,13 +12,13 @@ Scheduler 的 node 模块提供节点选择，execution 模块拥有 Attempt 的
 4. 同一 Scheduler 本地事务绑定 `run_attempt.target_worker_id`、准备原始命令，并写入 Outbox 的 workerId/vhost/exchange/queue/routingKey 快照。任一步失败全部回滚。事务内不等待 Broker 或远程 HTTP。
 5. Relay 发布前只检查原目标是否仍在线、支持 Handler 且路由未变；不会再选其他节点。满载或离线则推迟发布，不增加发送次数、不延长原执行硬截止。Publisher 使用 Outbox 路由，确认丢失后仍发送相同事件和目标。
 
-负载是观测而非容量预订：多个 Scheduler 实例可能同时观察到空闲。Worker 本地原子接收检查、有限执行槽位与 MQ 背压仍是最终保护。当前选择会读取在线节点和候选的在途计数，适合本项目规模；没有宣称任意规模下的精确负载均衡。节点查询的 `dispatchEligible` 继续表示心跳观察资格，`target=true` 仅表示 HTTP 固定目标。
+负载是观测而非容量预订：多个 Scheduler 实例可能同时观察到空闲。Worker 本地原子接收检查、有限执行槽位与 MQ 背压仍是最终保护。当前选择会读取在线节点和候选的在途计数，适合本项目规模；任意规模下的精确负载均衡尚未验证。节点查询的 `dispatchEligible` 继续表示心跳观察资格，`target=true` 仅表示 HTTP 固定目标。
 
 ## 身份、队列与恢复边界
 
 - 一个 workerId 对应一个持久化 Inbox 和一个执行进程。重启复用原数据库、workerId 和队列；不同节点不得共用 Inbox schema、数据库账号或队列。
 - Scheduler 约束同一 vhost/queue 唯一，以及同一 vhost/exchange/routingKey 唯一，避免两个注册节点通过同一路由接收到命令副本。Broker 管理员仍必须保证一个 routingKey 只绑定对应工作队列；Scheduler 不检查 Broker 上的全部绑定。
-- 节点存在已绑定且未终结的 Attempt 时，新会话不得变更能力、transport 或路由。显示名称和容量可以修改；能力/路由调整应先停止新派发并排空旧工作。数据库丢失不能通过复用 workerId 声称已恢复。
+- 节点存在已绑定且未终结的 Attempt 时，新会话不得变更能力、transport 或路由。显示名称和容量可以修改；能力/路由调整应先停止新派发并排空旧工作。数据库丢失后，复用 workerId 无法恢复原 Inbox。
 - Node 注册会话与执行租约会话独立。首次领取必须匹配 Attempt 目标；领取后绑定 ownerWorkerId/ownerSessionId，其他进程不能用相同 workerId 接管旧执行。
 - Worker 从 ACCEPTED 转 RUNNING 时，将结果所属 workerId/sessionId 同步写入本地记录；恢复、保存和重报始终使用该记录的原执行身份，不能用新进程会话代替。
 - Worker 在 Inbox 提交后 ACK，Broker 不再保留这条 delivery。某节点宕机后，其他节点不会读取它的 Inbox，也不会立即接管它已 ACK 的排队任务。未领取短租约的任务需要等待硬截止；已领取任务可在短租约过期后由 Scheduler 收尾。
@@ -35,7 +35,7 @@ Scheduler `taskflow.execution.retry-on-lease-loss` / `TASKFLOW_RETRY_ON_LEASE_LO
 
 MQ `taskflow.dispatch.v1` 命令格式不变，目标路由保存在 Scheduler。内部 `POST /internal/v1/attempts/updateResult` 新增必填 `workerId/sessionId`，仍使用结果上报密钥；缺少字段为 400，目标、已领取会话、版本或有效租约不匹配为 409。终态相同结果也须先匹配执行身份，才可幂等确认。租约接口路径不变，首次领取改为校验 Attempt 目标。Run 查询的 Attempt 增加 nullable `targetWorkerId`。
 
-Scheduler Flyway V8 增加目标与路由列、索引和路由唯一约束；Worker Flyway V2 增加结果所属身份。升级前排空在途和待重报工作，备份各自数据库，再先升级 Scheduler、后升级所有 Worker。新增必填结果字段不支持新旧 Worker 混用；本次修改不自动升级业务实例或数据库。
+Scheduler Flyway V8 增加目标与路由列、索引和路由唯一约束；Worker Flyway V2 增加结果所属身份。升级前排空在途和待重报工作，备份各自数据库，再先升级 Scheduler、后升级所有 Worker。新增必填结果字段不支持新旧 Worker 混用；业务实例和数据库需按上述顺序显式升级。
 
 升级前检查 `worker_node` 是否存在重复的 `(dispatch_vhost,dispatch_exchange,dispatch_routing_key)`；有冲突应先修复 Broker 绑定和节点配置，否则唯一约束迁移会失败。旧版已派发 Attempt/Outbox 没有可靠的目标快照，新版不会根据当前配置猜测目标、改投或重发；其租约到期后按重试策略收尾。旧 Worker 的历史结果也不会补造执行会话。未排空升级会影响在途结果确认，必要时在升级期间显式关闭租约失效重试。
 

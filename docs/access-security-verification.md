@@ -14,10 +14,10 @@
 | 桌面及 375px 页面 | 通过 | 登录页截图、无横向溢出；无浏览器脚本异常 |
 | Nginx 配置 -t | 通过 | 由正式模板生成隔离配置，含 IP limit_req 规则 |
 
-本轮真实身份验证使用独立 Keycloak 26.8.1、随机测试账号、H2 Admin 和测试源集中的会话存储；浏览器把 idle-timeout 缩短为 10 秒验证跳转，Java 测试通过可控时钟验证精确的 30 分钟边界。测试身份和运行数据仅位于忽略的 .tools，未写业务 MySQL，也未修改实际 Keycloak 用户。测试公私钥是公开的 RSA 测试夹具，不可用于部署环境。
+真实身份验证使用独立 Keycloak 26.8.1、随机测试账号、H2 Admin 和测试源集中的会话存储；浏览器把 idle-timeout 缩短为 10 秒验证跳转，Java 测试通过可控时钟验证精确的 30 分钟边界。测试身份和运行数据仅位于忽略的 .tools，未写业务 MySQL，也未修改实际 Keycloak 用户。测试公私钥是公开的 RSA 测试夹具，不可用于部署环境。
 
-用户明确要求不启动不可达的 Redis，因此真实 Redis Lua/TTL 与跨 Gateway 共享额度测试未执行。已提供 RedisSessionIntegrationTests 和 RedisRateLimitIntegrationTests 供恢复 Redis 后显式运行；不把测试替身描述成真实 Redis 验收。本轮也未验收 Nginx → Gateway → 真实 Redis → Admin 的完整部署链路，未安装生产 TLS 证书，未切换正在使用的服务或 Nginx 发行包。
+Redis 在验证环境中不可达，真实 Redis Lua/TTL 与跨 Gateway 共享额度测试未执行。RedisSessionIntegrationTests 和 RedisRateLimitIntegrationTests 可在 Redis 恢复后显式运行；测试替身仅覆盖隔离环境中的应用逻辑。Nginx → Gateway → 真实 Redis → Admin 的完整部署链路及生产 TLS 尚未验收，业务服务和 Nginx 发行包未切换。
 
-根目录 verify 首轮发现旧并发测试未传递用户上下文以及默认拒绝改变 404/405 的断言，已修正。真实登录联调发现 Keycloak 默认客户端 scope 必须包含 basic 才会携带 sub/auth_time，已修正 Realm 并复验。运行中的测试 JAR 曾锁住 Windows 打包目标，后续使用复制到 .tools 的独立 JAR，完整构建最终通过。
+安全回归中的并发请求携带独立身份上下文，未配置路径/方法按默认拒绝策略断言。Keycloak 默认客户端 scope 包含 basic，真实登录已验证 sub/auth_time 字段；测试进程使用复制到 .tools 的独立 JAR，避免锁住 Windows 构建目标。
 
 部署与协议见 [登录与入口安全](access-security.md)。

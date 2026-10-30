@@ -2,12 +2,12 @@
 
 日期：2026-10-26。环境：Windows、Node.js 24.15.0、Chrome、Vue 3.5.44、Vite 8.3.5、Nginx 1.31.8、Java 21、Spring Boot 4.1.1。
 
-## 交付结果
+## 功能与部署范围
 
 - taskflow-web 独立构建，工作台、任务管理、时间预览接入真实 Admin API。
 - Nginx 8090 静态托管、/api/ 转发至本机 Admin 18080，使用本机既有 MySQL 数据库。
 - 生成 dist/taskflow-web.zip 和 dist/taskflow-nginx-windows.zip，提供独立发行目录及启动/停止/重载脚本。
-- docs/request-flow.md 记录用户确认的 Nginx → Tomcat → Redis → MySQL 目标链路，明确 Redis 尚未接入。
+- 任务详情规划采用 Nginx → Tomcat → Redis → MySQL 链路；2026-10-26 前端验证时尚未接入 Redis，后续实现见 [访问与缓存流程](request-flow.md)。
 
 ## 自动化验证
 
@@ -29,7 +29,7 @@
 5. 编辑期间修改时间规则，忽略旧请求返回的预览结果。
 6. 375px 导航、任务表格、编辑抽屉，无页面横向溢出，Escape 关闭窗口。
 
-可写浏览器验证仅连接专用 Nginx 8091 → Admin 18081 → H2 内存数据库。脚本从启动日志确认 H2 后才开始浏览器写入；测试后停止测试实例。用户 MySQL 没有写入测试任务。
+可写浏览器验证仅连接专用 Nginx 8091 → Admin 18081 → H2 内存数据库。脚本从启动日志确认 H2 后才开始浏览器写入；测试后停止测试实例。业务 MySQL 未写入测试任务。
 
 ## 本机实际访问
 

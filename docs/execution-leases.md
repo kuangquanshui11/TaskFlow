@@ -1,6 +1,6 @@
 # Worker 执行租约
 
-Scheduler 拥有执行资格和 Run/Attempt 权威状态，Worker 通过版本化 HTTP API 领取和续租。节点心跳仍只代表进程存活。本轮不引入跨 Worker 接管，不修改派发消息、Inbox fingerprint 或续租过程中的 `leaseVersion`。
+Scheduler 拥有执行资格和 Run/Attempt 权威状态，Worker 通过版本化 HTTP API 领取和续租。节点心跳仍只代表进程存活。我们将续租限定在固定 Worker 内，保持派发消息、Inbox fingerprint 和续租过程中的 `leaseVersion` 不变；同一 Attempt 的跨 Worker 接管不在该机制范围内。
 
 ## 时间边界
 
@@ -66,7 +66,7 @@ Handler 接收 `Snapshot` 和 `ExecutionContext`。上下文提供 Run/Attempt �
 
 下游需将业务幂等键的唯一约束和实际副作用放在自己的同一事务中。若下游还要 fencing，应在资源写入的同一事务中校验并推进版本；携带 token 而不校验不形成保护。同一 Run 的后续 Attempt 可以拒绝较旧 Attempt 的写入；多个 Run 操作同一业务资源时，需要该资源自己的递增 fencing token 或业务版本，不能直接比较不同 Run 的 `leaseVersion`。
 
-`checkActive()` 与远程写入之间仍有时间窗口。长 GC、线程忽略中断及已发出的外部请求都可能在租约失效后产生副作用；续租和本地中断不能撤销这些操作。下游去重/fencing 也不自动保证“到期后任何写入都失败”，严格的有效性约束需要下游参与授权校验。本轮未引入外部业务系统，不声称已实现任意副作用恰好一次。
+`checkActive()` 与远程写入之间仍有时间窗口。长 GC、线程忽略中断及已发出的外部请求都可能在租约失效后产生副作用；续租和本地中断不能撤销这些操作。下游去重/fencing 也不自动保证“到期后任何写入都失败”，严格的有效性约束需要下游参与授权校验。外部业务系统未参与验证，任意副作用的恰好一次执行不在保障范围内。
 
 ## 配置、升级与验证
 
@@ -74,6 +74,6 @@ Scheduler `taskflow.execution.lease.duration` 默认 30s，允许 10s–5m，通
 
 应满足：续租间隔 + 一次请求与调度开销 < 租约时长 − 安全余量。安全余量应覆盖时钟漂移和检测开销；网络长时间阻塞时宁可失去资格，也不越过最后确认的本地期限。接近硬截止时可用时间自然缩短，续租不能扩展它。
 
-Scheduler Flyway V7 仅新增 nullable `lease_until`、`owner_worker_id`、`owner_session_id` 和索引；保留既有状态、消息、版本及截止时间。升级前排空在途工作，先升级 Scheduler 再升级 Worker；新 Worker 依赖新续租接口，不兼容旧 Scheduler。旧 Worker 的任务没有新执行上下文，不能将混合版本运行描述为已具备完整保护。本次代码提交不替换已有运行实例。
+Scheduler Flyway V7 仅新增 nullable `lease_until`、`owner_worker_id`、`owner_session_id` 和索引；保留既有状态、消息、版本及截止时间。升级前排空在途工作，先升级 Scheduler 再升级 Worker；新 Worker 依赖新续租接口，不兼容旧 Scheduler。旧 Worker 的任务没有新执行上下文，不能将混合版本运行描述为已具备完整保护。版本升级需显式部署新实例。
 
 验证命令与实际结果见 [执行租约验收](execution-leases-verification.md)。

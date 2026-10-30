@@ -2,9 +2,9 @@
 
 验证日期：2026-10-26。范围为 Admin 详情缓存、提交后失效与 Redis 故障降级。Scheduler / Worker 仍只有启动骨架，未加入派发或执行逻辑。
 
-以上范围为缓存初次交付时的状态；后续三服务手动执行已实现，见 [执行验证](execution-verification.md)。执行权威状态仍不使用 Admin 展示缓存。
+以上范围为 2026-10-26 缓存验证时的状态；后续三服务手动执行已实现，见 [执行验证](execution-verification.md)。执行权威状态仍不使用 Admin 展示缓存。
 
-本文保留初次交付缓存时的日志和测试类名称。后续已按用户要求迁移为 Controller / Service / Mapper 结构，原 RedisJobDetailCacheTests 现为 job/mapper/redis/RedisJobCacheMapperTests；最新完整回归和目录见 [结构调整记录](structure-verification.md)，缓存语义保持不变。
+本文保留 2026-10-26 验证时的日志和测试类名称。Controller / Service / Mapper 结构中的对应测试为 job/mapper/redis/RedisJobCacheMapperTests，原名为 RedisJobDetailCacheTests；最新完整回归和目录见 [结构调整记录](structure-verification.md)，缓存语义保持不变。
 
 ## 已实现行为
 
@@ -24,7 +24,7 @@
 .\mvnw.cmd -o -B '-Daether.syncContext.named.factory=rwlock-local' -l .tools/verification/admin-cache-root-verify.log verify
 ```
 
-结果：BUILD SUCCESS，44 项通过、4 项远程 Redis 检查默认跳过，无失败或错误。三个服务均生成独立可执行 JAR。离线参数复用已有 Maven 依赖；rwlock-local 避免沙箱对用户 Maven 仓库锁文件的写入限制，不影响业务配置。
+结果：BUILD SUCCESS，44 项通过、4 项远程 Redis 检查默认跳过，无失败或错误。三个服务均生成独立可执行 JAR。离线参数复用已有 Maven 依赖；rwlock-local 为验证环境的 Maven 仓库锁配置，不影响业务配置。
 
 | 测试组 | 通过 | 默认跳过 | 覆盖 |
 | --- | --- | --- | --- |
@@ -60,12 +60,12 @@ Remove-Item Env:TASKFLOW_REDIS_CONNECTION_TEST
 | 修改、启用、停用、删除 | 每次提交后对应真实 key 不存在；重新读取获得新值，删除后返回任务不存在且不缓存空值 |
 | 损坏 JSON | 回退数据库，并以正常快照替换损坏值 |
 
-真实测试使用已配置 Redis 上随机独立前缀 taskflow:admin:it:detail:<UUID>:，仅操作本次创建的精确 key，并在结束后逐个删除；不执行扫描、清空数据库或停止 Redis。SQL 使用 H2，不对用户 MySQL 执行缓存验收写入。远程测试在创建任何数据源和执行迁移/建表之前校验 H2 与 Flyway 配置，避免本机 YAML 的加载优先级覆盖测试隔离。
+真实测试使用已配置 Redis 上随机独立前缀 taskflow:admin:it:detail:<UUID>:，仅操作测试创建的精确 key，并在结束后逐个删除；不执行扫描、清空数据库或停止 Redis。SQL 使用 H2，不对业务 MySQL 执行缓存验收写入。远程测试在创建任何数据源和执行迁移/建表之前校验 H2 与 Flyway 配置，避免本机 YAML 的加载优先级覆盖测试隔离。
 
 ## 验证限制
 
 - 失效失败和并发旧回填可能造成短时旧详情，包括刚删除的任务；默认有效期截至原查询开始后 60 秒，多实例需要时钟同步。这不是强一致性，也不限制已在途请求的总耗时。
-- 本阶段未引入持久化补偿任务；提交后进程崩溃或删除重试耗尽时由 TTL 恢复。Redis 故障与重试耗尽通过异常注入验证，没有破坏用户 Redis。
+- 缓存失效未引入持久化补偿任务；提交后进程崩溃或删除重试耗尽时由 TTL 恢复。Redis 故障与重试耗尽通过异常注入验证，未对业务 Redis 注入故障。
 - Redis 健康检查与缓存开关独立；启用 Redis 健康检查时，Redis 故障仍会使健康端点 DOWN，即使业务查询可以降级。
-- 未对真实 MySQL 与 Redis 联动执行可写验收，也未做缓存性能基准或重新执行浏览器测试；本次接口协议与前端代码没有变更。
-- 已运行的旧 Admin 进程需要重新启动才能加载本次代码；没有自动停止或替换用户现有进程。
+- 未对真实 MySQL 与 Redis 联动执行可写验收，也未做缓存性能基准或重新执行浏览器测试。
+- Admin 需重新部署并启动才能加载缓存实现；验证未替换业务进程。

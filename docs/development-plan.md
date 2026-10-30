@@ -1,12 +1,12 @@
 # TaskFlow 分阶段实施与验收
 
-本计划采用三个独立服务，遵守根目录 AGENTS.md 和 architecture.md。先完成可验证的基础能力，再推进跨服务业务、调度和可靠性。
+我们以 Admin、Scheduler、Worker 三个业务服务为核心，按工程边界、任务管理、执行、调度、可靠性和运维划分实施阶段。每个阶段独立验收，架构约束见根目录 AGENTS.md 和 [架构文档](architecture.md)。
 
-2026-10-27 按用户最新要求补入平台阶段：三个业务服务之外增加 Gateway、Registry、Config Server，六个应用独立打包。已实现 Cloud 2025.1.4、网关公共路由与隔离、Eureka、Config native/Git、OpenFeign/LB、Resilience4j、Micrometer OTel/OTLP；直接开发模式继续可用。具体配置和实测边界见 [技术栈](microservice-platform.md) 与 [平台验证](microservice-platform-verification.md)。下方各阶段测试数为当时验收记录，最新结果以上述平台验证为准。
+平台治理采用独立的 Gateway、Registry、Config Server，六个应用分别打包。Cloud 2025.1.4、网关公共路由与隔离、Eureka、Config native/Git、OpenFeign/LB、Resilience4j、Micrometer OTel/OTLP 已实现；直连模式用于独立开发。具体配置和实测边界见 [技术栈](microservice-platform.md) 与 [平台验证](microservice-platform-verification.md)。下方测试数量和能力范围对应各阶段的历史验收，验证结果按各记录的日期和环境解读。
 
 ## 第一步 工程边界与启动骨架
 
-交付内容：
+阶段范围：
 
 - 根 POM 改为 Maven 聚合项目。
 - Admin、Scheduler、Worker 分别具有启动类、配置、测试和可执行 JAR。
@@ -22,29 +22,29 @@
 3. Admin 的首页和 hello 接口可用；Scheduler、Worker 不暴露管理台和 hello。
 4. 停止一个服务后，其余服务的独立健康检查仍可访问。
 
-状态：已完成，7 项测试和三个 JAR 的独立进程验证通过，详细证据见 [第一步验证记录](verification.md)。本阶段是工程骨架，尚不支持创建或执行真实任务。
+状态：已完成，7 项测试和三个 JAR 的独立进程验证通过，详细证据见 [第一步验证记录](verification.md)。工程骨架验收不包含任务创建或执行。
 
 ## 第二步 Admin 任务定义持久化
 
-这是骨架完成后第一个业务开发任务，范围只在 taskflow-admin。
+我们将任务定义管理限定在 taskflow-admin，使配置管理可以独立于调度和执行服务运行。
 
-当前已完成 MyBatis-Plus / Flyway 接入、任务管理与辅助查询接口；持久层已由原 Spring JDBC 仓储替换为独立 Entity、Mapper 和 Repository 适配，并保留版本校验与软删除。本机 taskflow_admin 已核对 V1、建立基线并完成 V2 软删除迁移，真实查询接口已验证。独立 Vue 控制台已接入真实 API，并通过 Nginx 托管；接口动作路径、参数和状态见 [接口文档](api.md)，部署见 [前端部署](frontend-deployment.md)。
+Admin 使用 MyBatis-Plus / Flyway，提供任务管理与辅助查询接口；持久层通过独立 Entity、Mapper 和 Repository 适配访问数据库，提供版本校验与软删除。本机 taskflow_admin 已核对 V1、建立基线并完成 V2 软删除迁移，真实查询接口已验证。独立 Vue 控制台已接入真实 API，并通过 Nginx 托管；接口动作路径、参数和状态见 [接口文档](api.md)，部署见 [前端部署](frontend-deployment.md)。
 
 1. 定义创建、修改、查询、启停 Job 的 API 和错误响应。
 2. 接入 MyBatis-Plus、MySQL 与 Flyway，数据库和迁移仅归属 Admin。
 3. 建立 job_definition 表，保存 name、handler_key、payload_json、enabled、config_version 等字段；Cron、时区和执行策略按阶段扩展。
-4. 按用户最新约定使用 job/controller、job/service、job/service/impl、job/mapper；请求响应、业务模型、持久化实体与配置分别放 dto、model、entity、config。Controller 按功能拆类，Service 实现通过 implements 对应接口。
+4. 按业务能力组织 job/controller、job/service、job/service/impl、job/mapper；请求响应、业务模型、持久化实体与配置分别放 dto、model、entity、config。Controller 按功能拆类，Service 实现通过 implements 对应接口。
 5. 加入必填校验、JSON 校验、分页、并发修改版本检查；禁止直接绑定数据库实体作为 HTTP 入参。
 6. 覆盖空库迁移、创建、错误输入、版本冲突、启停和查询。
 7. 接入现有任务定义页面，以真实 API 替换该页面演示数据。
 
 验收：创建任务后可查询、修改和停用，重启服务数据仍在；不依赖 Scheduler、Worker 也能完成任务配置管理。
 
-实现前检查本机 MySQL / Docker 实际可用情况。没有数据库连接时先准备配置、迁移和集成测试环境，不虚报数据库测试通过。
+实现前检查本机 MySQL / Docker 实际可用情况。没有数据库连接时先准备配置、迁移和集成测试环境，将数据库测试标记为未执行。
 
 ## 第三步 手动执行的跨服务闭环
 
-用户新增的访问链路包含 Redis 查询缓存，已单独实现 Admin 详情缓存、提交后失效与 Redis 故障降级，见 [访问与缓存流程](request-flow.md) 和 [缓存验证记录](cache-verification.md)。默认 TTL 60 秒，分页和统计不缓存；缓存不承担跨服务状态管理。本节手动执行闭环已完成，协议与验收见 [执行协议](execution-protocol.md)、[执行验证](execution-verification.md)。
+我们仅为 Admin 任务详情引入 Redis 查询缓存，提供提交后失效与 Redis 故障降级，见 [访问与缓存流程](request-flow.md) 和 [缓存验证记录](cache-verification.md)。默认 TTL 60 秒，分页和统计不缓存；缓存不承担跨服务状态管理。手动执行闭环的协议与验收见 [执行协议](execution-protocol.md)、[执行验证](execution-verification.md)。
 
 1. 定义内部协议、幂等键、配置快照、错误分类和服务身份校验。
 2. Scheduler 独立接入数据库，维护 Run / Attempt 和待派发扫描。
@@ -60,7 +60,7 @@
 
 ## 第四步 Cron 与计划同步
 
-本阶段已完成配置同步、计划计算、到期扫描及自动执行闭环：Scheduler 在本地事务中创建 Run/首次 Attempt 并推进计划，数据库唯一键保护同一 Job/计划时间；错过执行按宽限和 SKIP/FIRE_ONCE 处理。管理台展示真实计划、节点触发开关和运行来源。协议见 [异步配置同步](config-sync.md)、[计划计算](plan-calculation.md)、[自动调度](automatic-scheduling.md)。
+Cron 调度包含配置同步、计划计算、到期扫描及自动执行闭环：Scheduler 在本地事务中创建 Run/首次 Attempt 并推进计划，数据库唯一键保护同一 Job/计划时间；错过执行按宽限和 SKIP/FIRE_ONCE 处理。管理台展示真实计划、节点触发开关和运行来源。协议见 [异步配置同步](config-sync.md)、[计划计算](plan-calculation.md)、[自动调度](automatic-scheduling.md)。
 
 - 已实现按事件标识及单 Job 配置版本的推送协议、停用/删除语义和同步状态；全局游标及全量对账尚未实现。
 - 已实现 Scheduler 版本副本、时区和 next_fire_time；重复/旧事件不移动时间，查询和重启不重新计算。
@@ -71,24 +71,24 @@
 
 ## 第五步 可靠消息与恢复
 
-当前已实现 Scheduler 派发 Outbox、RabbitMQ 发布确认/不可路由处理、Worker Inbox 提交后消费确认、有限接收重试与死信策略；提供三节点 quorum 集群、独立数据卷、多节点连接及隔离 vhost 验收脚本。2026-10-28 已接入远程真实三节点 Broker，正常和单节点停机场景各 43 项三服务检查通过，确认 quorum 选主、两节点执行及恢复三个在线副本。当前 3.8.34 使用显式兼容策略，至少一次死信转移、在途消息故障窗口、多数派丢失等仍未验收。协议见 [可靠派发](reliable-dispatch.md)，结果见 [本轮验证](mq-verification.md)。固定 Worker 有界续租已实现，见 [执行租约](execution-leases.md)；MQ 独立队列水平扩展、固定 Attempt 目标及租约失效后有限跨节点重试已实现，见 [扩展设计](worker-horizontal-scaling.md) 与 [扩展验证](worker-horizontal-scaling-verification.md)；同一 Attempt 跨 Inbox 接管与更完整故障对账仍待后续实现，不能将第五步整体标为完成。
+当前已实现 Scheduler 派发 Outbox、RabbitMQ 发布确认/不可路由处理、Worker Inbox 提交后消费确认、有限接收重试与死信策略；提供三节点 quorum 集群、独立数据卷、多节点连接及隔离 vhost 验收脚本。2026-10-28 已接入远程真实三节点 Broker，正常和单节点停机场景各 43 项三服务检查通过，确认 quorum 选主、两节点执行及恢复三个在线副本。当前 3.8.34 使用显式兼容策略，至少一次死信转移、在途消息故障窗口、多数派丢失等仍未验收。协议见 [可靠派发](reliable-dispatch.md)，结果见 [MQ 验证](mq-verification.md)。固定 Worker 有界续租已实现，见 [执行租约](execution-leases.md)；MQ 独立队列水平扩展、固定 Attempt 目标及租约失效后有限跨节点重试已实现，见 [扩展设计](worker-horizontal-scaling.md) 与 [扩展验证](worker-horizontal-scaling-verification.md)；同一 Attempt 跨 Inbox 接管与更完整故障对账尚未实现，第五步为部分完成。
 
-Worker 节点管理已实现：独立注册/心跳协议与密钥、Scheduler 节点和会话历史、超时离线及乱序/旧会话隔离、MQ 动态节点选择与固定 Attempt 目标检查、Admin 查询和 Vue 工作节点页面。协议及升级见 [节点管理](worker-nodes.md)，验收见 [节点验证](worker-nodes-verification.md)。已按小步补齐 Worker 结果保存重试、恢复上报、耗尽诊断及故障测试，见 [结果保存恢复](worker-result-recovery.md)。后续补充可靠死信与在途故障验证，固定 Worker 执行续租已补齐，后续独立实施失联恢复；节点 generation 和执行 leaseVersion 分别维护，不能将节点心跳视为执行续租。
+Worker 节点管理已实现：独立注册/心跳协议与密钥、Scheduler 节点和会话历史、超时离线及乱序/旧会话隔离、MQ 动态节点选择与固定 Attempt 目标检查、Admin 查询和 Vue 工作节点页面。协议及升级见 [节点管理](worker-nodes.md)，验收见 [节点验证](worker-nodes-verification.md)。Worker 支持结果保存重试、恢复上报和耗尽诊断，并有对应故障测试，见 [结果保存恢复](worker-result-recovery.md)。可靠死信与在途故障仍需验证，失联恢复需独立设计与验收；节点 generation 和执行 leaseVersion 分别维护，不能将节点心跳视为执行续租。
 
 - Admin 配置同步保留 HTTP 事务 Outbox；Scheduler 已有独立派发 Outbox。
 - RabbitMQ、发布确认、消费确认和持久化去重已完成真实三节点及单节点停机闭环；旧版死信保障和更完整故障窗口仍待验证。
 - 默认任务派发切换到 MQ，已覆盖提交后未发布、发布后未标记和重复事件的故障注入；HTTP 仅显式选择，不能自动双发。
-- 第三步已有的 Worker 持久化、结果重报与有效租约校验已补齐固定 Worker 有界续租；后续独立实施跨节点回收和更完整的故障对账，保留已有迟到结果拒绝。
+- Worker 持久化、结果重报和有效租约校验配合固定 Worker 有界续租工作；跨节点回收与更完整的故障对账需单独实施，迟到结果继续拒绝。
 - 失败分级、有限次数退避重试和业务幂等。
 
 验收：杀 Relay、杀 Worker、重复投递、恢复旧 Worker 均有注入步骤、预期、实际和日志证据。
 
 ## 第六步 运维与交付
 
-平台基础已提前实施：Nginx → Gateway → Admin，内部服务名发现与 Feign 调用、熔断及同步 HTTP 链路追踪；注册/配置中心独立认证、非秘密策略仓库及可选 Jaeger Compose 已提供。默认配置变更重启生效，没有承诺完整热刷新；Eureka/Config 单实例，HA 和真实 Jaeger 容器验收仍未完成。
+平台治理包含：Nginx → Gateway → Admin，内部服务名发现与 Feign 调用、熔断及同步 HTTP 链路追踪；注册/配置中心独立认证、非秘密策略仓库及可选 Jaeger Compose 已提供。默认配置变更重启生效，不提供完整热刷新；Eureka/Config 单实例，HA 和真实 Jaeger 容器验收仍未完成。
 
 - 运行统计、结构化日志、任务延迟、待发布积压、Worker 状态。
-- Keycloak 用户登录、JWT 验证、管理权限、Redis 30 分钟滑动会话及入口限流已实现，见 [登录与入口安全](access-security.md)；告警、持久化操作审计另行实施。真实 Redis 集成验收本次按用户要求未执行。
+- Keycloak 用户登录、JWT 验证、管理权限、Redis 30 分钟滑动会话及入口限流已实现，见 [登录与入口安全](access-security.md)；告警、持久化操作审计另行实施。2026-10-28 安全验证时 Redis 不可达，真实 Redis 会话与限流集成验收未执行。
 - 各服务镜像和 Compose、一键启动说明、API 示例。
 - 在明确拓扑和负载下测量吞吐与延迟，不提前填写性能结论。
 

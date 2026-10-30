@@ -18,7 +18,7 @@ npm.cmd run build
 npm.cmd test
 ```
 
-构建生成本目录 dist。完整浏览器测试从仓库根目录执行 tools/test-frontend.ps1，会启动隔离 Gateway、三个 H2 业务服务和测试 Nginx，结束后停止本轮进程。真实 Eureka/Config/OTLP 验收使用 tools/test-platform.ps1。先运行 tools/package-frontend.ps1 准备 Nginx，机器需已安装 Chrome；改用已安装的 Edge 时设置 PLAYWRIGHT_BROWSER_CHANNEL=msedge。
+构建生成本目录 dist。完整浏览器测试从仓库根目录执行 tools/test-frontend.ps1，会启动隔离 Gateway、三个 H2 业务服务和测试 Nginx，结束后停止脚本启动且身份匹配的进程。真实 Eureka/Config/OTLP 验收使用 tools/test-platform.ps1。先运行 tools/package-frontend.ps1 准备 Nginx，机器需已安装 Chrome；改用已安装的 Edge 时设置 PLAYWRIGHT_BROWSER_CHANNEL=msedge。
 
 ## 模块
 

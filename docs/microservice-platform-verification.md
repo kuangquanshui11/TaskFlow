@@ -30,7 +30,7 @@
 
 ## 六个独立应用与浏览器
 
-执行 `tools/test-platform.ps1 -SkipBuild`，最终退出码 0。实际启动 Java 21 独立进程：Eureka 19161、Config Server 19188、Gateway 19088、Admin 19080、Scheduler 19081、Worker 19082，另有 loopback OTLP 测试接收器 19118 和 Nginx 8091。每个业务服务使用本轮独立 H2 文件库；随机凭据与 YAML 仅保存在忽略目录。
+执行 `tools/test-platform.ps1 -SkipBuild`，最终退出码 0。实际启动 Java 21 独立进程：Eureka 19161、Config Server 19188、Gateway 19088、Admin 19080、Scheduler 19081、Worker 19082，另有 loopback OTLP 测试接收器 19118 和 Nginx 8091。每个业务服务使用独立 H2 文件库；随机凭据与 YAML 仅保存在忽略目录。
 
 证据：
 
@@ -52,15 +52,15 @@
 
 `d70da05fb3a24221a7084d40075addaa`
 
-安全摘要见平台证据目录的 `traces/<traceId>.json`，包含服务名与 PASS。另对本轮 OTLP 文件检查确认 Gateway、Admin、Scheduler、Worker 四个应用均实际导出了资源数据；Worker 后台心跳使用自己的 trace，不把它误算为上述同步请求。该接收器只用于验收，不替代生产追踪后端；没有把依赖存在或请求头透传当作完整追踪验证。
+安全摘要见平台证据目录的 `traces/<traceId>.json`，包含服务名与 PASS。OTLP 文件检查确认 Gateway、Admin、Scheduler、Worker 四个应用均实际导出了资源数据；Worker 后台心跳使用自己的 trace，不把它误算为上述同步请求。该接收器只用于验收，不替代生产追踪后端；没有把依赖存在或请求头透传当作完整追踪验证。
 
 执行 `tools/package-frontend.ps1 -SkipBuild`，生成新包 `dist/releases/20261027-111259-714/taskflow-nginx` 及 ZIP/SHA256。生成配置已确认上游 `127.0.0.1:8088`、`proxy_pass http://taskflow_gateway`、禁止上游重试，Nginx `-t` 通过。没有切换 `dist/current-release.txt`。全部 PowerShell 脚本语法解析通过。
 
-## 尚未实测或交付的边界
+## 2026-10-27 未验证或未实现的范围
 
 - 本机无 Docker，Registry/Config/Jaeger Compose 尚未运行；Java 进程模式已实测。Jaeger UI、持久存储、Eureka/Config HA 不计入通过。
-- RabbitMQ 三节点集群仍待真实环境验收；本轮进程回归显式使用 HTTP 派发，没有冒充 MQ 实测。
+- RabbitMQ 三节点集群未在该阶段验收；进程回归显式使用 HTTP 派发。
 - 同步 HTTP trace 已验证；持久化 Outbox/MQ/Inbox 尚未持久化原 trace 上下文，异步执行依靠 Run/Attempt 标识关联。
 - 配置默认启动加载、修改后重启；没有完整动态刷新或 Bus。
 - 网关入口隔离不等于用户认证/RBAC，公网 TLS 与业务权限后续实现。
-- 未重启现有业务实例，未迁移真实业务 MySQL，未激活新 Nginx 发行包。测试结束清理本轮所属 PID，保留证据；现有环境升级步骤见平台及前端部署文档。
+- 未重启现有业务实例，未迁移真实业务 MySQL，未激活新 Nginx 发行包。测试结束仅清理脚本启动且身份匹配的 PID，保留证据；现有环境升级步骤见平台及前端部署文档。

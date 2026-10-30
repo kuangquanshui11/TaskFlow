@@ -1,6 +1,6 @@
 # 微服务技术栈与网关
 
-更新：2026-10-27。业务服务独立部署、数据归属明确是架构基础；随着服务数量、入口和故障处理需求增加，本次补齐注册发现、集中配置、网关和可观测性。六个应用各自打包，不通过 Maven 引用其他应用。
+我们将注册发现、集中配置、网关和可观测性作为独立的平台能力，以统一入口策略、服务寻址和故障诊断。六个应用分别打包，业务服务保留独立的数据归属，应用之间不通过 Maven 引用实现。
 
 ## 组件与选择
 
@@ -12,9 +12,9 @@
 | 内部 HTTP | OpenFeign + Spring Cloud LoadBalancer | 有限连接/读取超时，显式内部鉴权，无自动重放 |
 | 熔断 | Spring Cloud CircuitBreaker + Resilience4j | 下游异常快速失败，返回真实错误 |
 | 链路 | Micrometer Tracing + OpenTelemetry + OTLP | W3C traceparent 传播、日志 trace/span、HTTP 导出 |
-| 收集展示 | Jaeger 2.22.0 Compose | 可选，当前机器未运行 Docker，未宣称 UI 已验收 |
+| 收集展示 | Jaeger 2.22.0 Compose | 可选；容器启动和 UI 尚未实测 |
 
-Java 21、Spring Boot 4.1.1 保持不变，父 POM 通过 Spring Cloud 2025.1.4 BOM 管理版本。依据 [Spring Cloud 版本兼容表](https://spring.io/projects/spring-cloud/)，2025.1 系列从 2025.1.2 支持 Boot 4.1。Feign 处于功能完备维护阶段，本次按用户指定需求采用；客户端封装在各服务 remote 包，不把协议或业务实体集中到 common 模块。
+Java 21、Spring Boot 4.1.1 保持不变，父 POM 通过 Spring Cloud 2025.1.4 BOM 管理版本。依据 [Spring Cloud 版本兼容表](https://spring.io/projects/spring-cloud/)，2025.1 系列从 2025.1.2 支持 Boot 4.1。我们采用 OpenFeign 声明内部 HTTP 客户端，配合 LoadBalancer 按服务名寻址。Feign 处于功能完备维护阶段；客户端限定在各服务 remote 包，以隔离调用实现，不将协议或业务实体集中到 common 模块。
 
 ```mermaid
 flowchart LR
@@ -94,11 +94,11 @@ flowchart LR
 
 Config native 默认读取 `deploy/config-repo`。`application.yml` 提供默认引导配置，`application-cloud.yml` 提供统一熔断/重试策略和配置修订标识。凭据、数据库地址和内部 token 不进入此目录；中心地址及认证仍属于进程启动引导。Git 后端使用 Config Server 的 git profile，设置 `TASKFLOW_CONFIG_GIT_URI`，可选用户名/密码和分支，具体变量见 `application-git.yml`。
 
-配置读取失败时 cloud 应用启动失败；运行中不逐请求访问配置中心，短时配置中心故障不影响已加载策略。默认修改后滚动重启应用生效，本次没有开放 refresh/bus/env 写端点或承诺所有参数热更新。配置 Server 本身不依赖 Eureka 或自身的远程配置，避免启动循环。
+配置读取失败时 cloud 应用启动失败；运行中不逐请求访问配置中心，短时配置中心故障不影响已加载策略。默认修改后滚动重启应用生效，不开放 refresh/bus/env 写端点，不提供所有参数的热更新。配置 Server 本身不依赖 Eureka 或自身的远程配置，避免启动循环。
 
 ## 调用与故障语义
 
-Admin 的运行、计划和节点客户端，Scheduler 的 HTTP 派发客户端，以及 Worker 的结果/节点客户端均已改为 OpenFeign；保留原协议、幂等键与异常映射。cloud 的远程 URL 为空，按 `taskflow-scheduler` / `taskflow-worker` 服务名选实例；默认开发模式才使用显式 URL，没有 cloud 静态地址兜底。
+Admin 的运行、计划和节点客户端，Scheduler 的 HTTP 派发客户端，以及 Worker 的结果/节点客户端均使用 OpenFeign；保留原协议、幂等键与异常映射。cloud 的远程 URL 为空，按 `taskflow-scheduler` / `taskflow-worker` 服务名选实例；默认开发模式才使用显式 URL，没有 cloud 静态地址兜底。
 
 每个能力读取本服务 YAML 的连接和请求超时，关闭 Feign Retryer、LoadBalancer 重试和业务客户端线程隔离。Resilience4j 默认滑动窗口 10、至少 5 次、失败率 50%、打开 10 秒、半开 2 次；无可用实例或网络异常返回原有 503。5xx、408、429 计入可用性失败，其他 4xx 保留业务语义且不触发可用性熔断。没有在 SQL 事务内等待远程调用。
 
@@ -110,7 +110,7 @@ Eureka 存活租约与 Scheduler 的 Worker 心跳表承担不同职责：前者
 
 Gateway、MVC 入口和 Feign 通过 Micrometer Observation 传播 W3C `traceparent`；Trace ID 进入日志及响应。默认不导出，避免未部署收集器时不断请求 localhost。OTLP 日志/指标导出关闭，HTTP 请求观测和进程内指标仍可使用。
 
-同步 Gateway → Admin → Scheduler 已有真实请求及 OTLP 验证。持久化 Outbox、MQ 和 Inbox 等待后尚未把原 trace 上下文持久化传播，后台调用可能开启新 trace；跨异步业务使用 requestKey、Run ID、Attempt ID 关联。不能宣称整个 Cron/MQ 执行始终属于同一条 trace。
+同步 Gateway → Admin → Scheduler 已有真实请求及 OTLP 验证。持久化 Outbox、MQ 和 Inbox 等待后尚未把原 trace 上下文持久化传播，后台调用可能开启新 trace；跨异步业务使用 requestKey、Run ID、Attempt ID 关联。整个 Cron/MQ 执行尚不能关联到同一条 trace。
 
 可选基础设施容器：
 
@@ -119,13 +119,13 @@ Gateway、MVC 入口和 Feign 通过 Micrometer Observation 传播 W3C `tracepar
 docker compose --env-file deploy/platform/.env -f deploy/platform/compose.yml up -d --build
 ```
 
-该 Compose 只包含 Eureka、Config Server 和 Jaeger，端口均发布到回环地址。Jaeger 接收 4317/4318，界面 16686，当前配置使用内存存储。Eureka/Config 当前单实例，未配置 HA；容器不包含业务数据库或 MQ。当前机器缺少 Docker，容器启动、Jaeger UI 及 HA 故障切换未实测。RabbitMQ 三节点验收仍见 [MQ 文档](mq-verification.md)。
+该 Compose 只包含 Eureka、Config Server 和 Jaeger，端口均发布到回环地址。Jaeger 接收 4317/4318，界面 16686，当前配置使用内存存储。Eureka/Config 当前单实例，未配置 HA；容器不包含业务数据库或 MQ。2026-10-27 平台验证环境缺少 Docker，容器启动、Jaeger UI 及 HA 故障切换未实测。RabbitMQ 三节点验收仍见 [MQ 文档](mq-verification.md)。
 
 Nginx 发行包默认转发 127.0.0.1:8088：
 
 ```powershell
 .\tools\package-frontend.ps1
-# 生成包供审阅；已有实例切换按 frontend-deployment.md 操作
+# 已有实例的发行包切换按 frontend-deployment.md 操作
 ```
 
 ## 验证入口
@@ -138,6 +138,6 @@ Nginx 发行包默认转发 127.0.0.1:8088：
 .\tools\test-execution.ps1 -SkipBuild
 ```
 
-测试使用隔离端口、随机密钥、各服务独立 H2 文件库；测试前确认数据库启动日志再写测试任务。结束仅清理本轮 PID，保留 `.tools/platform-e2e` 和 `.tools/execution-e2e` 证据。具体结果见 [平台验证记录](microservice-platform-verification.md)。
+测试使用隔离端口、随机密钥、各服务独立 H2 文件库；测试前确认数据库启动日志再写测试任务。结束仅清理测试脚本启动且身份匹配的 PID，保留 `.tools/platform-e2e` 和 `.tools/execution-e2e` 证据。具体结果见 [平台验证记录](microservice-platform-verification.md)。
 
 参考：[Gateway](https://docs.spring.io/spring-cloud-gateway/reference/index.html)、[OpenFeign](https://docs.spring.io/spring-cloud-openfeign/reference/spring-cloud-openfeign.html)、[Resilience4j 集成](https://docs.spring.io/spring-cloud-circuitbreaker/reference/spring-cloud-circuitbreaker-resilience4j/default-configuration.html)、[Boot Tracing](https://docs.spring.io/spring-boot/reference/actuator/tracing.html)。

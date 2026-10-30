@@ -1,8 +1,8 @@
 # Worker 执行结果保存恢复
 
-日期：2026-10-27。业务变更仅限 Worker `execution` 能力，不新增中间件、生产数据库迁移或 HTTP 协议字段。
+我们将结果保存与 Handler 执行分离，使短暂数据库故障只重试结果写入，避免再次执行 Handler。恢复机制限定在 Worker 的 `execution` 模块，无需新增中间件、生产数据库迁移或 HTTP 协议字段。2026-10-27 验证结果见下文。
 
-## 第一步：保存结果的有限重试
+## 保存结果的有限重试
 
 Handler 结束后创建不可变 `ExecutionCompletion`，包含 Attempt、Run、终态、结果码、消息、业务重试标记和原始结束时间。`ExecutionResultServiceImpl` 实现 `IExecutionResultService`，负责保存这份结果；该 Service 不依赖 Handler，也不执行远程调用。
 
@@ -17,17 +17,17 @@ Handler 结束后创建不可变 `ExecutionCompletion`，包含 Attempt、Run、
 
 配置统一放 `application.yml`，测试使用独立 `application-test.yml`（3 次、10ms），无业务数据库连接参数硬编码。配置更新默认重启生效。总等待由 `(次数 - 1) × 间隔` 加每次数据库访问耗时组成；这不是整个方法的硬截止时间，数据库连接及 Socket 超时继续由数据源 YAML 控制。
 
-## 第二步：保存恢复后继续上报
+## 保存恢复后继续上报
 
 SQL 将真实终态和待上报字段一起保存成功后，由原有 `reportPending()` 扫描并在事务外调用 Scheduler。上报使用原 Attempt、Run 和 `leaseVersion`。保存重试与 HTTP 结果重报各有独立次数和间隔；前者不消耗后者的预算。
 
 Scheduler 继续验证当前 Attempt、状态、租约版本与有效期。恢复发生在有效租约内时，真实结果可以被接受；租约已失效时，不承诺恢复出的成功结果一定能改写 Scheduler。原有 409 确认语义不变：停止发送被权威状态拒绝的结果，不表示业务成功。Worker 保存的本地终态不是全局权威状态。
 
-## 第三步：耗尽、冲突与中断的诊断
+## 耗尽、冲突与中断的诊断
 
 | 日志 code | 含义 |
 | --- | --- |
-| `RESULT_SAVE_RETRY` | 本次数据库访问失败，将等待后重试 |
+| `RESULT_SAVE_RETRY` | 结果保存访问数据库失败，将等待后重试 |
 | `RESULT_SAVE_RECOVERED` | 第 2 次及以后保存成功或确认原提交 |
 | `RESULT_SAVE_EXHAUSTED` | 数据库访问持续失败，次数耗尽，停止自动保存 |
 | `RESULT_SAVE_CONFLICT` | 记录缺失、状态不允许或终态不匹配，停止保存 |
@@ -38,15 +38,15 @@ Scheduler 继续验证当前 Attempt、状态、租约版本与有效期。恢�
 - `taskflow.worker.result.persistence.active`：当前正在保存结果的数量。
 - `taskflow.worker.result.persistence`：按固定 `outcome=saved/recovered/exhausted/conflict/interrupted` 分类的计数；`recovered` 是 `saved` 的子集。没有以任务 ID 作为指标标签，也没有额外开放公开监控端点。
 
-耗尽或中断后，不再保留完整内存结果、不无限重试、不把本地记录重新置为 ACCEPTED。此时数据库可能仍为 RUNNING，负载统计与待执行限额也仍计入该记录；不能在数据库不可用时假装已持久化一个新状态。日志是此次已知结果的排查线索，指标是进程内累计值，均不替代结果数据库。数据库恢复到重试窗口以外时，不会自动再次保存已经丢弃的结果。
+耗尽或中断后，不再保留完整内存结果、不无限重试、不把本地记录重新置为 ACCEPTED。此时数据库可能仍为 RUNNING，负载统计与待执行限额也仍计入该记录；数据库不可用时，内存中的结果不代表终态已持久化。日志保留 Handler 已知结果的排查线索，指标是进程内累计值，均不替代结果数据库。数据库恢复到重试窗口以外时，不会自动再次保存已经丢弃的结果。
 
 排查时使用日志中的 Run / Attempt 查询 Scheduler 权威历史，再核对实际业务副作用。不能仅凭 RUNNING、保存失败或 Scheduler 超时就断言业务未执行。结果尚未成功保存时若进程崩溃或重启，继续由启动恢复将遗留 RUNNING 记录标记为 `FAILED / WORKER_RESTARTED`、`retryable=false`，表示外部副作用未知。该处理不是还原原始结果，不会绕过 Scheduler 的租约验证，也不承诺任意业务恰好执行一次。
 
-## 第四步：故障回归与执行准备失败
+## 故障回归与执行准备失败
 
 任务已从 ACCEPTED 领取为 RUNNING 后，如果提交线程池被拒绝，使用同一个结果保存 Service 保存 `FAILED / EXECUTOR_REJECTED`；解析执行内容等准备失败则保存 `EXECUTION_PREPARATION_FAILED`。两者都表示 Handler 未启动，`retryable=false`，不直接重做业务。收尾结束后释放原槽位；领取本身抛出数据库异常时释放槽位并交给下一轮处理原记录，不伪造执行结果。
 
-本轮新增故障测试包括：
+故障测试覆盖：
 
 1. 首次终态保存失败后恢复，原成功结果保存并上报，重复派发也只执行一次 Handler。
 2. Handler 真实失败时保存重试不更改失败结果及业务可重试标记，上报沿用原租约且在事务外进行。
@@ -59,7 +59,7 @@ Scheduler 继续验证当前 Attempt、状态、租约版本与有效期。恢�
 
 修复前先运行前两项缺陷复现（首次保存失败、线程池拒绝）：2 项均未通过，分别表现为收尾等待超时和未处理的拒绝异常，证据 `.tools/worker-result-before.log`。修复后执行结果另见下方验证记录。
 
-独立进程验收增加可选 `tools/test-execution.ps1 -InjectWorkerResultSaveFailure`。测试辅助类 `tools/local/FailFirstResultSave.java` 仅在本轮 `.tools/execution-e2e/` 文件库中通过测试专用 Flyway 路径加载；生产 JAR 和正式迁移不包含它。触发器让首次 RUNNING → 终态 UPDATE 真实抛错并回滚，之后允许正常保存；验收同时检查 Worker 的重试/恢复日志与 Scheduler 中原结果、单个 Attempt。该方式使用真实 SQL 失败及真实 HTTP 上报，仍不是 MySQL 网络故障测试。
+独立进程验收增加可选 `tools/test-execution.ps1 -InjectWorkerResultSaveFailure`。测试辅助类 `tools/local/FailFirstResultSave.java` 仅在隔离的 `.tools/execution-e2e/` 文件库中通过测试专用 Flyway 路径加载；生产 JAR 和正式迁移不包含它。触发器让首次 RUNNING → 终态 UPDATE 真实抛错并回滚，之后允许正常保存；验收同时检查 Worker 的重试/恢复日志与 Scheduler 中原结果、单个 Attempt。该方式使用真实 SQL 失败及真实 HTTP 上报，仍不是 MySQL 网络故障测试。
 
 ## 验证记录
 
@@ -86,4 +86,4 @@ Scheduler 继续验证当前 Attempt、状态、租约版本与有效期。恢�
 
 独立进程证据目录：`.tools/execution-e2e/20261027-193544-504/`，`report.json` 含 43 项 PASS。首个任务日志显示同一 Attempt 第一次保存失败、第二次恢复；Scheduler 保存 `SUCCEEDED / 执行成功` 且只有一个 Attempt。验收结束后已检查该目录对应的临时 Java 进程全部退出。
 
-模块故障测试使用隔离 H2 和真实 Service / SQL，通过 Mapper Spy 注入访问异常；独立进程故障验收使用真实 H2 触发器和 HTTP。两者都不代表真实 MySQL 断网或 RabbitMQ 集群故障验收。本轮未修改前端，不重跑浏览器测试；没有升级或重启当前业务实例。
+模块故障测试使用隔离 H2 和真实 Service / SQL，通过 Mapper Spy 注入访问异常；独立进程故障验收使用真实 H2 触发器和 HTTP。两者都不代表真实 MySQL 断网或 RabbitMQ 集群故障验收。浏览器测试未执行；业务实例未升级或重启。

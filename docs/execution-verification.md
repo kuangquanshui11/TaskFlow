@@ -73,7 +73,7 @@ prepare-local-execution.ps1 读取已有 Admin YAML 的本机管理连接，仅�
 .\mvnw.cmd -o -B '-Daether.syncContext.named.factory=rwlock-local' -l .tools/verification/execution-root-verify.log verify
 ```
 
-结果：BUILD SUCCESS，65 项通过、4 项原有远程 Redis 检查按默认条件跳过，无失败、无错误。三个服务均生成独立可执行 JAR。离线与锁参数仅适配当前工具沙箱，不影响服务配置。
+结果：BUILD SUCCESS，65 项通过、4 项原有远程 Redis 检查按默认条件跳过，无失败、无错误。三个服务均生成独立可执行 JAR。离线与锁参数为验证环境的 Maven 选项，不影响服务配置。
 
 | 验证组 | 数量 | 结果与范围 |
 | --- | --- | --- |
@@ -82,7 +82,7 @@ prepare-local-execution.ps1 读取已有 Admin YAML 的本机管理连接，仅�
 | Scheduler RunExecutionTests | 9 | HTTP 认证、并发唯一请求、创建事务回滚、回调早到不回退终态、传输重试同 Attempt/同截止时间、租约与重复终态、有限业务重试与耗尽 |
 | Worker WorkerExecutionTests | 8 | 持久化后接收、重复派发只执行一次、异步结果和有限重报、首次失败、超时、重启恢复、容量与处理器校验 |
 
-新增执行测试在创建 DataSource / 执行 Flyway 之前通过上下文初始化器确认独立 H2，避免环境变量覆盖测试 YAML 后误访问真实数据库。Worker 的 RUNNING → WORKER_RESTARTED 恢复和 ACCEPTED 保留，通过独立 H2 的实际存储与恢复用例验证；不把该用例描述成多节点故障转移测试。
+新增执行测试在创建 DataSource / 执行 Flyway 之前通过上下文初始化器确认独立 H2，避免环境变量覆盖测试 YAML 后误访问真实数据库。Worker 的 RUNNING → WORKER_RESTARTED 恢复和 ACCEPTED 保留，通过独立 H2 的实际存储与恢复用例验证；多节点故障转移不在该用例范围内。
 
 ## 三进程与浏览器验收
 
@@ -94,7 +94,7 @@ prepare-local-execution.ps1 读取已有 Admin YAML 的本机管理连接，仅�
 
 不提供 SkipBuild 时会先执行根目录 verify；可用 SkipBrowser 仅运行三进程 API 与重启验证。脚本为每次运行创建 .tools/execution-e2e/<时间戳>，三个服务使用独立 H2 文件数据库，端口 19080/19081/19082，测试 Nginx 使用 8091。启动前清除可能覆盖测试配置的环境项，并在任何可写请求之前从实际日志确认 H2 文件路径；测试结束停止自己启动的进程。
 
-本次证据目录为 .tools/execution-e2e/20261026-184059-539，report.json 的 12 项真实 HTTP/重启检查和浏览器组检查均为 PASS：
+证据目录为 .tools/execution-e2e/20261026-184059-539，report.json 的 12 项真实 HTTP/重启检查和浏览器组检查均为 PASS：
 
 1. 未认证内部 API 返回 401。
 2. 相同 requestKey 返回同一个 Run。
@@ -117,16 +117,16 @@ Chrome / Playwright：8 项全部通过（原有 6 项 + 新增 2 项），覆�
 
 - Admin、Scheduler、Worker 健康检查均为 UP。Scheduler / Worker 的真实 MySQL 空库 V1 迁移成功；本机账号分别只授权自己的 schema。
 - 已在 8090 激活新版前端，确认返回的新 JS 包包含执行功能；经 Nginx 查询运行历史返回 OK。只读检查时 Job 1 的运行数为 0，没有注入测试 Run。
-- 真实可写三服务验收使用隔离 H2 文件库；没有把 H2 结果描述为真实 MySQL 写入、性能或故障基准。真实 MySQL 这轮验证了迁移、连接、授权元数据和只读查询。
+- 真实可写三服务验收使用隔离 H2 文件库；真实 MySQL 写入、性能和故障基准不在 H2 验证范围内。2026-10-26 的真实 MySQL 检查覆盖迁移、连接、授权元数据和只读查询。
 - Cron 自动触发、配置同步、动态 Worker 注册、心跳、续租、跨节点接管、RabbitMQ 与登录权限尚待后续阶段。一个 Worker schema 对应一个执行进程。
 - 租约过期、超时中断和重复请求去重，不保证任意外部副作用恰好一次。执行槽位直到 Handler 实际退出才释放；不响应中断的 Handler 可能继续占用槽位。
-- 结果重报有限，网络长期不可用或进程在未知执行阶段中断时会产生失败/未知结果；后续通过对账与可靠消息扩展，不宣称数据库提交与网络回调原子完成。
+- 结果重报有限，网络长期不可用或进程在未知执行阶段中断时会产生失败/未知结果；后续通过对账与可靠消息扩展，数据库提交与网络回调不构成原子操作。
 
 下一步为 Cron 计划同步与到期扫描，继续保留 Job、Run、Attempt 的职责和版本语义。
 
 ## 2026-10-27：Worker 派发扫描与结果上报隔离
 
-本节追加本轮验证，前面的三进程与浏览器记录保留为历史验收。
+本节记录 2026-10-27 的扫描隔离与上报预算验证；前面的三进程与浏览器结果对应 2026-10-26。
 
 - `ExecutionConfiguration` 的 `scan()` 仅调用 `executePending()`；新增 `workerReportScheduler`，单线程、线程名前缀 `taskflow-report-`，由独立 `report()` 使用相同扫描间隔和初始延迟执行 fixedDelay 上报。两者均遵守 scanning-enabled，节点心跳仍独立。
 - `ExecutionProperties` 末尾增加 `reportBudget`，校验非空且范围为 (0, 30s]；application.yml 默认 2s，可用 `TASKFLOW_REPORT_BUDGET` 覆盖。
@@ -156,8 +156,8 @@ Worker 测试：BUILD SUCCESS，26 项，零失败、零错误、零跳过，包
 
 根目录 verify：BUILD SUCCESS，六个服务模块均成功构建；共 161 项，零失败、零错误，5 项原有条件测试跳过（实际通过 156 项）。Worker 的 26 项全部通过，新增预算测试与原有有限重报测试均再次通过。两条命令退出码均为 0。
 
-首次受限执行未能打开用户 Maven 缓存中的锁文件；取得构建所需的缓存访问权限后，使用原命令重跑，没有更改 POM、测试 profile 或断言。构建日志保存在 `.tools/verification/report-budget/worker-test.log` 和 `root-verify.log`。
+构建日志保存在 `.tools/verification/report-budget/worker-test.log` 和 `root-verify.log`。
 
-轮次预算只在记录之间生效：若单条 HTTP 最多 T，预算 B 的单轮网络等待估算上界为 B + T。按题设单条 3s，默认 2s + 3s = 5s；按当前 Feign 的连接/读取两个超时阶段保守相加，约为 2s + (2s + 3s) = 7s。另加数据库、DNS、本地处理和调度开销，读取超时也不是整个 HTTP 调用的硬截止时间，不能宣称方法严格在该时间内返回。fixedDelay 的 500ms 属于轮次间隔，在途请求不会被预算中断，派发扫描不再等待上报。
+轮次预算只在记录之间生效：若单条 HTTP 最多 T，预算 B 的单轮网络等待估算上界为 B + T。若单条请求最多 3s，默认 2s + 3s = 5s；按当前 Feign 的连接/读取两个超时阶段保守相加，约为 2s + (2s + 3s) = 7s。另加数据库、DNS、本地处理和调度开销，读取超时也不是整个 HTTP 调用的硬截止时间，该估算不构成整个方法的硬截止时间。fixedDelay 的 500ms 属于轮次间隔，在途请求不会被预算中断，派发扫描不再等待上报。
 
-README 的“当前进度”与本次改动没有冲突，保持原文。当前工作目录没有 `.git` 元数据，无法执行 git diff；通过修改前后的文件校验值核对源码与文档范围，忽略 target 构建产物及 .tools 验证日志。
+验证范围为 Worker 扫描调度、上报预算配置及相关测试，不涉及表结构或协议字段。

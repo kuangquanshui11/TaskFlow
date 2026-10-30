@@ -2,15 +2,15 @@
 
 ## 当前接入范围
 
-Admin 已增加 Spring Data Redis / Lettuce 依赖，连接参数统一声明在 taskflow-admin/src/main/resources/application.yml 的 spring.data.redis 下。原 Admin application.properties 已迁移为 YAML，避免同目录两种主配置互相覆盖。Redis 仅归属 Admin 的数据适配，不改变 Scheduler、Worker 的边界。
+我们使用 Spring Data Redis / Lettuce 实现 Admin 查询缓存，连接参数统一声明在 taskflow-admin/src/main/resources/application.yml 的 spring.data.redis 下。主配置统一采用 YAML，避免同目录两种配置格式互相覆盖。详情缓存归属 Admin，不改变 Scheduler、Worker 的数据边界。
 
-已交付连接、认证、健康检查和任务详情缓存。GET /api/v1/jobs/selectById 默认使用 cache-aside：先读 Redis，未命中查 MySQL，数据库只读事务结束后回填。分页与统计不缓存；配置修改、启停、删除和写操作返回值始终读取数据库。Service 接口统一位于 job/service，实现位于 job/service/impl；JobCacheMapper 位于 job/mapper，Redis 实现位于 job/mapper/redis，装配与参数类位于 job/config，详见 [访问流程](request-flow.md)。
+Admin 提供 Redis 连接、认证、健康检查和任务详情缓存。GET /api/v1/jobs/selectById 默认使用 cache-aside：先读 Redis，未命中查 MySQL，数据库只读事务结束后回填。分页与统计不缓存；配置修改、启停、删除和写操作返回值始终读取数据库。Service 接口统一位于 job/service，实现位于 job/service/impl；JobCacheMapper 位于 job/mapper，Redis 实现位于 job/mapper/redis，装配与参数类位于 job/config，详见 [访问流程](request-flow.md)。
 
 ## 本机认证方式
 
-用户提供的 Redis 地址可达。指定 shenyufei 用户认证返回 WRONGPASS；使用同一个密码、仅密码认证成功，PING 返回 PONG。因此本机配置使用空用户名，即默认用户认证。用户随后提供的终端截图确认 shenyufei 是 Ubuntu 登录账户；不据此推断 Redis 已配置同名 ACL 用户。
+本机连接配置采用仅密码认证，用户名留空，使用 Redis 默认用户。只读连接验证的 PING 返回 PONG；验证范围和结果见 [缓存验证记录](cache-verification.md)。操作系统登录账号与 Redis ACL 用户分别管理，不能互相替代。
 
-没有修改 Redis 服务端配置、用户权限，也没有清空或扫描已有业务数据。
+连接检查只执行认证与 PING，不修改服务端配置或用户权限，不扫描或清空业务数据。
 
 ## 配置来源
 
@@ -33,7 +33,7 @@ Admin 已增加 Spring Data Redis / Lettuce 依赖，连接参数统一声明在
 
 缓存参数统一位于 application.yml 的 taskflow.jobs.detail-cache 下，可以在被忽略的本机 YAML 中覆盖。本机文件已开启 Redis 健康检查。spring.data.redis 的连接超时 2 秒、命令超时 1 秒；读和回填各尝试一次，只有提交后的缓存删除有限重试。超时按每次连接/命令计算，一次请求可能执行多个 Redis 命令，不承诺整个请求在 1 秒内完成。关闭健康检查不会禁用连接工厂或业务缓存；关闭缓存请使用单独的 TASKFLOW_ADMIN_JOB_CACHE_ENABLED=false。
 
-缓存内容为 JSON，包含任务快照、配置版本和绝对过期时间，不序列化 Java 类型信息。不存在、过期、JSON 损坏或任务 ID 不匹配均视为未命中；不缓存空值。回填只设置剩余 TTL，过慢的查询不回填。写操作提交后同步删除对应 key；回滚和版本冲突不删除。删除重试耗尽记录错误并依靠 TTL 淘汰，不回滚或伪装已提交的数据库写入失败；本阶段没有持久化补偿队列。
+缓存内容为 JSON，包含任务快照、配置版本和绝对过期时间，不序列化 Java 类型信息。不存在、过期、JSON 损坏或任务 ID 不匹配均视为未命中；不缓存空值。回填只设置剩余 TTL，过慢的查询不回填。写操作提交后同步删除对应 key；回滚和版本冲突不删除。删除重试耗尽记录错误并依靠 TTL 淘汰，不回滚或伪装已提交的数据库写入失败；缓存失效没有持久化补偿队列。
 
 删除失败或并发旧查询回填可能短暂返回旧详情，包含刚删除的任务，直到原查询开始后 TTL 到期。多实例需保持时钟同步；缓存命中不用于修改、启停、删除或未来派发的业务判断。缓存异常日志只记录 jobId、尝试次数和异常类型，不记录任务参数、凭证或异常正文。
 
@@ -53,7 +53,7 @@ Admin 健康检查仍为 http://localhost:18080/actuator/health；本机开启 R
 .\tools\check-redis.ps1
 ```
 
-该脚本通过 Spring 加载同一份 YAML 或环境变量，由 Lettuce 认证并发送 PING；测试数据库使用 H2，不写用户 MySQL 或 Redis 业务数据。它不验证缓存读写权限或业务缓存行为。
+该脚本通过 Spring 加载同一份 YAML 或环境变量，由 Lettuce 认证并发送 PING；测试数据库使用 H2，不写业务 MySQL 或 Redis 业务数据。它不验证缓存读写权限或业务缓存行为。
 
 Java 客户端实际连接的集成验证使用测试 H2 数据库，并显式开启远程 Redis 测试：
 
@@ -71,7 +71,7 @@ Remove-Item Env:TASKFLOW_REDIS_CONNECTION_TEST
 
 ## 真实 Redis 缓存验证
 
-显式开启后，测试 SQL 仍使用独立 H2，Redis 加载本机 YAML 的连接配置，使用 test-redis-cache YAML profile 中的随机前缀 taskflow:admin:it:detail:<UUID>: 和 2 秒 TTL。只读写本次创建的精确 key，结束后逐个删除；不执行 KEYS、SCAN、FLUSHDB 或 FLUSHALL。启动前会检查数据库 URL、测试前缀与 TTL。
+显式开启后，测试 SQL 仍使用独立 H2，Redis 加载本机 YAML 的连接配置，使用 test-redis-cache YAML profile 中的随机前缀 taskflow:admin:it:detail:<UUID>: 和 2 秒 TTL。只读写测试创建的精确 key，结束后逐个删除；不执行 KEYS、SCAN、FLUSHDB 或 FLUSHALL。启动前会检查数据库 URL、测试前缀与 TTL。
 
 ```powershell
 $env:TASKFLOW_REDIS_CACHE_TEST = 'true'
@@ -79,7 +79,7 @@ $env:TASKFLOW_REDIS_CACHE_TEST = 'true'
 Remove-Item Env:TASKFLOW_REDIS_CACHE_TEST
 ```
 
-此项验证真实 GET/SET/DEL、JSON 往返、毫秒 TTL 与自动过期、提交后失效和损坏缓存恢复；Redis 不可用与删除失败通过默认隔离测试注入，不停止或破坏用户 Redis。测试结果不代表对生产 MySQL/Redis 联动进行过写入验收。
+此项验证真实 GET/SET/DEL、JSON 往返、毫秒 TTL 与自动过期、提交后失效和损坏缓存恢复；Redis 不可用与删除失败通过默认隔离测试注入，不对业务 Redis 注入故障。测试结果不代表对生产 MySQL/Redis 联动进行过写入验收。
 
 ## 参考
 

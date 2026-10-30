@@ -6,7 +6,7 @@
 
 VIEWER 可查询及 POST 预览；OPERATOR 另可启停、触发 Run 和重试同步；ADMIN 另可新增、修改、删除 Job。Gateway/Admin 各自验签，Admin 按精确动作路径和关键 Service 方法授权。未允许的路径/方法默认 403，可能先于原 404/405 被安全层拒绝。401、403、429、503 的错误格式、完整权限与限流策略见 [登录与入口安全](access-security.md)。
 
-## 功能归属与交付范围
+## 功能归属与实现范围
 
 | 业务功能 | 归属服务 | 当前实现 |
 | --- | --- | --- |
@@ -28,7 +28,7 @@ VIEWER 可查询及 POST 预览；OPERATOR 另可启停、触发 Run 和重试�
 
 ## 路径和响应约定
 
-按用户要求，路径包含业务模块和动作。查询使用 GET，写操作使用 POST。公共 API 通过 Nginx 8090 或 Gateway 8088 访问；Admin 自身默认 8080，本机 YAML 为 18080，仅用于内部或开发直连。所有 POST 请求使用 Content-Type: application/json。
+我们在路径中显式标注业务模块和动作，便于识别接口用途；查询使用 GET，写操作使用 POST。公共 API 通过 Nginx 8090 或 Gateway 8088 访问；Admin 自身默认 8080，本机 YAML 为 18080，仅用于内部或开发直连。所有 POST 请求使用 Content-Type: application/json。
 
 Gateway 保留以下 API 路径，只路由 `/api/v1/**`；`/internal/v1/**`、注册发现、配置查询和非健康 Actuator 不对浏览器开放。入口限制请求体 128KB，生成/校验 `X-Request-Id`，有效时返回 `X-Trace-Id`；下游不可用或熔断返回 HTTP 503、`GATEWAY_UNAVAILABLE`，不会自动重放 POST。详细边界见 [微服务技术栈](microservice-platform.md)。
 
@@ -280,7 +280,7 @@ Worker 本地结果保存失败会有限重试保存同一份结果，不重新�
 | HandlerController | /api/v1/job-handlers/select | IHandlerService |
 | HelloController | /api/v1/hello | ISystemService |
 
-这次结构调整不改变上述接口的方法、路径、参数或 JSON 字段。Controller 不注入 Mapper；Service 实现通过 Mapper 访问本服务的数据库或 Redis。完整目录与验证见 [结构调整记录](structure-verification.md)。
+我们将 HTTP 协议与内部数据访问分层隔离，使目录调整不影响接口的方法、路径、参数或 JSON 字段。Controller 不注入 Mapper；Service 实现通过 Mapper 访问本服务的数据库或 Redis。完整目录与验证见 [结构调整记录](structure-verification.md)。
 
 ## 配置异步同步
 
@@ -294,7 +294,7 @@ Worker 本地结果保存失败会有限重试保存同一份结果，不重新�
 
 返回沿用 `ApiResponse`，`data` 含 `eventId`、`jobId`、`configVersion`、`deleted`、`state`、`attempts`、`nextAttemptAt`、`leaseUntil`、`lastErrorCode`、`acknowledgedVersion`、`syncedAt`、`updatedAt`。事件标识为 UUID，时间为 UTC ISO 8601，未发生的确认/租约/错误可为 null。
 
-`state` 为 `PENDING/SENDING/SYNCED/SUPERSEDED/FAILED`。`attempts` 为本轮发送次数，人工重试后归零；`nextAttemptAt` 仅在 PENDING 时表示下次可发送时间，SENDING 使用 `leaseUntil`。无记录返回 404；版本过期或事件不在 FAILED 状态返回 409；参数不合法返回 400。
+`state` 为 `PENDING/SENDING/SYNCED/SUPERSEDED/FAILED`。`attempts` 为当前重试周期的发送次数，人工重试后归零；`nextAttemptAt` 仅在 PENDING 时表示下次可发送时间，SENDING 使用 `leaseUntil`。无记录返回 404；版本过期或事件不在 FAILED 状态返回 409；参数不合法返回 400。
 
 状态查询直接读数据库，不进入 Job 详情缓存。SYNCED 表示 Scheduler 确认该版本的计划副本，不代表触发开关已开启或任务已执行成功。内部 `/internal/v1/plans/update` 和副本查询协议、重试次数、超时、迁移与恢复边界见 [配置同步协议](config-sync.md)。
 

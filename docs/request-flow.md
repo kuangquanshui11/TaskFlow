@@ -1,10 +1,10 @@
 # TaskFlow 浏览器访问与缓存流程
 
-## 用户确认的目标链路
+## 访问链路
 
 **浏览器 → Nginx（静态直返 / API 转发）→ Gateway（WebFlux/Netty）→ Admin Tomcat → Redis（缓存命中则返回）→ 数据库（未命中时查询并回填缓存）→ 逐层返回。**
 
-这条链路已用于管理控制台的任务详情查询。静态请求和动态请求分支处理；Redis 和数据库由后端业务代码调用，Redis 不会自行转发 SQL 到数据库。分页和统计仍直接查数据库。
+我们对任务详情采用 Cache-Aside 模式，降低重复查询的数据库开销。静态请求和动态请求分支处理；Redis 和数据库由后端业务代码调用，分页和统计直接查数据库。
 
 ```mermaid
 flowchart TD
@@ -43,12 +43,12 @@ flowchart TD
 1. 浏览器通过独立 Keycloak 登录后携带 Bearer JWT 请求 Nginx；Nginx 做 IP 粗限流，保留路径转发 Gateway。Gateway 检查公开路径、验证 JWT，按用户及业务分组检查限流 Redis，再通过 LoadBalancer 选择 Admin。
 2. Admin 独立验签，在本服务 Redis 核对缓存 JWT 会话并将 TTL 续期为 30 分钟，然后检查权限。通过后由 Controller 校验入参并调用业务用例；超时返回 401 并由前端显示登录页。具体边界见 [登录与入口安全](access-security.md)。
 3. JobQueryController 调用 IJobDetailService，其实现 JobDetailServiceImpl 通过 JobCacheMapper 读取 Redis，默认 key 为 taskflow:admin:job:detail:v1:123。
-4. 命中且内容有效：返回缓存 DTO，无需本次数据库查询。
+4. 命中且内容有效：返回缓存 DTO，跳过数据库查询。
 5. 未命中：记录查询开始时间，调用 IJobService / JobServiceImpl 的数据库详情查询，经 JobDataMapper 访问 MySQL。只读事务结束后，通过 JobCacheMapper 将任务快照和绝对过期时间序列化成 JSON 回填 Redis，默认 TTL 为 60 秒；随后返回 JSON。回填只使用从查询开始计算的剩余 TTL，超过有效期的慢查询不再回填。不缓存不存在的任务。
 6. Redis 读取超时或回填失败：有限超时后回退数据库或直接返回已经查到的数据，不因缓存回填失败丢弃正常查询结果。
 7. 数据经 Tomcat、Gateway、Nginx 返回浏览器，由前端更新页面。
 
-初期只缓存任务详情这一种查询。分页列表和统计先直接查数据库，避免在未明确失效范围时缓存所有查询。接口响应格式和 /select 等动作路径保持现有约定。
+我们只缓存任务详情。分页列表和统计直接查数据库，避免在未明确失效范围时缓存所有查询。接口响应格式和 /select 等动作路径见 [接口文档](api.md)。
 
 ## 写入流程与一致性边界
 
@@ -61,7 +61,7 @@ flowchart TD
                          → 返回业务结果
 ```
 
-写用例发布 JobDefinitionChanged，Redis 适配使用 AFTER_COMMIT 事务监听器删除缓存；回滚时不执行删除。数据库事务和 Redis 操作不构成同一个原子事务。删除失败记录告警并立即有限重试，默认包含首次最多三次；全部失败后记录错误，不把已提交的写入返回为失败，依靠 TTL 淘汰旧数据。本阶段没有持久化补偿队列；提交后进程崩溃丢失通知的情况也依靠 TTL 恢复。
+写用例发布 JobDefinitionChanged，Redis 适配使用 AFTER_COMMIT 事务监听器删除缓存；回滚时不执行删除。数据库事务和 Redis 操作不构成同一个原子事务。删除失败记录告警并立即有限重试，默认包含首次最多三次；全部失败后记录错误，不把已提交的写入返回为失败，依靠 TTL 淘汰旧数据。缓存失效没有持久化补偿队列；提交后进程崩溃丢失通知的情况也依靠 TTL 恢复。
 
 IJobService / JobServiceImpl 的详情读取保留为数据库读取，修改、启停、删除和写操作的响应始终使用它。页面详情单独走 IJobDetailService / JobDetailServiceImpl；若它被其他本地事务调用，则跳过缓存，避免缓存未提交的数据。未来执行派发也必须读取权威数据并检查版本。
 

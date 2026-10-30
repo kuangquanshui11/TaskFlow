@@ -49,7 +49,7 @@ Scheduler / Worker 保持原有独立服务间密钥。Admin 发往 Scheduler �
 
 初始 Realm 允许 localhost / 127.0.0.1 的 8090（Nginx）和 5173（Vite）来源及回调路径；其他端口或生产域名必须在 Keycloak 明确添加，禁止通配来源。前端 client 是 public client，没有 client secret；禁用密码授权、隐式授权和自助注册。启用 PKCE、账号暴力尝试保护及至少 12 位密码策略。保留 basic 默认 client scope，确保访问令牌带 sub；只允许控制台声明 taskflow-api 的指定角色范围，配置固定 API audience。
 
-Compose 使用 start-dev 和本地数据卷，仅用于本地开发。生产应部署独立身份数据库、HTTPS、正确公开 hostname、严格回调和来源，并保护管理控制台及登录入口；不要直接沿用 start-dev。生产 Nginx/身份入口的 TLS 证书部署不由本次本地模板代办。
+Compose 使用 start-dev 和本地数据卷，仅用于本地开发。生产应部署独立身份数据库、HTTPS、正确公开 hostname、严格回调和来源，并保护管理控制台及登录入口；不要直接沿用 start-dev。本地模板不包含生产 TLS 证书，Nginx 和身份入口的证书需在部署环境中单独配置。
 
 | 环境变量 | 作用 |
 | --- | --- |
@@ -121,7 +121,7 @@ JWT exp 与 Redis TTL 分开管理：TTL 续期不能修改已签名的 exp；�
 
 前端真实身份浏览器测试使用 playwright.access.config.js 和 TASKFLOW_ACCESS_SETTINGS 指向忽略的 JSON：issuer、username、password、viewerUsername、viewerPassword。测试 Keycloak 必须是专用隔离 Realm，对应账号分别为 ADMIN/VIEWER，回调允许 TASKFLOW_ACCESS_BASE_URL（默认 http://127.0.0.1:5179）。执行 npx.cmd playwright test --config playwright.access.config.js；截图写入 .tools/access-browser。仅测试源集中的 TestSessionConfiguration 可通过隔离 JVM 的 spring.main.sources 显式装入；缩短超时测试需同时设置 idle-timeout=10s、login-window=5s、TASKFLOW_ACCESS_IDLE_WAIT_MS=11000。生产 JAR 不包含此测试存储。不要将此配置或账号传给生产 Realm。
 
-本次按用户要求不启动不可达的真实 Redis，真实 Redis 共享额度及会话 TTL 集成测试未执行；429、故障拒绝、30 分钟续期/闲置边界、刷新不得恢复超时会话及注销使用隔离测试验证。真实浏览器登录验证通过独立 Keycloak、H2 Admin 与仅位于测试源集的会话存储进行，不宣称已经验收 Nginx → Gateway → 真实 Redis 的完整生产链路。
+2026-10-28 验证环境的 Redis 不可达，真实 Redis 共享额度及会话 TTL 集成测试未执行；429、故障拒绝、30 分钟续期/闲置边界、刷新不得恢复超时会话及注销使用隔离测试验证。真实浏览器登录验证通过独立 Keycloak、H2 Admin 与仅位于测试源集的会话存储进行，Nginx → Gateway → 真实 Redis 的完整生产链路尚未验收。
 
 ## 技术依据
 

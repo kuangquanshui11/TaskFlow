@@ -21,7 +21,7 @@ Admin 已从手写 JDBC 仓储切换到 MyBatis-Plus 3.5.18 的 Boot 4 Starter�
 | Nginx → Admin → H2 浏览器测试 | 6 项通过 | taskflow-web/playwright-report、taskflow-web/test-results |
 | 可执行 JAR 内容 | Admin 含新仓储与 MP 3.5.18，无旧 JdbcJobRepository；Scheduler 无 MP 依赖 | jar tf 检查 |
 
-根构建中 JobApiTests 为 16 项，新增 JSON 嵌套与转义、可空字段清除、分页越界和空统计回归；另有 1 项数据库故障响应测试，使用关闭当前 H2 连接池模拟故障，确认返回 503 / DATABASE_UNAVAILABLE。该项发现并修正事务启动失败原先返回 500 的错误映射。其余为 Admin 3 项、Scheduler 2 项、Worker 2 项。唯一跳过项为需要显式开启的远程 Redis 只读连接测试，本次未访问远程 Redis。
+根构建中 JobApiTests 为 16 项，新增 JSON 嵌套与转义、可空字段清除、分页越界和空统计回归；另有 1 项数据库故障响应测试，使用关闭当前 H2 连接池模拟故障，确认返回 503 / DATABASE_UNAVAILABLE。该项发现并修正事务启动失败原先返回 500 的错误映射。其余为 Admin 3 项、Scheduler 2 项、Worker 2 项。唯一跳过项为需要显式开启的远程 Redis 只读连接测试，该阶段未访问远程 Redis。
 
 真实 MySQL 使用独立临时数据目录和回环端口 13379，只操作新建的 taskflow_it_mybatis，测试后关闭实例；未对用户的 taskflow_admin 执行迁移或写入。16 项验证覆盖真实 JSON、NULL 更新、分页、统计、软删除、版本冲突及并发更新。浏览器测试启动 test,e2e YAML profile；日志确认使用 H2 后才执行可写场景，测试实例结束后清理。
 
@@ -77,11 +77,11 @@ $env:TASKFLOW_TEST_DB_URL = 'jdbc:mysql://127.0.0.1:13379/taskflow_it_jobs?conne
 
 测试结束后，Admin 与独立 MySQL 测试进程都已停止。临时测试数据和日志位于 target，受 .gitignore 排除。
 
-## 用户数据库连接检查
+## 本机数据库连接检查
 
-用户提供的连接信息为 taskflow_admin、3306、root。
+验证连接为 127.0.0.1:3306/taskflow_admin，使用本机配置中的 root 凭据。
 
-首次未提供密码时，连接 127.0.0.1:3306 得到 ERROR 1045。用户提供凭证后完成以下验证：
+连接、迁移与只读接口检查结果如下：
 
 1. 只读确认 MySQL 8.0.34、3306 和 taskflow_admin，原任务表与 V1 一致，记录数为 0。
 2. 在该库建立版本 1 基线并执行 V2。历史表记录 1 / BASELINE / success=1、2 / SQL / success=1；任务表共 17 个字段，记录数仍为 0。
@@ -89,7 +89,7 @@ $env:TASKFLOW_TEST_DB_URL = 'jdbc:mysql://127.0.0.1:13379/taskflow_it_jobs?conne
 4. 8080 被已有 Java 进程占用，当前本机 Admin 改用 18080；原进程保留。
 5. GET /actuator/health 返回 UP，GET /api/v1/jobs/select 和 /selectSummary 返回 OK，任务总数为 0。
 
-凭证仅保存在根目录被 Git 忽略的本机配置，不包含在可执行 JAR 中；环境变量 TASKFLOW_ADMIN_DB_PASSWORD 可覆盖。后续按用户要求已将原 properties 迁移至 config/taskflow-admin-local.yml，与 Redis 一起使用 YAML。受版本管理的配置和构建日志中未发现凭证值。
+凭证仅保存在根目录被 Git 忽略的本机配置，不包含在可执行 JAR 中；环境变量 TASKFLOW_ADMIN_DB_PASSWORD 可覆盖。本机配置统一使用 config/taskflow-admin-local.yml，数据库与 Redis 参数均以 YAML 管理。受版本管理的配置和构建日志中未发现凭证值。
 
 接入本机配置后再次运行根目录 verify，20 项测试全部通过，日志位于 target/local-db-verify.log。Admin 使用正常 Maven 命令启动，并保持运行供本机调用。
 

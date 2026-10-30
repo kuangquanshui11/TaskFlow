@@ -9,9 +9,9 @@ Scheduler 已实现到期扫描 → 创建 Run/首次 Attempt → 推进计划 �
 每个候选在独立的 Scheduler 本地事务中：
 
 1. `SELECT ... FOR UPDATE` 锁定本服务的计划行，重新读取最新版本并检查状态与到期时间。
-2. 使用锁定后的当前时间、配置快照、时区和错过策略作出本轮决定。
+2. 使用锁定后的当前时间、配置快照、时区和错过策略作出触发决策。
 3. 需要触发时，调用 `IRunService.insertScheduled`，保存 Run 和首次 READY Attempt。该方法要求已有本地事务。
-4. 将下一时间推进至严格晚于本次决策时间，更新计算状态与基准；SQL 同时检查版本、原计划时间和有效状态。
+4. 将下一时间推进至严格晚于触发决策时间，更新计算状态与基准；SQL 同时检查版本、原计划时间和有效状态。
 5. 一起提交。任一步失败，Run、Attempt 和计划推进一起回滚。
 
 这个事务内没有远程调用。MQ 模式下还会与首次 Attempt 同时写入 WAITING Outbox；`run-dispatch-` 准备不可变命令与执行租约，独立 `dispatch-relay-` 在 SQL 事务之外发布并等待 MQ 确认。显式 HTTP 模式继续使用原派发协议。两种模式沿用结果上报、超时、租约与有限业务重试。
@@ -45,7 +45,7 @@ Scheduler V4 迁移在 `run_execution` 增加：
 | 超过宽限，SKIP | 不创建 Run，下一计划推进到当前时间之后 |
 | 超过宽限，FIRE_ONCE | 为原持久化计划时间创建一个 Run，再推进到当前时间之后 |
 
-每个 Job 每次处理最多创建一个 Run。无论积压多少历史轮次，下一时间都以本次决策时间为基准，不逐条补跑所有错过的时间。宽限内发生多轮延迟时也合并处理本次持久化的到期轮次，不在同一事务中追赶后续历史轮次。
+每个 Job 每次处理最多创建一个 Run。无论积压多少历史轮次，下一时间都以触发决策时间为基准，不逐条补跑所有错过的时间。宽限内发生多轮延迟时也合并处理数据库中保存的当前到期轮次，不在同一事务中追赶后续历史轮次。
 
 FIRE_ONCE 的 scheduledAt 保留原本到期时间，createdAt 表示恢复后实际创建时间，两者可能相差很久。既有 NO_FUTURE_FIRE 规则保留：没有可保存的下一时间则清空 nextFireTime，停止后续扫描。
 
@@ -86,4 +86,4 @@ taskflow:
 
 执行根目录 `mvnw.cmd verify`，再执行 `tools/test-execution.ps1 -SkipBuild`。默认使用隔离 H2；`PlanTriggerTests` 还可使用 `application-test-mysql.yml` 指定的本机空 `taskflow_it_plan_migration_<唯一后缀>` schema 验证真实 MySQL 锁与唯一约束。迁移用例与触发用例使用不同的专用 schema，避免回退已升级的版本。
 
-先升级 Scheduler，让 Flyway 自动应用 V4，再升级 Admin 和前端；Worker 无需协议变更。默认自动触发开启，升级后已启用的到期计划将按配置的错过策略处理。需要分阶段启用时，先在所有 Scheduler 设置 `TASKFLOW_PLAN_TRIGGER_ENABLED=false`，核对计划后再开启。本次代码验收不修改当前业务实例。
+先升级 Scheduler，让 Flyway 自动应用 V4，再升级 Admin 和前端；Worker 无需协议变更。默认自动触发开启，升级后已启用的到期计划将按配置的错过策略处理。需要分阶段启用时，先在所有 Scheduler 设置 `TASKFLOW_PLAN_TRIGGER_ENABLED=false`，核对计划后再开启。升级需要按上述顺序显式部署，测试脚本仅操作隔离实例。

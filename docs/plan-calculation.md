@@ -9,7 +9,7 @@ Scheduler 自己的 V3 迁移为 `schedule_plan` 增加：
 | 字段 | 语义 |
 | --- | --- |
 | next_fire_time | 下一计划时间，UTC `DATETIME(3)`；不适用时为 NULL |
-| calculated_at | 本次实际计算的基准时间，UTC `DATETIME(3)` |
+| calculated_at | 最近一次实际计算的基准时间，UTC `DATETIME(3)` |
 | calculation_state | 计算状态，见下表 |
 
 `PlanCalculationServiceImpl` 实现 `IPlanCalculationService`。启用的 CRON 配置使用 Spring 六字段 Cron 和 IANA 时区，以 Scheduler 接受配置时的 UTC 时钟计算**严格晚于基准**的下一时间。使用 `ZonedDateTime` 处理夏令时：不存在的本地时间被跳过，重复的本地时间保留时区偏移语义。闰日等日期规则由相同 Cron 计算器处理。

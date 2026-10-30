@@ -2,17 +2,17 @@
 
 TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建职责清晰、可独立运行的分布式任务调度与可靠执行服务。
 
-## 当前进度
+## 当前能力
 
 控制台已接入独立 Keycloak 登录、前端登录/退出和权限按钮、Gateway/Admin 双重 JWT 校验与角色权限。Admin 在 Redis 缓存 JWT 会话，每次有效请求续期 30 分钟，闲置过期后要求重新登录；Gateway 使用自有 Redis 分组限流，Nginx 做 IP 粗限流。启动 Admin/Gateway 前需配置 issuer、Keycloak 用户及各自 Redis；缺失配置或 Redis 故障不会放开访问。首次部署及验证边界见 [登录与入口安全](docs/access-security.md)。
 
-已完成三个独立服务骨架，以及 Admin 的 MyBatis-Plus / MySQL / Flyway 接入和任务管理接口：新增、分页查询、详情、修改、启停、软删除、统计、Cron 预览与配置处理器查询。
+我们将任务配置、调度和 Handler 执行分别放在 Admin、Scheduler、Worker 中，各服务独立运行、持有数据并管理迁移。Admin 使用 MyBatis-Plus / MySQL / Flyway，提供任务新增、分页查询、详情、修改、启停、软删除、统计、Cron 预览与配置处理器查询。
 
-已补齐微服务技术栈：Gateway WebFlux/Netty、Eureka、Config Server、OpenFeign/LoadBalancer、Resilience4j、Micrometer Tracing/OTLP。新增三个独立基础设施应用；公共 API 统一经 Gateway，cloud 模式通过服务名调用。Java 21 / Boot 4.1.1 保持不变，使用 Cloud 2025.1.4 BOM。启动与边界见 [微服务技术栈](docs/microservice-platform.md)。
+平台采用 Gateway WebFlux/Netty、Eureka、Config Server、OpenFeign/LoadBalancer、Resilience4j 和 Micrometer Tracing/OTLP。Gateway、Registry、Config Server 作为独立基础设施应用，集中处理入口、寻址和配置；公共 API 统一经 Gateway，cloud 模式通过服务名调用。Java 21 / Boot 4.1.1 与 Cloud 2025.1.4 BOM 统一管理依赖版本。启动与边界见 [微服务技术栈](docs/microservice-platform.md)。
 
 独立 Vue 3 管理台已连接真实 Admin 接口，支持任务管理、Cron 预览、手动执行与运行历史，由 Nginx 托管。Admin 已实现 Redis 详情缓存，默认 TTL 60 秒。手动执行已打通 Admin → Scheduler → Worker → 结果上报：Run/Attempt、执行快照、幂等接收、有限重试、超时与重启恢复均有独立持久化。配置异步同步已实现：Admin 事务 Outbox、后台有限重试、Scheduler 版本副本和删除墓碑。Cron 已支持到期扫描、计划轮次去重及 SKIP/FIRE_ONCE。Scheduler 派发 Outbox、RabbitMQ 发布确认、Worker Inbox 提交后消费确认已实现；远程三节点正常与单节点停机场景各 43 项真实 MQ 检查通过，当前 3.8 Broker 使用显式兼容策略，至少一次死信转移仍未验收。Worker 注册、心跳、在线/离线判定及节点查询页面已实现，MQ 派发按节点能力和负载选择独立 Worker 队列，Attempt 与 Outbox 固定目标和路由；有界续租和 Handler 执行上下文已实现，见 [执行租约](docs/execution-leases.md)；租约失效后可按快照上限创建新 Attempt 并重新选节点，见 [Worker 水平扩展](docs/worker-horizontal-scaling.md)。Java 21 与 Spring Boot 4.1.1 保持不变。
 
-Worker 结果保存恢复已补齐：同一份结果有限重试写库，恢复后继续上报，耗尽有可定位错误，保存重试不重新调用 Handler；线程池拒绝已领取任务也有收尾。进程崩溃、重试耗尽和过期租约仍有明确限制，见 [结果保存恢复](docs/worker-result-recovery.md)。
+Worker 对同一份执行结果有限重试写库，恢复后继续上报，耗尽时记录可定位错误；保存重试不重新调用 Handler，线程池拒绝已领取任务时也有收尾。进程崩溃、重试耗尽和过期租约的限制见 [结果保存恢复](docs/worker-result-recovery.md)。
 
 ## 模块和边界
 
@@ -131,7 +131,7 @@ init 可在没有 Docker 时生成被忽略的随机凭据、Broker 定义和服
 其他开发环境没有本机配置时，可在终端设置环境变量，例如将下方示意值替换为实际值，然后在同一个终端启动 Admin：
 
 ```powershell
-$env:TASKFLOW_ADMIN_DB_PASSWORD = '替换为你本机的数据库密码'
+$env:TASKFLOW_ADMIN_DB_PASSWORD = '替换为本机数据库密码'
 .\mvnw.cmd -pl taskflow-admin spring-boot:run
 ```
 
@@ -251,4 +251,4 @@ TaskFlow/
 
 ## 下一步
 
-任务管理、Cron 自动执行、可靠派发代码、Worker 节点管理和微服务治理基础已实现。Worker 结果保存故障已按重试、恢复上报、耗尽诊断和故障测试补齐。真实 MQ 正常与单节点停机闭环已通过；后续补充可靠死信、在途消息故障与多数派丢失验收，执行租约续期已补齐，后续推进失联恢复；Jaeger 容器实测及全量配置对账仍需补齐。平台能力与验证范围见 [微服务技术栈](docs/microservice-platform.md)。
+后续工作聚焦可靠死信、在途消息故障、多数派丢失、失联恢复、Jaeger 容器实测及全量配置对账。现有能力和故障保障的验证范围见 [微服务技术栈](docs/microservice-platform.md)。
