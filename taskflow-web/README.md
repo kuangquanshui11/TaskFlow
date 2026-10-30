@@ -34,6 +34,8 @@ npm.cmd test
 
 API 字段见 docs/api.md，部署见 docs/frontend-deployment.md。页面只管理已实现的配置能力，不模拟 Scheduler、Worker 或 Redis 功能。
 
+创建和编辑任务时，处理器选项展示中文用途名称及原始标识；选中后常驻展示执行行为、参数要求与示例。四个内置处理器分别用于成功、始终失败、首次失败后成功和耗时执行演示，不处理真实业务；首次失败演示说明最大尝试次数至少为 2，耗时演示说明 `durationMillis` 的单位、范围、默认值及超时关系。说明只影响展示，提交仍使用原 `handlerKey`，不自动修改用户参数或重试策略；未配置说明的处理器保留原标识，并提示联系维护者确认用途。
+
 `/workers` 展示 Scheduler 的真实节点记录、在线状态、Handler、容量与最后心跳，支持过滤、分页和自动刷新。查询失败不伪装为空列表或继续显示在线，离开/隐藏页面停止轮询，移动端长标识转为可换行卡片。完整三服务节点浏览器验收从根目录运行 `tools/test-execution.ps1 -SkipBuild`，协议见 [节点管理](../docs/worker-nodes.md)。
 
 所有 E2E 管理请求使用真实登录后的当前 JWT。统一脚本自动准备独立 Keycloak、测试账号和双 Redis；MQ 全链路、会话过期、退出及 Redis 故障的运行说明见 [带登录的任务链路回归](../docs/authenticated-regression.md)。

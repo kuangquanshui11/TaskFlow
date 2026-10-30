@@ -1,5 +1,5 @@
 <script setup>
-import { nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
 import DialogShell from './DialogShell.vue';
 import AppIcon from './AppIcon.vue';
 import { useWorkspace } from '../composables/workspace.js';
@@ -10,6 +10,36 @@ const props = defineProps({ open: Boolean, jobId: { default: null } });
 const emit = defineEmits(['close', 'saved']);
 const workspace = useWorkspace();
 const form = reactive(emptyJob());
+const handlerGuides = {
+  demoSuccess: {
+    name: '执行成功演示',
+    description: '执行后立即返回成功，用于确认任务派发、执行和结果查询正常。',
+    parameters: '无需任务参数，可留空或填写 {}。',
+  },
+  demoFail: {
+    name: '始终失败演示',
+    description: '每次尝试都会失败，用于观察失败记录、自动重试和次数耗尽后的结果。',
+    parameters: '无需任务参数，可留空或填写 {}。',
+    note: '最大尝试次数包含首次执行；达到上限后，本次运行最终失败。',
+  },
+  demoFailOnce: {
+    name: '首次失败后成功演示',
+    description: '每次运行的第一次尝试失败，后续尝试成功，用于验证自动重试。',
+    parameters: '无需任务参数，可留空或填写 {}。',
+    note: '请在「失败与超时设置」中将最大尝试次数设为 2 或以上，才能观察重试成功。',
+  },
+  demoSlow: {
+    name: '耗时执行演示',
+    description: '等待指定时间后返回成功，用于观察运行中状态和超时处理。',
+    parameters: 'durationMillis 表示等待毫秒数，范围为 0–60000；不填写时默认等待 1000 毫秒（1 秒）。',
+    example: '{ "durationMillis": 5000 }',
+    note: '示例表示等待 5 秒。执行超时短于模拟耗时时会触发超时处理。',
+  },
+};
+const selectedHandler = computed(() => handlerGuides[form.handlerKey]);
+function handlerLabel(key) {
+  return handlerGuides[key] ? `${handlerGuides[key].name}（${key}）` : key;
+}
 const errors = ref({});
 const error = ref('');
 const loading = ref(false);
@@ -87,7 +117,26 @@ async function preview() {
         <div class="section-label"><span class="step-number">01</span><h3>基本信息</h3></div>
         <div class="field"><label for="job-name">任务名称 <span class="required">*</span></label><input id="job-name" v-model="form.name" data-autofocus maxlength="100" placeholder="例如：订单超时检查" :aria-invalid="!!errors.name" :aria-describedby="errors.name ? 'error-name' : undefined"><p v-if="errors.name" id="error-name" class="field-error">{{ errors.name }}</p></div>
         <div class="field"><label for="job-description">任务说明 <span class="optional">选填</span></label><textarea id="job-description" v-model="form.description" maxlength="500" rows="2" placeholder="简要描述任务的用途"></textarea></div>
-        <div class="field"><label for="job-handlerKey">处理器 <span class="required">*</span></label><select id="job-handlerKey" v-model="form.handlerKey" :aria-invalid="!!errors.handlerKey"><option disabled value="">请选择处理器</option><option v-for="handler in workspace.state.handlers" :key="handler" :value="handler">{{ handler }}</option></select><p v-if="errors.handlerKey" class="field-error">{{ errors.handlerKey }}</p><p v-if="workspace.state.handlerError" class="field-error">{{ workspace.state.handlerError }} <button type="button" class="text-button" @click="workspace.loadHandlers">重新加载</button></p><p v-else class="field-hint">从已配置的处理器中选择，执行器需提供对应实现。</p></div>
+        <div class="field">
+          <label for="job-handlerKey">处理器 <span class="required">*</span></label>
+          <select id="job-handlerKey" v-model="form.handlerKey" :aria-invalid="!!errors.handlerKey" :aria-describedby="['handler-hint', form.handlerKey ? 'handler-guide' : null, errors.handlerKey ? 'error-handlerKey' : null].filter(Boolean).join(' ')">
+            <option disabled value="">请选择处理器</option>
+            <option v-for="handler in workspace.state.handlers" :key="handler" :value="handler">{{ handlerLabel(handler) }}</option>
+          </select>
+          <p v-if="errors.handlerKey" id="error-handlerKey" class="field-error">{{ errors.handlerKey }}</p>
+          <p v-if="workspace.state.handlerError" class="field-error">{{ workspace.state.handlerError }} <button type="button" class="text-button" @click="workspace.loadHandlers">重新加载</button></p>
+          <p id="handler-hint" class="field-hint">处理器决定任务执行的逻辑。内置演示处理器仅用于测试，不处理真实业务。</p>
+          <div id="handler-guide" class="handler-guide" role="status" aria-live="polite" aria-atomic="true">
+            <template v-if="selectedHandler">
+              <strong>{{ selectedHandler.name }}</strong>
+              <p>{{ selectedHandler.description }}</p>
+              <p>{{ selectedHandler.parameters }}</p>
+              <p v-if="selectedHandler.example" class="handler-example">任务参数示例：<code>{{ selectedHandler.example }}</code></p>
+              <p v-if="selectedHandler.note" class="handler-note">{{ selectedHandler.note }}</p>
+            </template>
+            <p v-else-if="form.handlerKey">此处理器尚未提供用途说明，请联系维护者确认执行行为和任务参数。</p>
+          </div>
+        </div>
       </section>
       <section class="form-section">
         <div class="section-label"><span class="step-number">02</span><h3>执行计划</h3></div>
@@ -114,8 +163,16 @@ async function preview() {
         </details>
       </section>
       <label class="checkbox-label"><input v-model="form.enabled" type="checkbox"><span>保存后启用任务配置</span></label>
-      <p class="field-hint">当前支持保存与管理配置，任务执行能力将分阶段接入。</p>
+      <p class="field-hint">定时任务按计划执行；手动任务保存后可在详情中触发。</p>
     </form>
     <template #footer><span class="footer-hint">{{ jobId == null ? '创建后可随时编辑' : '配置版本 v' + (version ?? '—') }}</span><button class="button secondary" :disabled="saving" @click="$emit('close')">取消</button><button class="button primary" type="submit" form="job-editor-form" :disabled="saving || loading || (jobId != null && version == null)"><span v-if="saving" class="spinner"></span><AppIcon v-else name="check" :size="17" />{{ saving ? '正在保存' : jobId == null ? '创建任务' : '保存修改' }}</button></template>
   </DialogShell>
 </template>
+<style scoped>
+.handler-guide:empty { display: none; }
+.handler-guide { margin-top: 12px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--canvas); color: var(--ink); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.handler-guide strong { display: block; margin-bottom: 6px; }
+.handler-guide p { margin: 6px 0 0; }
+.handler-example code { display: block; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); white-space: pre-wrap; }
+.handler-note { color: var(--muted); }
+</style>
