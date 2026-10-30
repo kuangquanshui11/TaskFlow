@@ -2,11 +2,13 @@
 import { computed, nextTick, reactive, ref, watch } from 'vue';
 import DialogShell from './DialogShell.vue';
 import AppIcon from './AppIcon.vue';
+import ScheduleControls from './ScheduleControls.vue';
 import { useWorkspace } from '../composables/workspace.js';
 import { emptyJob, jobToForm, validateJob, toJobPayload } from '../lib/job-form.js';
 import { jobsApi } from '../api/jobs.js';
 import { fullDate } from '../lib/format.js';
 import { jobTemplates, findJobTemplate, createTemplateForm } from '../lib/job-templates.js';
+import { scheduleDescription } from '../lib/schedule-form.js';
 const props = defineProps({ open: Boolean, jobId: { default: null }, templateId: { type: String, default: null } });
 const emit = defineEmits(['close', 'saved']);
 const workspace = useWorkspace();
@@ -42,6 +44,7 @@ const templateChoice = ref('');
 const pendingTemplateId = ref(null);
 let draftBaseline = '';
 const selectedTemplate = computed(() => findJobTemplate(selectedTemplateId.value));
+const currentSchedule = computed(() => scheduleDescription(form.cronExpression, form.scheduleType));
 const templateBlocked = computed(() => selectedTemplate.value && form.handlerKey === selectedTemplate.value.handler && !workspace.state.handlers.includes(form.handlerKey));
 const templateDemonstration = computed(() => selectedTemplate.value && Object.hasOwn(handlerGuides, form.handlerKey));
 const availableHandlers = computed(() => selectedTemplate.value
@@ -161,7 +164,7 @@ async function preview() {
           <legend class="sr-only">业务场景模板</legend>
           <label v-for="template in jobTemplates" :key="template.id" :class="{ selected: templateChoice === template.id }">
             <input v-model="templateChoice" type="radio" name="job-template" :value="template.id" :aria-label="template.title" :aria-describedby="'template-schedule-' + template.id" @change="chooseTemplate">
-            <span><strong>{{ template.title }}</strong><small :id="'template-schedule-' + template.id">{{ template.schedule }}</small></span>
+            <span><strong>{{ template.title }}</strong><small :id="'template-schedule-' + template.id">{{ selectedTemplateId === template.id ? currentSchedule : '执行时间由你设置' }}</small></span>
           </label>
           <label class="template-custom" :class="{ selected: templateChoice === '' }"><input v-model="templateChoice" type="radio" name="job-template" value="" aria-label="自定义任务" @change="chooseTemplate"><span><strong>自定义任务</strong><small>自行选择处理器，配置业务与执行计划</small></span></label>
         </fieldset>
@@ -172,7 +175,8 @@ async function preview() {
         <div v-if="selectedTemplate" class="template-guidance" aria-live="polite">
           <strong>{{ selectedTemplate.title }} · 使用指引</strong>
           <p>{{ selectedTemplate.benefit }}</p>
-          <ol><li>名称、{{ selectedTemplate.schedule }}的计划和参数示例已填入。请按实际业务调整。</li><li>{{ selectedTemplate.parameters }}</li><li>检查时区、超时和失败策略；模板默认保存为停用，最多尝试 1 次。</li></ol>
+          <p>当前计划：{{ currentSchedule }}。所有业务的执行时间都可自行设置。<button type="button" class="text-button" @click="focusField(form.scheduleType === 'CRON' ? 'schedule-mode' : 'scheduleType')">调整执行时间</button></p>
+          <ol><li>名称和参数示例已填入；执行计划只是默认建议，请按实际业务调整。</li><li>{{ selectedTemplate.parameters }}</li><li>检查时区、超时和失败策略；模板默认保存为停用，最多尝试 1 次。</li></ol>
           <template v-if="templateBlocked">
             <p class="template-status">尚未配置此业务的处理器，请联系维护者接入 <code>{{ selectedTemplate.handler }}</code>。{{ selectedTemplate.integration }}</p>
             <div class="template-actions"><button type="button" class="button secondary" @click="workspace.loadHandlers">刷新处理器列表</button><button v-if="workspace.state.handlers.includes('demoSuccess')" type="button" class="button secondary" @click="demonstrateTemplate">先体验调度流程</button></div>
@@ -210,11 +214,11 @@ async function preview() {
       <section class="form-section">
         <div class="section-label"><span class="step-number">02</span><h3>执行计划</h3></div>
         <fieldset class="mode-options"><legend class="sr-only">执行方式</legend>
-          <label :class="{ selected: form.scheduleType === 'CRON' }"><input v-model="form.scheduleType" type="radio" value="CRON"><AppIcon name="clock" /><span><strong>定时执行</strong><small>按 Cron 配置周期计划</small></span></label>
+          <label :class="{ selected: form.scheduleType === 'CRON' }"><input id="job-scheduleType" v-model="form.scheduleType" type="radio" value="CRON"><AppIcon name="clock" /><span><strong>定时执行</strong><small>自行选择执行频率和时间</small></span></label>
           <label :class="{ selected: form.scheduleType === 'MANUAL' }"><input v-model="form.scheduleType" type="radio" value="MANUAL"><AppIcon name="play" /><span><strong>手动触发</strong><small>保存为按需执行的任务</small></span></label>
         </fieldset>
         <template v-if="form.scheduleType === 'CRON'">
-          <div class="field"><label for="job-cronExpression">Cron 表达式 <span class="required">*</span></label><div class="input-with-action"><input id="job-cronExpression" v-model="form.cronExpression" class="mono" maxlength="100" placeholder="0 */5 * * * *" :aria-invalid="!!errors.cronExpression"><button class="button secondary" type="button" :disabled="previewing" @click="preview">{{ previewing ? '计算中' : '预览' }}</button></div><p class="field-hint">六个字段依次为：秒、分、时、日、月、星期。</p><p v-if="errors.cronExpression" class="field-error">{{ errors.cronExpression }}</p></div>
+          <ScheduleControls v-model="form.cronExpression" :error="errors.cronExpression" :previewing="previewing" @preview="preview" />
           <div class="field"><label for="job-timeZone">时区</label><input id="job-timeZone" v-model="form.timeZone" list="job-timezones" :aria-invalid="!!errors.timeZone"><datalist id="job-timezones"><option>Asia/Shanghai</option><option>UTC</option><option>Asia/Tokyo</option><option>Europe/London</option><option>America/New_York</option></datalist></div>
           <div v-if="previewTimes.length" class="preview-mini"><strong>接下来的计划时间</strong><ol><li v-for="time in previewTimes" :key="time">{{ fullDate(time, form.timeZone) }}</li></ol></div>
         </template>

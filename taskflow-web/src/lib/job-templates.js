@@ -11,7 +11,7 @@ export const jobTemplates = [
     integration: '订单服务提供超时检查与关闭能力，处理器负责调用；重复执行时避免重复处理订单。',
   },
   {
-    id: 'reports', icon: 'jobs', title: '每天生成销售报表', category: '经营分析',
+    id: 'reports', icon: 'jobs', title: '生成销售报表', category: '经营分析',
     problem: '每天手工汇总销售数据，容易遗漏或延迟。', schedule: '每天凌晨 01:00',
     action: '调用报表服务，汇总指定店铺的销售数据并生成报表。',
     benefit: '按时准备报表，失败时可查询原因并重新执行。', cron: '0 0 1 * * *', handler: 'salesReport',
