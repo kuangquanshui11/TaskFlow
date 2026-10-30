@@ -35,3 +35,5 @@ npm.cmd test
 API 字段见 docs/api.md，部署见 docs/frontend-deployment.md。页面只管理已实现的配置能力，不模拟 Scheduler、Worker 或 Redis 功能。
 
 `/workers` 展示 Scheduler 的真实节点记录、在线状态、Handler、容量与最后心跳，支持过滤、分页和自动刷新。查询失败不伪装为空列表或继续显示在线，离开/隐藏页面停止轮询，移动端长标识转为可换行卡片。完整三服务节点浏览器验收从根目录运行 `tools/test-execution.ps1 -SkipBuild`，协议见 [节点管理](../docs/worker-nodes.md)。
+
+所有 E2E 管理请求使用真实登录后的当前 JWT。统一脚本自动准备独立 Keycloak、测试账号和双 Redis；MQ 全链路、会话过期、退出及 Redis 故障的运行说明见 [带登录的任务链路回归](../docs/authenticated-regression.md)。

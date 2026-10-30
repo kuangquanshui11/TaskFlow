@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../authenticated.js';
 import path from 'node:path';
 
 test('真实节点查询、筛选、错误恢复和离开页面停止轮询', async ({ page, request }) => {

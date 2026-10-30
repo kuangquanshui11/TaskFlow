@@ -91,7 +91,7 @@ Windows Nginx 包用于当前本地学习环境，仅监听回环地址。部署
 
 ## 验证与故障排查
 
-登录功能的当前验证入口为 taskflow-web/playwright.access.config.js，配置专用测试身份后运行，见 [安全验证](access-security.md#验证)。下面旧版 test-frontend/test-execution/test-platform 脚本生成的隔离 YAML 和匿名请求基于此前无登录环境，不能直接作为新增鉴权后的全链路验收结果；需先补齐其身份会话及真实 Redis 环境。2026-10-28 安全验证未运行这些旧版匿名脚本。
+test-frontend/test-execution/test-platform 复用带登录的隔离环境：真实 Keycloak PKCE、Gateway/Admin JWT、独立会话 Redis 与限流 Redis，再运行业务和浏览器检查。MQ 入口为 test-mq，前置发行目录、集群配置与证据说明见 [带登录的任务链路回归](authenticated-regression.md)。playwright.access.config.js 的独立身份检查也由统一入口执行；不再需要手工生成测试账号或装载内存会话替身。
 
 ```powershell
 # 根目录：隔离测试，不写用户 MySQL
@@ -102,7 +102,7 @@ Windows Nginx 包用于当前本地学习环境，仅监听回环地址。部署
 .\tools\test-platform.ps1 -SkipBuild
 ```
 
-测试脚本先确认 19080/19081/19082/19088/8091 空闲，启动隔离的 Gateway 和三个业务服务，并从启动日志确认各自 H2 文件库，再运行可写的 API/浏览器测试。使用本机 Chrome，无需额外下载测试浏览器；退出时只清理脚本创建且身份匹配的进程。
+测试脚本先确认 19080/19081/19082/19088/8091、19190 和 16379/16380 空闲，启动独立身份服务、双 Redis、Gateway 和三个业务服务，并从启动日志确认各自 H2 文件库，再运行带身份的 API/浏览器测试。使用本机 Chrome；退出时只清理脚本自己持有进程句柄的服务。
 
 隔离多服务测试由 test-execution.ps1 为每次测试生成独立 YAML，连接、端口、凭据与日志保存在被忽略的 `.tools/execution-e2e/<时间戳>`；数据库和 Redis 配置不在业务 Java 中硬编码。test-platform.ps1 另启动 Eureka 19161、Config 19188 和 OTLP 测试接收器 19118。
 

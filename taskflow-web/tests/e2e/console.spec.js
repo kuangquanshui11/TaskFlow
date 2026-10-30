@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../authenticated.js';
 
 async function create(page, name) {
   await page.getByRole('button', { name: '新建任务', exact: true }).click();

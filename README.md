@@ -251,4 +251,6 @@ TaskFlow/
 
 ## 下一步
 
+带登录的完整任务回归入口、隔离身份与 Redis、MQ 前置条件和故障场景见 [带登录的任务链路回归](docs/authenticated-regression.md)。
+
 后续工作聚焦可靠死信、在途消息故障、多数派丢失、失联恢复、Jaeger 容器实测及全量配置对账。现有能力和故障保障的验证范围见 [微服务技术栈](docs/microservice-platform.md)。

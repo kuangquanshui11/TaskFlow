@@ -60,6 +60,13 @@ foreach ($name in @('SPRING_DATASOURCE_URL','SPRING_DATASOURCE_USERNAME','SPRING
 }
 function Call-Api([string]$Method, [string]$Url, $Body = $null, [string]$Token = '',[string]$BasicAuthorization = '',[string]$TraceParent = '') {
     if($Url.StartsWith('http://127.0.0.1:19080/api/')) { $Url=$Url.Replace('http://127.0.0.1:19080/api/','http://127.0.0.1:19088/api/') }
+    if ($Url.StartsWith('http://127.0.0.1:19088/api/v1/') -and !$BasicAuthorization) {
+        $BasicAuthorization = Get-AcceptanceAuthorization
+        # Respect the production token buckets; never hide a 429 by replaying a POST.
+        $gap = if ($Method -eq 'POST' -and $Url -match '/(runs/insert|job-sync/updateRetry)$') { 1050 }
+            elseif ($Method -eq 'POST') { 220 } else { 55 }
+        Start-Sleep -Milliseconds $gap
+    }
     $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new($Method), $Url)
     $request.Headers.Accept.ParseAdd('application/json')
     if ($Token) { $null = $request.Headers.TryAddWithoutValidation('X-Taskflow-Token', $Token) }
@@ -95,7 +102,7 @@ function Start-TestService([string]$Name) {
         $javaArguments = @('-DTASKFLOW_CONFIG_SERVER_URL=' + $platform.configUrl) + $javaArguments
     }
     $process = Start-Process -FilePath $javaExe -ArgumentList $javaArguments -WorkingDirectory $repoPath -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
-    $processes[$Name] = [pscustomobject]@{ id = $process.Id; jar = $file.jar; log = $out }
+    $processes[$Name] = [pscustomobject]@{ id = $process.Id; jar = $file.jar; log = $out; process = $process }
     $readyDeadline = [DateTime]::UtcNow.AddSeconds(60)
     while ([DateTime]::UtcNow -lt $readyDeadline) {
         if ($process.HasExited) { throw "$Name exited; inspect $runRoot" }
@@ -117,12 +124,10 @@ function Start-TestService([string]$Name) {
 function Stop-TestService([string]$Name) {
     if (!$processes.ContainsKey($Name)) { return }
     $entry = $processes[$Name]
-    $process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $entry.id)
-    if ($process) {
-        if (!$process.CommandLine.Contains($entry.jar)) { throw "Process identity mismatch for $Name" }
-        Stop-Process -Id $entry.id -ErrorAction Stop
-        Wait-Process -Id $entry.id -Timeout 10 -ErrorAction SilentlyContinue
-    }
+    # Retain the handle we created instead of finding arbitrary processes by name/PID.
+    $process = $entry.process
+    if (!$process.HasExited) { $process.Kill(); $process.WaitForExit(10000) | Out-Null }
+    $process.Dispose()
     $processes.Remove($Name)
 }
 function New-TestJob([string]$Handler, [int]$Attempts = 1, [int]$Timeout = 10, [int]$Delay = 50) {
@@ -162,7 +167,11 @@ function Wait-TestNode([string]$State, [string]$WorkerId = 'worker-default') {
     }
     throw "Worker did not become $State."
 }
+$accessProcesses = @{}
+$accessRedisPorts = @{ 'session-redis' = 16379; 'rate-redis' = 16380 }
+. (Join-Path $PSScriptRoot 'lib/execution-access.ps1')
 try {
+    Initialize-AcceptanceAccess
     if ($InjectWorkerResultSaveFailure) {
         $resultFailureClasses = Join-Path $runRoot 'result-save-classes'
         $resultFailureMigrations = Join-Path $runRoot 'result-save-migrations'
@@ -205,6 +214,8 @@ try {
             $eurekaYaml="eureka:`n  client:`n    enabled: true`n    registry-fetch-interval-seconds: 1`n    initial-instance-info-replication-interval-seconds: 1`n    instance-info-replication-interval-seconds: 2`n    service-url:`n      defaultZone: `"$($platform.registryUrl)`"`n  instance:`n    lease-renewal-interval-in-seconds: 1`n    lease-expiration-duration-in-seconds: 4"
             $traceYaml="  tracing:`n    sampling:`n      probability: 1.0`n    export:`n      otlp:`n        enabled: true`n  opentelemetry:`n    tracing:`n      export:`n        otlp:`n          endpoint: `"$($platform.traceEndpoint)`"`n  info:`n    env:`n      enabled: true`n  endpoints:`n    web:`n      exposure:`n        include: health,info"
         }
+        $accessImport = if ($name -eq 'admin') { 'file:' + (Join-Path $PSScriptRoot 'acceptance/application-access-admin.yml').Replace('\','/') } else { '' }
+        $testImport = @($testImport, $accessImport | Where-Object { $_ }) -join ','
         $executionLeaseYaml = if ($IncludeExecutionLease -or $IncludeWorkerCluster) { "    lease:`n      duration: 10s`n      renewal-interval: 500ms" } else { '' }
         $configuration = @"
 spring:
@@ -291,6 +302,7 @@ info:
         $gatewayEureka=$eurekaYaml
         $gatewayTrace=$traceYaml
     }
+    $gatewayImport = @($gatewayImport, ('file:' + (Join-Path $PSScriptRoot 'acceptance/application-access-gateway.yml').Replace('\','/')) | Where-Object { $_ }) -join ','
     $gatewayConfiguration=@"
 spring:
   config:
@@ -302,6 +314,8 @@ server:
 management:
 $gatewayTrace
   health:
+    redis:
+      enabled: false
     discoveryComposite:
       enabled: false
 $gatewayEureka
@@ -312,6 +326,10 @@ info:
     [IO.File]::WriteAllText($gatewayYaml,$gatewayConfiguration,$utf8)
     $serviceFiles['gateway']=@{jar=$gatewayJar;yaml=$gatewayYaml}
     Start-TestService 'scheduler'; Start-TestService 'worker'; Start-TestService 'admin';Start-TestService 'gateway'
+    Connect-AcceptanceSession
+    & node (Join-Path $PSScriptRoot 'local/execution-security.mjs') security $accessSettingsPath $accessTokensPath $runRoot
+    if ($LASTEXITCODE -ne 0) { throw 'JWT and real Redis security acceptance failed.' }
+    Assert-Check $true 'Anonymous access, VIEWER permissions, rotation, logout, real Redis TTL expiry and fresh reauthentication pass'
     if($platform) {
         $auth='Basic '+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($platform.registryUser+':'+$platform.registryPassword))
         $registered=$false
@@ -603,6 +621,27 @@ info:
         if ($deleted.status -ne 200) { throw 'Isolated test Job cleanup failed.' }
     }
 
+    foreach ($dependency in @('rate-redis','session-redis')) {
+        $faultJob = New-TestJob 'demoSuccess'
+        $null = Wait-TestSync $faultJob.id 'SYNCED' 1
+        $beforeFault = Call-Api 'GET' ("http://127.0.0.1:19081/internal/v1/runs/select?jobId=" + $faultJob.id) $null $controlToken
+        Stop-AcceptanceDependency $dependency
+        try {
+            & node (Join-Path $PSScriptRoot 'local/execution-security.mjs') $dependency $accessSettingsPath $accessTokensPath $runRoot $faultJob.id
+            if ($LASTEXITCODE -ne 0) { throw "$dependency outage acceptance failed." }
+        } finally { Start-AcceptanceRedis $dependency }
+        # Gateway circuit breakers can remain open briefly after the fault has recovered.
+        Start-Sleep -Seconds 11
+        if ($dependency -eq 'session-redis') { Connect-AcceptanceSession }
+        $afterFault = Call-Api 'GET' ("http://127.0.0.1:19081/internal/v1/runs/select?jobId=" + $faultJob.id) $null $controlToken
+        Assert-Check ($beforeFault.status -eq 200 -and $afterFault.status -eq 200 -and $beforeFault.body.total -eq 0 -and $afterFault.body.total -eq 0) "$dependency outage rejects a valid Run command without reaching Scheduler"
+        $healthAfterFault = Call-Api 'GET' 'http://127.0.0.1:19080/api/v1/jobs/selectSummary'
+        Assert-Check ($healthAfterFault.status -eq 200) "$dependency recovery restores authenticated API access"
+        $afterFaultRun = New-TestRun $faultJob
+        Assert-Check ((Wait-TestRun $afterFaultRun.run.id).state -eq 'SUCCEEDED') "$dependency recovery restores MQ execution with a new explicit request"
+        $null = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/jobs/delete' @{id=$faultJob.id; configVersion=$faultJob.configVersion}
+    }
+
     if (!$SkipBrowser) {
         Push-Location (Join-Path $repoPath 'taskflow-web')
         try { & npm.cmd test; if ($LASTEXITCODE -ne 0) { throw 'Frontend unit tests failed.' }; & npm.cmd run build; if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' } }
@@ -623,7 +662,12 @@ info:
         $env:TASKFLOW_EXECUTION_E2E = 'true'
         $env:TASKFLOW_EXECUTION_EVIDENCE_DIR = $runRoot
         Push-Location (Join-Path $repoPath 'taskflow-web')
-        try { & npm.cmd run test:e2e; if ($LASTEXITCODE -ne 0) { throw 'Browser execution verification failed.' } }
+        try {
+            & npm.cmd run test:e2e
+            if ($LASTEXITCODE -ne 0) { throw 'Browser execution verification failed.' }
+            & npx.cmd playwright test --config playwright.access.config.js
+            if ($LASTEXITCODE -ne 0) { throw 'Browser login and session verification failed.' }
+        }
         finally { Pop-Location }
         Assert-Check $true 'Existing console and new execution browser tests pass'
     }
@@ -632,6 +676,7 @@ info:
 } finally {
     if ($nginxStarted) { & $nginxExe -p $nginxPrefix -c conf/nginx.conf -s quit }
     foreach ($name in @('gateway','admin','worker2','worker','scheduler')) { Stop-TestService $name }
+    foreach ($name in @('identity','rate-redis','session-redis')) { Stop-AcceptanceDependency $name }
     foreach ($entry in $mutatedEnvironment.GetEnumerator()) {
         if ($null -eq $entry.Value) { Remove-Item ('Env:' + $entry.Key) -ErrorAction SilentlyContinue }
         else { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process') }

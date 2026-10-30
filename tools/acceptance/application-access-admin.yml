@@ -1,0 +1,21 @@
+spring:
+  data:
+    redis:
+      host: 127.0.0.1
+      port: ${TASKFLOW_TEST_SESSION_REDIS_PORT}
+      username: ""
+      password: ${TASKFLOW_TEST_SESSION_REDIS_PASSWORD}
+      database: 0
+      connect-timeout: 500ms
+      timeout: 500ms
+taskflow:
+  access:
+    issuer: ${TASKFLOW_TEST_ISSUER}
+    audience: taskflow-api
+    client-id: taskflow-console
+    public-key-location: ""
+    session:
+      idle-timeout: 30m
+      login-window: 5s
+      rotation-grace: 10s
+      key-prefix: ${TASKFLOW_TEST_SESSION_PREFIX}

@@ -1,0 +1,17 @@
+spring:
+  data:
+    redis:
+      host: 127.0.0.1
+      port: ${TASKFLOW_TEST_RATE_REDIS_PORT}
+      username: ""
+      password: ${TASKFLOW_TEST_RATE_REDIS_PASSWORD}
+      database: 0
+      connect-timeout: 500ms
+      timeout: 500ms
+taskflow:
+  access:
+    issuer: ${TASKFLOW_TEST_ISSUER}
+    audience: taskflow-api
+    public-key-location: ""
+  rate-limit:
+    namespace: ${TASKFLOW_TEST_RATE_NAMESPACE}

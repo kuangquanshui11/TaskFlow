@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../authenticated.js';
 import path from 'node:path';
 
 test('真实计划查询随 Cron、时区和启停更新，关闭详情后停止刷新', async ({ page, request }) => {

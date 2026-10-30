@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../authenticated.js';
 import path from 'node:path';
 
 test.describe('三服务执行闭环', () => {

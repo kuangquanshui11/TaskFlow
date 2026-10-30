@@ -6,6 +6,8 @@
 
 VIEWER 可查询及 POST 预览；OPERATOR 另可启停、触发 Run 和重试同步；ADMIN 另可新增、修改、删除 Job。Gateway/Admin 各自验签，Admin 按精确动作路径和关键 Service 方法授权。未允许的路径/方法默认 403，可能先于原 404/405 被安全层拒绝。401、403、429、503 的错误格式、完整权限与限流策略见 [登录与入口安全](access-security.md)。
 
+安全与任务能力通过同一套 [带登录回归](authenticated-regression.md) 验证：创建/同步、Cron 与手动 Run、MQ、Worker 结果查询均保留 JWT 和真实 Redis 会话，另检查 401、403 及 Redis 故障 503 不产生 Run。
+
 ## 功能归属与实现范围
 
 | 业务功能 | 归属服务 | 当前实现 |

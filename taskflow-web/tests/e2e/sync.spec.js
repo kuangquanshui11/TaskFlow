@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../authenticated.js';
 import path from 'node:path';
 
 test('配置同步显示真实状态，关闭抽屉后停止轮询', async ({ page, request }) => {

@@ -21,3 +21,7 @@ Redis 在验证环境中不可达，真实 Redis Lua/TTL 与跨 Gateway 共享�
 安全回归中的并发请求携带独立身份上下文，未配置路径/方法按默认拒绝策略断言。Keycloak 默认客户端 scope 包含 basic，真实登录已验证 sub/auth_time 字段；测试进程使用复制到 .tools 的独立 JAR，避免锁住 Windows 构建目标。
 
 部署与协议见 [登录与入口安全](access-security.md)。
+
+## 2026-10-30：带登录的 MQ 完整回归
+
+真实 Keycloak、Gateway/Admin JWT、隔离双 Redis 与三节点 MQ 已在同一轮运行：53 项链路检查、45 项安全细项、17 项控制台与 3 项身份浏览器测试通过，包含 Cron/手动执行、Redis 会话过期、退出、两类 Redis 故障拒绝和恢复后 MQ 执行。命令、环境、证据目录及 H2 / 旧版 Broker 等适用边界见 [本轮验证记录](authenticated-regression-verification.md)。上述 2026-10-28 记录保持历史范围，不代表本轮使用测试会话替身。

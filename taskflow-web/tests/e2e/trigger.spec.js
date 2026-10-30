@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../authenticated.js';
 import path from 'node:path';
 
 test('Cron 到期自动创建运行并执行，停用同步后停止新增', async ({ page, request }) => {

@@ -123,6 +123,8 @@ JWT exp 与 Redis TTL 分开管理：TTL 续期不能修改已签名的 exp；�
 
 2026-10-28 验证环境的 Redis 不可达，真实 Redis 共享额度及会话 TTL 集成测试未执行；429、故障拒绝、30 分钟续期/闲置边界、刷新不得恢复超时会话及注销使用隔离测试验证。真实浏览器登录验证通过独立 Keycloak、H2 Admin 与仅位于测试源集的会话存储进行，Nginx → Gateway → 真实 Redis 的完整生产链路尚未验收。
 
+2026-10-30 已通过同一版本的带登录 MQ 回归：Nginx → Gateway → 真实双 Redis → Admin，以及配置同步、Cron/手动触发、MQ、Worker 与结果查询同时运行，并覆盖权限、会话过期、退出和 Redis 故障恢复。业务数据库仍为隔离 H2；环境、命令和未验证范围见 [带登录回归记录](authenticated-regression-verification.md)，自动启动方式见 [运行说明](authenticated-regression.md)。
+
 ## 技术依据
 
 - [Spring Security Servlet JWT](https://docs.spring.io/spring-security/reference/servlet/oauth2/resource-server/jwt.html)
