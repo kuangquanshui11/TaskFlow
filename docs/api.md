@@ -319,7 +319,7 @@ Admin 通过 Scheduler HTTP 查询，不访问 Scheduler 表或 Job 详情缓存
 
 ## 派发通道
 
-任务派发默认使用 `taskflow.dispatch.v1` 消息事件，对外手动执行、运行查询与结果上报 HTTP 路径不变。Broker 确认只表示接管派发，不代表执行成功；Worker 满载时等待原消息，不计故障重试次数、不转死信；租约过期的合法投递 ACK 清理，原 Attempt 由 Scheduler 收尾为超时，不标记成功。节点查询的 `dispatchEligible` 同时要求最近心跳 `runningCount + pendingCount < maxPending`，满载仍为 ONLINE。非法事件与实际故障耗尽的死信、未确认派发不会自动新建业务 Run。事件结构、失败语义及切换步骤见 [可靠派发](reliable-dispatch.md)。
+任务派发默认使用 `taskflow.dispatch.v1` 消息事件，对外手动执行、运行查询与结果上报 HTTP 路径不变。Broker 确认只表示接管派发，不代表执行成功；Worker 满载时等待原消息，不计故障重试次数、不转死信；租约过期的合法投递 ACK 清理，原 Attempt 由 Scheduler 收尾为超时，不标记成功。节点查询的 `dispatchEligible` 同时要求最近心跳 `runningCount + pendingCount < maxPending`，满载仍为 ONLINE。非法事件与实际故障耗尽的死信、未确认派发不会自动新建业务 Run。事件结构、失败语义及切换步骤见 [可靠派发](reliable-dispatch.md)。真实进程退出与迟到上报验证见 [故障窗口记录](dispatch-fault-verification.md)；旧 Worker 收到结果上报 409 后停止重报，Inbox 的 reported 标记不表示 Scheduler 接受旧业务结果。
 
 ## 技术参考
 

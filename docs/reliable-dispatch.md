@@ -162,12 +162,16 @@ MQ 未部署时可显式用 http，并设置 `TASKFLOW_MQ_HEALTH_ENABLED=false`�
 
 ## 验收
 
+真实发布后未标记时退出、执行中退出、旧 Inbox 恢复后迟到结果及发布连接故障使用独立专项；步骤、数据库最终状态、证据和后续节点/死信演练见 [进程故障窗口验证](dispatch-fault-verification.md)。
+
 ```powershell
 .\mvnw.cmd verify
 # 独立三进程、隔离文件 H2，复测真实 Cron；默认显式 HTTP
 .\tools\test-execution.ps1 -SkipBuild -SkipBrowser
 # 集群就绪后：随机隔离 vhost、真实 MQ 闭环、重复事件、单节点停机后重跑
 .\tools\test-mq.ps1 -SkipBuild -SkipBrowser
+# 现有外部集群：随机 vhost、真实进程强杀、旧 Inbox 恢复、AMQP 连接中断
+.\tools\test-dispatch-faults.ps1 -ClusterSettingsPath .tools/mq-cluster-settings.json -AllowLegacyBroker -SkipBuild
 ```
 
 test-mq 默认只对本仓库 Compose 的 rabbit1 做停机并在 finally 恢复，不删除数据卷；外部集群按上文使用人工停止/恢复步骤。测试成功仅删除脚本创建的 taskflow_it_ 随机 vhost，失败保留证据，不会清空 taskflow 业务 vhost。真实 MQ 测试不应使用业务队列或业务数据库。多数派丢失、网络分区与跨主机持久化恢复尚需额外环境演练，不能由 Mock 的 confirm 代替。

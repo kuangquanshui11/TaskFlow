@@ -47,6 +47,7 @@ Worker 对同一份执行结果有限重试写库，恢复后继续上报，耗�
 - [Cron 自动调度](docs/automatic-scheduling.md)
 - [可靠派发、RabbitMQ 三节点集群与切换](docs/reliable-dispatch.md)
 - [Cron 复测与 MQ 验证边界](docs/mq-verification.md)
+- [Relay / Worker 真实退出、迟到结果与连接恢复验证](docs/dispatch-fault-verification.md)
 - [Worker 注册、心跳、派发检查与节点页面](docs/worker-nodes.md)
 - [节点模块验证记录](docs/worker-nodes-verification.md)
 - [Worker 水平扩展与部署](docs/worker-horizontal-scaling.md)
@@ -253,4 +254,4 @@ TaskFlow/
 
 带登录的完整任务回归入口、隔离身份与 Redis、MQ 前置条件和故障场景见 [带登录的任务链路回归](docs/authenticated-regression.md)。
 
-后续工作聚焦可靠死信、在途消息故障、多数派丢失、失联恢复、Jaeger 容器实测及全量配置对账。现有能力和故障保障的验证范围见 [微服务技术栈](docs/microservice-platform.md)。
+Relay 发布后未标记时退出、Worker 执行中退出、旧 Inbox 恢复后真实迟到上报与发布连接恢复的专项入口见 [进程故障窗口验证](docs/dispatch-fault-verification.md)。后续工作聚焦在途 Broker 节点停机、可靠死信、多数派丢失、失联恢复、Jaeger 容器实测及全量配置对账。现有能力和故障保障的验证范围见 [微服务技术栈](docs/microservice-platform.md)。
