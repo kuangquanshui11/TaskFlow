@@ -9,6 +9,8 @@ public interface PlanSchedulerRemote {
     String update(@RequestBody Object body,@RequestHeader Map<String,String> headers);
     @GetMapping("/internal/v1/plans/selectByJobId")
     String select(@RequestParam("id") long id,@RequestHeader Map<String,String> headers);
+    @GetMapping("/internal/v1/plans/selectVersions")
+    String versions(@RequestParam("ids") String ids,@RequestHeader Map<String,String> headers);
     // 仅由 Feign 子上下文装配，避免某个调用方的超时覆盖所有客户端。
     class Timeouts {
         @org.springframework.context.annotation.Bean

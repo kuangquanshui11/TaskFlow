@@ -70,6 +70,10 @@ public class AccessSecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/v1/runs/select", "/api/v1/runs/selectById",
                                 "/api/v1/runs/selectByRequestKey").hasAuthority("run:read")
                         .requestMatchers(HttpMethod.POST, "/api/v1/job-sync/updateRetry").hasAuthority("job-sync:retry")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/config-reconciliation/selectById",
+                                "/api/v1/config-reconciliation/selectRepairById").hasAuthority("job:read")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/config-reconciliation/insert").hasAuthority("job-sync:reconcile")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/config-reconciliation/updateRepair").hasAuthority("job-sync:repair")
                         .requestMatchers(HttpMethod.GET, "/api/v1/workers/select", "/api/v1/workers/selectById").hasAuthority("worker:read")
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.jwtAuthenticationConverter(converter))

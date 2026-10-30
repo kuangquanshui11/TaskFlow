@@ -1,5 +1,6 @@
-param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster,
-    [ValidateSet('http','rabbitmq')][string]$Transport = 'http', [string]$MqSettingsPath,[string]$PlatformSettingsPath)
+param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster, [switch]$IncludeConfigReconciliation,
+    [ValidateSet('http','rabbitmq')][string]$Transport = 'http', [string]$MqSettingsPath,[string]$PlatformSettingsPath,
+    [ValidateRange(1024,65535)][int]$IdentityPort = 19190)
 $ErrorActionPreference = 'Stop'
 if ($IncludeWorkerCluster -and ($Transport -ne 'rabbitmq' -or $PlatformSettingsPath)) {
     throw 'Worker cluster acceptance requires standalone RabbitMQ mode and an isolated test vhost.'
@@ -504,6 +505,39 @@ info:
     Stop-TestService 'scheduler'; Start-TestService 'scheduler'
     $restoredPlan = Call-Api 'GET' ("http://127.0.0.1:19081/internal/v1/plans/selectByJobId?id=" + $syncJob.id) $null $controlToken
     Assert-Check ($restoredPlan.body.deleted -and $restoredPlan.body.configVersion -eq 4) 'Scheduler restart preserves replica and tombstone'
+
+    if ($IncludeConfigReconciliation) {
+        # 故障注入只修改本次脚本创建并已停止的 Scheduler H2；连接参数从隔离 YAML 读取。
+        Stop-TestService 'scheduler'
+        $schedulerYaml = Get-Content -LiteralPath $serviceFiles.scheduler.yaml -Raw
+        $dbUrl = [regex]::Match($schedulerYaml, '(?m)^    url: "(jdbc:h2:file:[^"]+)"').Groups[1].Value
+        $dbUser = [regex]::Match($schedulerYaml, '(?m)^    username: ([^\r\n]+)').Groups[1].Value
+        $dbPassword = [regex]::Match($schedulerYaml, '(?m)^    password: "([^"]*)"').Groups[1].Value
+        $expectedPrefix = 'jdbc:h2:file:' + $runRoot.Replace('\','/') + '/scheduler-db;'
+        if (!$dbUrl.StartsWith($expectedPrefix) -or !$dbUser -or $syncJob.id -lt 1) { throw 'Reconciliation fault database guard failed.' }
+        & $javaExe -cp $h2Jar.FullName org.h2.tools.Shell -url $dbUrl -user $dbUser -password $dbPassword -sql ("DELETE FROM schedule_plan WHERE job_id=" + [long]$syncJob.id)
+        if ($LASTEXITCODE -ne 0) { throw 'Replica fault injection failed.' }
+        Start-TestService 'scheduler'
+        $historical = Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/job-sync/selectByJobId?id=" + $syncJob.id)
+        Assert-Check ($historical.body.data.state -eq 'SYNCED') 'Historical sync remains successful after Scheduler replica loss'
+        $staleRestore = Call-Api 'POST' 'http://127.0.0.1:19081/internal/v1/plans/update' $oldEvent $controlToken
+        Assert-Check ($staleRestore.status -eq 409 -and $staleRestore.body.code -eq 'PLAN_RESTORE_REQUIRES_LATEST') 'Surviving highest Inbox version blocks stale re-enable while replica is missing'
+        $scanRequest = @{ requestId = [Guid]::NewGuid().ToString(); afterJobId = [long]$syncJob.id - 1; batchSize = 1 }
+        $scan = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/config-reconciliation/insert' $scanRequest
+        Assert-Check ($scan.status -eq 200 -and $scan.body.data.checks[0].difference -eq 'MISSING' -and $scan.body.data.checks[0].source.deleted) 'Real version query finds missing deletion tombstone despite historical confirmation'
+        $scanAgain = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/config-reconciliation/insert' $scanRequest
+        Assert-Check ($scanAgain.status -eq 200 -and $scanAgain.body.data.checks[0].id -eq $scan.body.data.checks[0].id) 'Scan request replay returns persisted observation'
+        $repairRequest = @{ requestId = [Guid]::NewGuid().ToString(); checkId = $scan.body.data.checks[0].id }
+        $repair = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/config-reconciliation/updateRepair' $repairRequest
+        Assert-Check ($repair.status -eq 200 -and $repair.body.data.outcome -eq 'ENQUEUED') 'Controlled repair queues original event through Admin Outbox'
+        $repairedSync = Wait-TestSync $syncJob.id 'SYNCED' 4
+        $repairedPlan = Call-Api 'GET' ("http://127.0.0.1:19081/internal/v1/plans/selectByJobId?id=" + $syncJob.id) $null $controlToken
+        Assert-Check ($repairedPlan.body.deleted -and !$repairedPlan.body.enabled -and $repairedPlan.body.configVersion -eq 4 -and $repairedSync.eventId -eq $deletedSync.eventId) 'Surviving Inbox allows original event to rebuild tombstone without re-enabling Job'
+        Stop-TestService 'admin'; Start-TestService 'admin'
+        $audit = Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/config-reconciliation/selectRepairById?id=" + $repairRequest.requestId)
+        $repairAgain = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/config-reconciliation/updateRepair' $repairRequest
+        Assert-Check ($audit.body.data.outcome -eq 'ENQUEUED' -and $repairAgain.body.data.createdAt -eq $repair.body.data.createdAt) 'Restart preserves repair audit and idempotency'
+    }
 
     $cronCreated = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/jobs/insert' @{ name = 'plan-calculation-e2e'; handlerKey = 'demoSuccess';
         scheduleType = 'CRON'; cronExpression = '0 0 9 * * *'; timeZone = 'Asia/Shanghai'; enabled = $true }

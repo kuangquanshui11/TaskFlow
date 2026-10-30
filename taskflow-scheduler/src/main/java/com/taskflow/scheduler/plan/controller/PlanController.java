@@ -23,4 +23,10 @@ public class PlanController {
     public PlanResponse selectByJobId(@RequestParam @Positive long id) {
         return PlanResponse.from(plans.selectByJobId(id), triggerProperties.enabled());
     }
+
+    @GetMapping("/selectVersions")
+    public java.util.List<com.taskflow.scheduler.plan.dto.PlanVersion> selectVersions(
+            @RequestParam @jakarta.validation.constraints.Size(min = 1, max = 100) java.util.List<@Positive Long> ids) {
+        return plans.selectVersions(ids);
+    }
 }

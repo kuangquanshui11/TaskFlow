@@ -62,6 +62,83 @@ class PlanSyncTests {
         assertThat(plans.selectByJobId(7).configVersion()).isEqualTo(3);
     }
 
+    @Test void replayRestoresMissingPlanEvenWhenInboxSurvivesAndRestoresTombstone() {
+        var original = daily(1, true, "UTC");
+        plans.update(original);
+        jdbc.update("DELETE FROM schedule_plan WHERE job_id=7");
+        when(clock.instant()).thenReturn(BASE.plusSeconds(36000));
+        assertThat(plans.update(original).result()).isEqualTo("APPLIED");
+        assertThat(plans.selectByJobId(7).nextFireTime()).isEqualTo(Instant.parse("2026-10-27T09:00:00Z"));
+        var tombstone = event(2, true, false);
+        plans.update(tombstone);
+        jdbc.update("DELETE FROM schedule_plan WHERE job_id=7");
+        plans.update(tombstone);
+        assertThat(plans.selectByJobId(7).deleted()).isTrue();
+        assertThat(plans.selectByJobId(7).enabled()).isFalse();
+        var restored = plans.selectByJobId(7);
+        plans.update(original);
+        assertThat(plans.selectByJobId(7)).isEqualTo(restored);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM schedule_sync_inbox", Long.class)).isEqualTo(2);
+    }
+
+    @Test void replayRepairsRolledBackPlanAndConflictingContentStillFails() {
+        var original = event(1, false, false);
+        var newer = event(2, false, true);
+        plans.update(original);
+        plans.update(newer);
+        jdbc.update("UPDATE schedule_plan SET config_version=1 WHERE job_id=7");
+        assertThat(plans.update(newer).result()).isEqualTo("APPLIED");
+        assertThat(plans.selectByJobId(7).configVersion()).isEqualTo(2);
+        jdbc.update("DELETE FROM schedule_plan WHERE job_id=7");
+        assertThatThrownBy(() -> plans.update(new PlanSyncRequest(newer.eventId(), 7, 2, true, newer.configuration())))
+                .isInstanceOf(com.taskflow.scheduler.execution.exception.RunException.class);
+        assertThat(plans.selectVersions(List.of(7L, 8L))).isEmpty();
+    }
+
+    @Test void failedReconstructionKeepsOriginalReceiptAndCanResumeWithSameEvent() {
+        var original = event(1, false, true);
+        plans.update(original);
+        jdbc.update("DELETE FROM schedule_plan WHERE job_id=7");
+        doThrow(new IllegalStateException("restore failed")).when(mapper).insert(any());
+        assertThatThrownBy(() -> plans.update(original)).hasMessageContaining("restore failed");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM schedule_sync_inbox", Long.class)).isEqualTo(1);
+        assertThat(plans.selectVersions(List.of(7L))).isEmpty();
+        reset(mapper);
+        assertThat(plans.update(original).result()).isEqualTo("APPLIED");
+        assertThat(plans.selectByJobId(7).configVersion()).isEqualTo(1);
+    }
+
+    @Test void survivingInboxRejectsOlderReconstructionUntilLatestTombstoneArrives() {
+        var old = event(1, false, true);
+        var deleted = event(3, true, false);
+        plans.update(old);
+        plans.update(deleted);
+        jdbc.update("DELETE FROM schedule_plan WHERE job_id=7");
+        assertThatThrownBy(() -> plans.update(old)).isInstanceOf(com.taskflow.scheduler.execution.exception.RunException.class)
+                .hasMessageContaining("最高已接收版本");
+        assertThatThrownBy(() -> plans.update(event(2, false, true))).hasMessageContaining("最高已接收版本");
+        assertThat(plans.selectVersions(List.of(7L))).isEmpty();
+        assertThat(plans.update(deleted).result()).isEqualTo("APPLIED");
+        assertThat(plans.selectByJobId(7).deleted()).isTrue();
+        assertThat(plans.update(old).acceptedVersion()).isEqualTo(3);
+    }
+
+    @Test void versionBatchRequiresControlTokenIncludesTombstonesAndOmitsMissingIds() throws Exception {
+        plans.update(event(2, true, false));
+        try (var client = HttpClient.newHttpClient()) {
+            String url = "http://localhost:" + port + "/internal/v1/plans/selectVersions?ids=7,8";
+            assertThat(client.send(HttpRequest.newBuilder(URI.create(url)).GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(401);
+            var response = client.send(HttpRequest.newBuilder(URI.create(url)).header("X-Taskflow-Token", "test-control-token").GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+            var rows = json.readTree(response.body());
+            assertThat(rows.size()).isEqualTo(1);
+            assertThat(rows.get(0).get("deleted").booleanValue()).isTrue();
+            assertThat(rows.get(0).get("configVersion").longValue()).isEqualTo(2);
+        }
+        assertThatThrownBy(() -> plans.selectVersions(List.of())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> plans.selectVersions(java.util.Collections.nCopies(101, 7L))).isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test void concurrentDuplicatesCreateOneReceiptAndConcurrentVersionsRetainHighest() throws Exception {
         var input = event(1, false, false);
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {

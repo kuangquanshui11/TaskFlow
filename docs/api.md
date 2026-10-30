@@ -4,7 +4,7 @@
 
 除 GET /api/v1/access/selectConfiguration 和健康探针外，业务接口均要求 Authorization: Bearer <JWT>。登录在独立 Keycloak 完成；POST /api/v1/access/insert 建立或恢复有效会话，POST /api/v1/access/update 携带新 JWT 和 JSON previousToken 轮换，POST /api/v1/access/disable 撤销会话。Admin 从 Redis 核对缓存 JWT 并滑动续期 30 分钟，闲置过期返回 401，刷新令牌不能重新创建超时会话。GET /api/v1/access/selectCurrent 返回 subject、username、roles、permissions。
 
-VIEWER 可查询及 POST 预览；OPERATOR 另可启停、触发 Run 和重试同步；ADMIN 另可新增、修改、删除 Job。Gateway/Admin 各自验签，Admin 按精确动作路径和关键 Service 方法授权。未允许的路径/方法默认 403，可能先于原 404/405 被安全层拒绝。401、403、429、503 的错误格式、完整权限与限流策略见 [登录与入口安全](access-security.md)。
+VIEWER 可查询及 POST 预览；OPERATOR 另可启停、触发 Run、重试同步以及发起配置对账/受控修复；ADMIN 另可新增、修改、删除 Job。Gateway/Admin 各自验签，Admin 按精确动作路径和关键 Service 方法授权。未允许的路径/方法默认 403，可能先于原 404/405 被安全层拒绝。401、403、429、503 的错误格式、完整权限与限流策略见 [登录与入口安全](access-security.md)。
 
 安全与任务能力通过同一套 [带登录回归](authenticated-regression.md) 验证：创建/同步、Cron 与手动 Run、MQ、Worker 结果查询均保留 JWT 和真实 Redis 会话，另检查 401、403 及 Redis 故障 503 不产生 Run。
 
@@ -15,6 +15,7 @@ VIEWER 可查询及 POST 预览；OPERATOR 另可启停、触发 Run 和重试�
 | 任务配置新增、查询、修改、启停、删除 | Admin | 已实现，MyBatis-Plus 持久化 |
 | 任务数量统计 | Admin | 已实现，只统计任务配置，不混入运行次数 |
 | 任务详情 Redis 缓存 | Admin | 已实现，默认 TTL 60 秒、提交后失效、故障回退数据库 |
+| 配置对账与受控修复 | Admin 编排，Scheduler 提供当前副本 | 已实现，批量版本/墓碑检查、幂等限速补发及持久化记录；见 [协议](config-reconciliation.md) |
 | Cron 时间预览 | Admin | 已实现，只计算，不创建 Run |
 | 可选处理器查询 | Admin | 已实现，返回配置白名单，不代表 Worker 已在线注册 |
 | 手动触发、Run/Attempt 查询 | Scheduler；Admin 代理 | 已实现，独立状态库、幂等键、完整快照 |
@@ -46,6 +47,10 @@ Gateway 保留以下 API 路径，只路由 `/api/v1/**`；`/internal/v1/**`、�
 | GET | /api/v1/jobs/selectSummary | 查询未删除任务的数量统计 |
 | POST | /api/v1/jobs/preview | 预览 Cron 的后续时间 |
 | GET | /api/v1/job-handlers/select | 查询配置允许的处理器标识 |
+| POST | /api/v1/config-reconciliation/insert | 对账一批配置；JSON requestId(UUID)、afterJobId(>=0)、batchSize(1..100) |
+| GET | /api/v1/config-reconciliation/selectById?id=UUID | 查询已保存的批次和差异明细 |
+| POST | /api/v1/config-reconciliation/updateRepair | 受控补发；JSON requestId(UUID)、checkId(UUID) |
+| GET | /api/v1/config-reconciliation/selectRepairById?id=UUID | 查询修复结果及操作者记录 |
 | POST | /api/v1/runs/insert | 使用配置快照创建手动 Run |
 | GET | /api/v1/runs/select?jobId=1&page=1&pageSize=10 | 查询 Job 的运行历史 |
 | GET | /api/v1/runs/selectById?id=UUID | 运行详情、快照与 Attempt 历史 |

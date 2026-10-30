@@ -43,6 +43,7 @@ Worker 对同一份执行结果有限重试写库，恢复后继续上报，耗�
 - [Worker 有界续租与 Handler 上下文](docs/execution-leases.md)
 - [执行租约验证](docs/execution-leases-verification.md)
 - [配置异步同步、状态与恢复](docs/config-sync.md)
+- [配置对账与受控修复](docs/config-reconciliation.md)
 - [Scheduler 下一计划时间计算与查询](docs/plan-calculation.md)
 - [Cron 自动调度](docs/automatic-scheduling.md)
 - [可靠派发、RabbitMQ 三节点集群与切换](docs/reliable-dispatch.md)
@@ -138,7 +139,7 @@ $env:TASKFLOW_ADMIN_DB_PASSWORD = '替换为本机数据库密码'
 
 已确认本机 MySQL 8.0.34、3306、taskflow_admin，原 V1 结构核对一致后已建立基线并迁移到 V2；任务表现有 17 个字段，当前 0 条记录。注意数据库端口 3306 与当前 Admin HTTP 端口 18080 不同。
 
-数据库需先存在。空库启动时 Flyway 自动执行 V1、V2 和 V3；已有 V2 库自动执行 V3，新建配置 Outbox 并回填现有任务及墓碑。Scheduler 执行自己的 V2 计划副本迁移及 V3 下一计划时间迁移，旧副本由后台分批补算，建议先升级 Scheduler。详见 [配置同步](docs/config-sync.md)、[计划计算](docs/plan-calculation.md)。
+数据库需先存在。Admin 空库执行 V1..V4；V3 回填配置同步 Outbox 及墓碑，V4 建立配置对账、修复记录及持久化限速闸门。Scheduler 执行自己的迁移，建议先升级 Scheduler 以提供批量版本查询及原事件恢复，再升级 Admin。详见 [配置同步](docs/config-sync.md)、[配置对账](docs/config-reconciliation.md)、[计划计算](docs/plan-calculation.md)。
 
 如果已经手工执行过之前的 V1 建表 SQL，先按 [数据库文档](docs/database.md) 核对结构，再仅在首次接管时设置 TASKFLOW_ADMIN_DB_BASELINE_ON_MIGRATE=true，由 Flyway 建立版本 1 基线并执行 V2。默认关闭自动基线；不要重复执行 V1，也不要在不匹配的库上开启此选项。后续启动移除该变量。
 

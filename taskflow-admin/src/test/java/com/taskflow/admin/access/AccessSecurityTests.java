@@ -54,7 +54,8 @@ class AccessSecurityTests {
                 "{\"cronExpression\":\"0 * * * * *\",\"timeZone\":\"Asia/Shanghai\",\"count\":3}");
         assertThat(preview.statusCode()).as(preview.body()).isEqualTo(200);
         for (String path : List.of("/api/v1/jobs/insert", "/api/v1/jobs/update", "/api/v1/jobs/delete",
-                "/api/v1/jobs/enable", "/api/v1/jobs/disable", "/api/v1/runs/insert", "/api/v1/job-sync/updateRetry")) {
+                "/api/v1/jobs/enable", "/api/v1/jobs/disable", "/api/v1/runs/insert", "/api/v1/job-sync/updateRetry",
+                "/api/v1/config-reconciliation/insert", "/api/v1/config-reconciliation/updateRepair")) {
             assertThat(call("POST", path, token, "{}").statusCode()).as(path).isEqualTo(403);
         }
     }
@@ -62,6 +63,8 @@ class AccessSecurityTests {
         assertThat(call("POST", "/api/v1/jobs/insert", role("OPERATOR"), "{}").statusCode()).isEqualTo(403);
         assertThat(call("POST", "/api/v1/jobs/enable", role("OPERATOR"), "{}").statusCode()).isEqualTo(400);
         assertThat(call("POST", "/api/v1/runs/insert", role("OPERATOR"), "{}").statusCode()).isEqualTo(400);
+        assertThat(call("POST", "/api/v1/config-reconciliation/insert", role("OPERATOR"), "{}").statusCode()).isEqualTo(400);
+        assertThat(call("POST", "/api/v1/config-reconciliation/updateRepair", role("OPERATOR"), "{}").statusCode()).isEqualTo(400);
         assertThat(call("POST", "/api/v1/jobs/insert", role("ADMIN"), "{}").statusCode()).isEqualTo(400);
         String foreign = TestTokens.token(Map.of("resource_access", Map.of("other", Map.of("roles", List.of("ADMIN"))),
                 "scope", "job:write job:read", "realm_access", Map.of("roles", List.of("ADMIN"))));

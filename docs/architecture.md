@@ -25,7 +25,7 @@ Tomcat 使用 Admin 内嵌容器；Redis 由业务代码访问，数据库仍是
 | taskflow-gateway | 8088 | 显式公共路由、请求边界、负载均衡与熔断；不执行业务 | 无业务数据库 |
 | taskflow-registry | 8761 | Eureka 注册与服务发现，Basic 认证 | 无业务数据库 |
 | taskflow-config-server | 8888 | 非秘密策略配置，native/Git 后端，Basic 认证 | 独立配置仓库 |
-| taskflow-admin | 8080 | 管理台、Job 配置、管理接口；转发运行查询和手动触发请求 | Job 定义、配置版本、配置同步 Outbox |
+| taskflow-admin | 8080 | 管理台、Job 配置、配置对账与受控修复、管理接口；转发运行查询和手动触发请求 | Job 定义、配置版本、配置同步 Outbox、对账和修复记录及限速闸门 |
 | taskflow-scheduler | 8081 | 计划、触发、Run/Attempt、派发、重试、租约校验、节点在线状态、MQ 节点选择和固定 Attempt 目标 | 计划副本、配置 Inbox、Run、Attempt、派发 Outbox、节点及会话历史 |
 | taskflow-worker | 8082 | Handler 执行、并发控制、注册/心跳及结果上报 | 本地执行 Inbox、待上报结果；不拥有全局 Run 或节点权威状态 |
 
@@ -86,9 +86,9 @@ Admin Job ID 在 Scheduler 中是逻辑引用，不建立跨 schema 外键。Wor
 
 手动触发接口返回 HTTP 202 与运行 id，接收成功不代表任务成功。Scheduler 扫描已提交但尚未成功派发的 Attempt，恢复进程退出留下的待执行工作。Worker 重启将之前 RUNNING 的记录标为未知副作用失败，不盲目重做；ACCEPTED 记录可继续执行。
 
-配置同步已采用 Admin 事务 Outbox 推送版本化 HTTP 事件，不依赖分页拉取或全局游标。保存只提交本地事务；后台专用线程领取持久化发送租约，在事务外调用 Scheduler。Scheduler 用 Inbox 和版本检查处理重复、乱序与删除墓碑。失败有限重试，最新失败版本可人工重试。管理台区分保存、副本已同步、节点触发开关及 Run 结果。完整协议、恢复边界和验证见 [异步配置同步](config-sync.md)。
+配置同步已采用 Admin 事务 Outbox 推送版本化 HTTP 事件，不依赖分页拉取或全局游标。保存只提交本地事务；后台专用线程领取持久化发送租约，在事务外调用 Scheduler。Scheduler 用 Inbox 和版本检查处理重复、乱序与删除墓碑。失败有限重试，最新失败版本可人工重试。Admin V4 额外持久化对账批次、观察、修复记录及限速闸门，对账不替代正常事件推送。管理台区分保存、副本已同步、节点触发开关及 Run 结果。完整协议、恢复边界和验证见 [异步配置同步](config-sync.md) 与 [配置对账](config-reconciliation.md)。
 
-Scheduler 的 dispatch 模块维护自己的 Outbox、领取版本和有限发布重试，经 correlated confirm 与 mandatory return 判断是否交给 Broker。Worker 的 dispatch 模块校验 v1 事件，复用 execution 模块持久化去重，提交后手动 ACK，永久错误和耗尽接收重试的消息进入死信队列。三节点使用 quorum 队列，应用使用多节点连接地址。Admin 配置同步和 Worker 结果上报仍走 HTTP。Worker 有界续租及 Handler 执行上下文见 [执行租约](execution-leases.md)。全量对账、副本重建及同一 Attempt 跨 Inbox 接管待实现；新增 Attempt 可重新选择 Worker。
+Scheduler 的 dispatch 模块维护自己的 Outbox、领取版本和有限发布重试，经 correlated confirm 与 mandatory return 判断是否交给 Broker。Worker 的 dispatch 模块校验 v1 事件，复用 execution 模块持久化去重，提交后手动 ACK，永久错误和耗尽接收重试的消息进入死信队列。三节点使用 quorum 队列，应用使用多节点连接地址。Admin 配置同步和 Worker 结果上报仍走 HTTP。Worker 有界续租及 Handler 执行上下文见 [执行租约](execution-leases.md)。Admin 已提供分批配置对账、墓碑检查和带限速/幂等记录的原 Outbox 补发，Scheduler 可在 Inbox 保留时重建缺失副本，见 [配置对账](config-reconciliation.md)。未知孤立副本发现及同一 Attempt 跨 Inbox 接管仍待实现；新增 Attempt 可重新选择 Worker。
 
 节点管理使用独立 HTTP 契约及节点密钥。Scheduler V6 保存 worker_node 和不可复用的 worker_node_session，按接收时间计算有效期，较旧心跳不延长存活，新会话只能替代已过期会话。MQ 派发准备按能力/负载选择节点并绑定目标与路由，发布前仅检查原目标在线及能力/路由匹配；HTTP 保留固定目标。Worker 的独立心跳线程不会占用执行槽位，Admin 代理查询而不建节点副本或缓存。节点 generation 只约束注册和心跳，不代替执行 leaseVersion，不撤销已派发任务，详见 [节点协议](worker-nodes.md)。
 

@@ -20,12 +20,14 @@ Scheduler / Worker 保持原有独立服务间密钥。Admin 发往 Scheduler �
 
 | 权限 | VIEWER | OPERATOR | ADMIN | 路径 |
 | --- | --- | --- | --- | --- |
-| job:read | 是 | 是 | 是 | jobs/select、selectById、selectSummary、preview；job-handlers/select；job-sync 两个查询 |
+| job:read | 是 | 是 | 是 | jobs/select、selectById、selectSummary、preview；job-handlers/select；job-sync 两个查询；config-reconciliation 两个查询 |
 | run:read | 是 | 是 | 是 | runs/select、selectById、selectByRequestKey |
 | worker:read | 是 | 是 | 是 | workers/select、selectById |
 | job:operate | 否 | 是 | 是 | jobs/enable、disable |
 | run:trigger | 否 | 是 | 是 | runs/insert |
 | job-sync:retry | 否 | 是 | 是 | job-sync/updateRetry |
+| job-sync:reconcile | 否 | 是 | 是 | config-reconciliation/insert |
+| job-sync:repair | 否 | 是 | 是 | config-reconciliation/updateRepair |
 | job:write | 否 | 否 | 是 | jobs/insert、update |
 | job:delete | 否 | 否 | 是 | jobs/delete |
 

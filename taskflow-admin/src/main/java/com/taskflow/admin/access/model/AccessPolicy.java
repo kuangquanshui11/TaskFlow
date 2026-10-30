@@ -7,7 +7,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 public final class AccessPolicy {
     private AccessPolicy() {}
     private static final Set<String> READ = Set.of("job:read", "run:read", "worker:read");
-    private static final Set<String> OPERATE = Set.of("job:operate", "run:trigger", "job-sync:retry");
+    private static final Set<String> OPERATE = Set.of("job:operate", "run:trigger", "job-sync:retry", "job-sync:reconcile", "job-sync:repair");
     private static final Set<String> WRITE = Set.of("job:write", "job:delete");
 
     public static Set<String> roles(Jwt jwt, String audience) {

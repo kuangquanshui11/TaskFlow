@@ -43,6 +43,8 @@ class JobSyncMysqlMigrationTests {
                 INSERT INTO job_definition (name,handler_key,enabled,config_version,deleted_at) VALUES (?,?,?,?,?)
                 """, "旧删除任务", "demoSuccess", 0, 9, Timestamp.from(Instant.now()));
         Flyway.configure().dataSource(jdbc.getDataSource()).locations("classpath:db/migration").load().migrate();
+        assertThat(jdbc.queryForList("SELECT gate_name FROM config_reconciliation_gate ORDER BY gate_name", String.class))
+                .containsExactly("repair", "scan");
         var records = jdbc.queryForList("SELECT * FROM job_sync_outbox ORDER BY config_version");
         assertThat(records).hasSize(2);
         var active = json.readValue((String) records.getFirst().get("snapshot_json"), Configuration.class);

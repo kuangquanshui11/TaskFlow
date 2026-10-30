@@ -55,13 +55,19 @@ public class PlanServiceImpl implements IPlanService {
             if (receipts.size() != 1 || !receipts.getFirst().equals(
                     new Receipt(input.eventId(), input.jobId(), input.configVersion(), fingerprint)))
                 throw new RunException(409, "PLAN_SYNC_CONFLICT", "事件标识或配置版本对应不同配置");
-            var current = mapper.find(input.jobId(), true).orElseThrow();
-            return ack(input, current.configVersion(), "DUPLICATE");
+            var current = mapper.find(input.jobId(), true);
+            // Inbox 证明历史接收，不能证明副本仍在。匹配原事件才允许恢复缺失或落后的副本。
+            if (current.isPresent() && current.get().configVersion() >= input.configVersion())
+                return ack(input, current.get().configVersion(), "DUPLICATE");
+        } else {
+            mapper.insertReceipt(new Receipt(input.eventId(), input.jobId(), input.configVersion(), fingerprint), Instant.now());
         }
-        mapper.insertReceipt(new Receipt(input.eventId(), input.jobId(), input.configVersion(), fingerprint), Instant.now());
         var current = mapper.find(input.jobId(), true);
         if (current.isPresent() && current.get().configVersion() > input.configVersion())
             return ack(input, current.get().configVersion(), "SUPERSEDED");
+        // 副本丢失后仍以 Inbox 保留的最高版本为恢复下界，防止迟到旧事件抢先重建并重新启用已删除任务。
+        if (mapper.highestReceivedVersion(input.jobId()) > input.configVersion())
+            throw new RunException(409, "PLAN_RESTORE_REQUIRES_LATEST", "副本恢复需要最高已接收版本的原事件");
         var now = clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
         var calculation = current.filter(plan -> preserveCalculation(plan, input))
                 .map(plan -> new Calculation(plan.nextFireTime(), plan.calculatedAt(), plan.calculationState()))
@@ -78,6 +84,13 @@ public class PlanServiceImpl implements IPlanService {
     public Plan selectByJobId(long jobId) {
         if (jobId < 1) throw new IllegalArgumentException("jobId must be positive");
         return mapper.find(jobId, false).orElseThrow(() -> new RunException(404, "PLAN_NOT_FOUND", "计划副本不存在"));
+    }
+
+    @Override
+    public java.util.List<com.taskflow.scheduler.plan.dto.PlanVersion> selectVersions(java.util.List<Long> ids) {
+        if (ids == null || ids.isEmpty() || ids.size() > 100 || ids.stream().anyMatch(id -> id == null || id < 1))
+            throw new IllegalArgumentException("1..100 positive job ids required");
+        return mapper.versions(ids);
     }
 
     private boolean preserveCalculation(Plan plan, PlanSyncRequest input) {

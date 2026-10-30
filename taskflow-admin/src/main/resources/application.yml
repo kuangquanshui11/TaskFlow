@@ -103,6 +103,11 @@ eureka:
   client:
     enabled: false
 taskflow:
+  reconciliation:
+    max-batch-size: 100
+    scan-interval: 10s
+    repair-interval: 1s
+    max-check-age: 5m
   access:
     issuer: "${TASKFLOW_JWT_ISSUER:}"
     audience: "${TASKFLOW_JWT_AUDIENCE:taskflow-api}"

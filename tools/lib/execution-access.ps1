@@ -37,14 +37,14 @@ function Initialize-AcceptanceAccess {
     $identityHome = $env:TASKFLOW_TEST_KEYCLOAK_HOME
     if (!$identityHome) { $identityHome = Join-Path $repoPath '.tools/access/keycloak-26.8.1' }
     if (!(Test-Path -LiteralPath (Join-Path $identityHome 'lib/quarkus-run.jar'))) { throw 'Set TASKFLOW_TEST_KEYCLOAK_HOME to an extracted Keycloak distribution.' }
-    foreach ($p in @(16379,16380,19190)) {
+    foreach ($p in @(16379,16380,$IdentityPort)) {
         $probe = [Net.Sockets.TcpClient]::new()
         try { if ($probe.ConnectAsync('127.0.0.1', $p).Wait(150)) { throw "Acceptance dependency port $p is occupied." } }
         catch [System.AggregateException] { } finally { $probe.Dispose() }
     }
     $script:accessSettingsPath = Join-Path $runRoot 'access-settings.json'
     $realm = 'taskflow_it_' + [Guid]::NewGuid().ToString('N')
-    $settings = @{ realm=$realm; issuer="http://127.0.0.1:19190/realms/$realm"; baseUrl='http://127.0.0.1:8091';
+    $settings = @{ realm=$realm; issuer="http://127.0.0.1:$IdentityPort/realms/$realm"; baseUrl='http://127.0.0.1:8091';
         username='acceptance-admin';password=(New-TestSecret);viewerUsername='acceptance-viewer';viewerPassword=(New-TestSecret);
         sessionPrefix="taskflow:acceptance:$realm`:session:"; rateNamespace="taskflow:acceptance:$realm`:rate";
         redisCli=(Join-Path (Split-Path -Parent $script:redisServer) 'redis-cli.exe');
@@ -78,7 +78,7 @@ function Initialize-AcceptanceAccess {
     $args = @('-Xms64m','-Xmx384m','--add-opens=java.base/java.lang=ALL-UNNAMED',
         ('"-Dkc.home.dir=' + $testIdentityHome.Replace('\','/') + '"'), ('"-Djboss.server.config.dir=' + (Join-Path $testIdentityHome 'conf').Replace('\','/') + '"'),
         '-cp', ('"' + (Join-Path $testIdentityHome 'lib/quarkus-run.jar') + '"'), 'io.quarkus.bootstrap.runner.QuarkusEntryPoint',
-        'start-dev','--http-host=127.0.0.1','--http-port=19190','--db=dev-file',
+        'start-dev','--http-host=127.0.0.1',('--http-port=' + $IdentityPort),'--db=dev-file',
         ('"--db-url=jdbc:h2:file:' + (Join-Path $testIdentityHome 'data/identity-db').Replace('\','/') + ';NON_KEYWORDS=VALUE"'), '--import-realm')
     $accessProcesses['identity'] = Start-Process -FilePath $javaExe -ArgumentList $args -WorkingDirectory $runRoot -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $runRoot 'identity.out.log') -RedirectStandardError (Join-Path $runRoot 'identity.err.log')

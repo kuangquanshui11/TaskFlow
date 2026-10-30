@@ -12,6 +12,13 @@ public class PlanMapper {
     private final JdbcTemplate jdbc;
     public PlanMapper(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
+    public List<com.taskflow.scheduler.plan.dto.PlanVersion> versions(List<Long> ids) {
+        String placeholders = String.join(",", Collections.nCopies(ids.size(), "?"));
+        return jdbc.query("SELECT job_id,config_version,deleted,enabled FROM schedule_plan WHERE job_id IN (" + placeholders + ") ORDER BY job_id",
+                (rs, index) -> new com.taskflow.scheduler.plan.dto.PlanVersion(rs.getLong("job_id"), rs.getLong("config_version"),
+                        rs.getBoolean("deleted"), rs.getBoolean("enabled")), ids.toArray());
+    }
+
     public List<Receipt> receipts(UUID eventId, long jobId, long version) {
         return jdbc.query("SELECT * FROM schedule_sync_inbox WHERE event_id=? OR (job_id=? AND config_version=?)",
                 (rs, index) -> new Receipt(UUID.fromString(rs.getString("event_id")), rs.getLong("job_id"),
@@ -21,6 +28,10 @@ public class PlanMapper {
     public void insertReceipt(Receipt receipt, Instant now) {
         jdbc.update("INSERT INTO schedule_sync_inbox (event_id,job_id,config_version,fingerprint,received_at) VALUES (?,?,?,?,?)",
                 receipt.eventId().toString(), receipt.jobId(), receipt.configVersion(), receipt.fingerprint(), Timestamp.from(now));
+    }
+
+    public long highestReceivedVersion(long jobId) {
+        return jdbc.queryForObject("SELECT config_version FROM schedule_sync_inbox WHERE job_id=? ORDER BY config_version DESC LIMIT 1 FOR UPDATE", Long.class, jobId);
     }
 
     public Optional<Plan> find(long jobId, boolean lock) {
