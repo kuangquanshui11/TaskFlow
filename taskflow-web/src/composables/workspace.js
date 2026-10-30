@@ -6,7 +6,7 @@ export const useWorkspace = () => inject(workspaceKey);
 
 export function createWorkspace() {
   const state = reactive({ summary: null, loading: false, error: '', updatedAt: null, handlers: [], handlerError: '', revision: 0, busyId: null });
-  const editor = reactive({ open: false, jobId: null });
+  const editor = reactive({ open: false, jobId: null, templateId: null });
   const detail = reactive({ open: false, jobId: null });
   const deletion = reactive({ open: false, job: null, loading: false, error: '' });
   const toasts = ref([]);
@@ -39,7 +39,7 @@ export function createWorkspace() {
     catch (error) { state.handlerError = error.message; }
   }
 
-  function openEditor(jobId = null) { detail.open = false; editor.jobId = jobId; editor.open = true; }
+  function openEditor(jobId = null, templateId = null) { detail.open = false; editor.jobId = jobId; editor.templateId = jobId == null ? templateId : null; editor.open = true; }
   function openDetail(jobId) { detail.jobId = jobId; detail.open = true; }
 
   async function toggle(job) {

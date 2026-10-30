@@ -44,7 +44,7 @@ function saved() {
       <footer class="page-footer"><span>TaskFlow · 让任务管理井然有序</span><span class="connection-status" :class="{ error: workspace.state.error }"><span class="status-dot"></span>{{ connection }}<span class="footer-time">{{ today }}</span></span></footer>
     </main>
   </div>
-  <JobEditor :open="workspace.editor.open" :job-id="workspace.editor.jobId" @close="workspace.editor.open = false" @saved="saved" />
+  <JobEditor :open="workspace.editor.open" :job-id="workspace.editor.jobId" :template-id="workspace.editor.templateId" @close="workspace.editor.open = false" @saved="saved" />
   <JobDetail :open="workspace.detail.open" :job-id="workspace.detail.jobId" @close="workspace.detail.open = false" />
   <DialogShell :open="workspace.deletion.open" title="删除这项任务？" :busy="workspace.deletion.loading" @close="workspace.deletion.open = false">
     <div class="delete-symbol"><AppIcon name="trash" :size="25" /></div><p class="confirm-description">将从任务列表中移除「<strong>{{ workspace.deletion.job?.name }}</strong>」，并停用该任务配置。</p><p class="muted">已有配置记录会保留，便于后续追溯。</p><div v-if="workspace.deletion.error" class="error-banner" role="alert">{{ workspace.deletion.error }}</div>
