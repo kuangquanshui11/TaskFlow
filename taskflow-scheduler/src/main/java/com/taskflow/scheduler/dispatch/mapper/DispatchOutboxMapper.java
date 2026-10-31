@@ -64,4 +64,18 @@ public class DispatchOutboxMapper {
     }
     private Timestamp ts(Instant value) { return value == null ? null : Timestamp.from(value.truncatedTo(java.time.temporal.ChronoUnit.MILLIS)); }
     private Instant instant(Timestamp value) { return value == null ? null : value.toInstant(); }
+    public Map<String, Long> countByState() {
+        return jdbc.query("SELECT state,COUNT(*) AS n FROM dispatch_outbox GROUP BY state", rs -> {
+            Map<String, Long> counts = new HashMap<>();
+            while (rs.next()) counts.put(rs.getString("state"), rs.getLong("n"));
+            return counts;
+        });
+    }
+    public long countPublishOverdue(Instant now) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM dispatch_outbox WHERE state='READY' AND next_publish_at<=?", Long.class, ts(now));
+    }
+    public long countClaimExpired(Instant now) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM dispatch_outbox WHERE state='SENDING' AND claim_until<=?", Long.class, ts(now));
+    }
+
 }

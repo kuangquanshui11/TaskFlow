@@ -14,6 +14,8 @@ spring:
   flyway:
     enabled: true
 taskflow:
+  metrics:
+    enabled: false
   nodes:
     node-token: test-node-token
     dispatch-gating-enabled: false

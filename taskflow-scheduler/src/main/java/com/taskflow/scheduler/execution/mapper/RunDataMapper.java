@@ -141,4 +141,15 @@ public class RunDataMapper {
     }
     // 与 TIMESTAMP(3) 精度一致，避免数据库向上舍入把“立即可派发”写成未来时间。
     private Timestamp ts(Instant value) { return value == null ? null : Timestamp.from(value.truncatedTo(java.time.temporal.ChronoUnit.MILLIS)); }
+    public long countDispatchOverdue(Instant now) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM run_attempt WHERE state IN ('READY','DISPATCHING') AND next_dispatch_at<=?", Long.class, ts(now));
+    }
+    // 观测契约使用 expires_at；执行短租约 lease_until 的业务收尾规则保持独立。
+    public long countLeaseExpired(Instant now) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM run_attempt WHERE state IN ('READY','DISPATCHING','RUNNING') AND expires_at<=?", Long.class, ts(now));
+    }
+    public long countLeaseExpiring(Instant now) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM run_attempt WHERE state IN ('READY','DISPATCHING','RUNNING') AND expires_at>? AND expires_at<=?", Long.class, ts(now), ts(now.plusSeconds(60)));
+    }
+
 }

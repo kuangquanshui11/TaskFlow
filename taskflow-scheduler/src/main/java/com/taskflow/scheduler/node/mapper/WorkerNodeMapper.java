@@ -69,4 +69,9 @@ public class WorkerNodeMapper {
                 rs.getTimestamp("registered_at").toInstant(),rs.getTimestamp("last_heartbeat_at").toInstant(),rs.getTimestamp("expires_at").toInstant());
     }
     private Timestamp ts(Instant value) { return Timestamp.from(value); }
+    public Optional<Instant> oldestOnlineHeartbeat(Instant now) {
+        return Optional.ofNullable(jdbc.queryForObject("SELECT MIN(last_heartbeat_at) FROM worker_node WHERE expires_at>?",
+                (rs, i) -> { var value = rs.getTimestamp(1); return value == null ? null : value.toInstant(); }, ts(now)));
+    }
+
 }
