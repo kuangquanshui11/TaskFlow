@@ -23,6 +23,10 @@ public class RunController {
     }
     @GetMapping("/selectById")
     public ApiResponse<JsonNode> selectById(@RequestParam UUID id) { return ApiResponse.success(runs.selectById(id)); }
+    @GetMapping("/selectSummary")
+    public ApiResponse<JsonNode> selectSummary(@RequestParam(required = false) String from, @RequestParam(required = false) String to) {
+        return ApiResponse.success(runs.selectSummary(from, to));
+    }
     @GetMapping("/selectByRequestKey")
     public ApiResponse<JsonNode> selectByRequestKey(@RequestParam UUID requestKey) {
         return ApiResponse.success(runs.selectByRequestKey(requestKey));

@@ -53,5 +53,24 @@ public class RunServiceImpl implements IRunService {
         return scheduler.get("/internal/v1/runs/select?jobId=" + jobId + "&page=" + page + "&pageSize=" + pageSize);
     }
     @Override public JsonNode selectById(UUID id) { return scheduler.get("/internal/v1/runs/selectById?id=" + id); }
+    @Override
+    public JsonNode selectSummary(String from, String to) {
+        String path = "/internal/v1/runs/selectSummary";
+        if (from != null || to != null) {
+            try {
+                if (from == null || to == null || !from.endsWith("Z") || !to.endsWith("Z")) throw new IllegalArgumentException();
+                var start = java.time.Instant.parse(from); var end = java.time.Instant.parse(to);
+                if (!start.isBefore(end) || java.time.Duration.between(start, end).compareTo(java.time.Duration.ofDays(7)) > 0)
+                    throw new IllegalArgumentException();
+                path += "?from=" + java.net.URLEncoder.encode(start.toString(), java.nio.charset.StandardCharsets.UTF_8)
+                        + "&to=" + java.net.URLEncoder.encode(end.toString(), java.nio.charset.StandardCharsets.UTF_8);
+            } catch (java.time.format.DateTimeParseException | IllegalArgumentException invalid) {
+                throw new RunException(400, "INVALID_ARGUMENT", "时间窗须同时提供以 Z 结尾的 UTC 时间、起点早于终点且不超过 7 天");
+            }
+        }
+        var result = scheduler.get(path);
+        SchedulerClient.validateSummary(result);
+        return result;
+    }
     @Override public JsonNode selectByRequestKey(UUID key) { return scheduler.get("/internal/v1/runs/selectByRequestKey?requestKey=" + key); }
 }

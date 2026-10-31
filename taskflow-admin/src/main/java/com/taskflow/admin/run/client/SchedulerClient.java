@@ -36,6 +36,10 @@ public class SchedulerClient {
         }
         try {
             var data = json.readTree(response);
+            if (path.equals("/internal/v1/runs/selectSummary") || path.startsWith("/internal/v1/runs/selectSummary?")) {
+                validateSummary(data);
+                return data;
+            }
             if (data==null || !data.isObject() || (path.startsWith("/internal/v1/runs/select?")
                     ? !data.has("records") || !data.has("total") : !data.hasNonNull("id") || !data.hasNonNull("state")))
                 throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "调度服务返回格式不合法");
@@ -43,5 +47,10 @@ public class SchedulerClient {
         } catch (tools.jackson.core.JacksonException | IllegalArgumentException malformed) {
             throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "调度服务返回格式不合法");
         }
+    }
+    public static void validateSummary(JsonNode data) {
+        if (data == null || !data.isObject() || !data.path("total").isIntegralNumber()
+                || !data.path("stateCounts").isObject() || !data.path("latency").isObject() || !data.path("failures").isArray())
+            throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "调度服务返回格式不合法");
     }
 }

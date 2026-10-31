@@ -25,7 +25,8 @@ VIEWER 可查询及 POST 预览；OPERATOR 另可启停、触发 Run、重试同
 | MQ 消费确认、Inbox 去重、死信处理 | Worker | 已实现；提交后 ACK，满载等待且不消耗故障预算，过期投递 ACK 并由 Scheduler 超时收尾；实际故障有限重试；每个 Worker 独立队列，原 Attempt 重发目标不变 |
 | Handler 执行、幂等接收、结果重报 | Worker | 已实现，白名单 Handler、有界执行、独立持久化 |
 | Worker 注册、心跳、会话隔离和在线查询 | Scheduler 权威，Worker 上报，Admin 代理 | 已实现；MQ 动态选择、固定 Attempt 目标和路由，管理台 /workers 接入 |
-| 运行报表、失败告警、用户权限 | 对应业务服务 | 后续阶段 |
+| 运行统计 | Admin 代理 Scheduler | 已实现 |
+| 失败告警 | 对应业务服务 | 后续阶段 |
 
 独立 Vue 管理台已接入任务管理接口，Admin 原首页仍为演示页。尚未实现的运行能力不会返回模拟成功。
 
@@ -51,6 +52,7 @@ Gateway 保留以下 API 路径，只路由 `/api/v1/**`；`/internal/v1/**`、�
 | GET | /api/v1/config-reconciliation/selectById?id=UUID | 查询已保存的批次和差异明细 |
 | POST | /api/v1/config-reconciliation/updateRepair | 受控补发；JSON requestId(UUID)、checkId(UUID) |
 | GET | /api/v1/config-reconciliation/selectRepairById?id=UUID | 查询修复结果及操作者记录 |
+| GET | /api/v1/runs/selectSummary | run:read；from/to 同时省略或提供 UTC 时间窗，最长 7 天 |
 | POST | /api/v1/runs/insert | 使用配置快照创建手动 Run |
 | GET | /api/v1/runs/select?jobId=1&page=1&pageSize=10 | 查询 Job 的运行历史 |
 | GET | /api/v1/runs/selectById?id=UUID | 运行详情、快照与 Attempt 历史 |
@@ -267,6 +269,37 @@ Run 的 state 为 READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED。明确的 
 Worker 本地结果保存失败会有限重试保存同一份结果，不重新执行 Handler，不增加 Run / Attempt 或业务重试次数。恢复后按原租约上报；已失效租约不会被延长或绕过。持续保存失败可能最终表现为 Scheduler 租约超时，不能据此断言业务未执行。公开路径、请求参数与响应结构不变；日志诊断和完整故障边界见 [Worker 结果保存恢复](worker-result-recovery.md)。
 
 2026-10-27 状态并发修复保持上述路径、请求字段和响应结构不变。派发确认不能覆盖 SUCCEEDED/FAILED；并发收到内容相同且租约版本匹配的已接受终态时，仍幂等确认，旧租约或冲突终态仍返回 409 / STALE_ATTEMPT。重复确认不会增加 Attempt。MySQL 行锁、条件更新和回滚边界见 [状态并发修复验证](run-state-concurrency-verification.md)。
+
+## 运行统计语义
+
+GET /api/v1/runs/selectSummary?from=2026-10-30T00:00:00Z&to=2026-10-31T00:00:00Z 需要 run:read，返回 ApiResponse。内部 GET /internal/v1/runs/selectSummary 使用控制密钥，返回相同 data 的裸 JSON，不经 Gateway 公开。Admin 在事务外请求 Scheduler；时间窗非法为 400 / INVALID_ARGUMENT，Scheduler 不可用为 503 / SCHEDULER_UNAVAILABLE，缺少必要结构为 503 / SCHEDULER_PROTOCOL_ERROR。统计不缓存。
+
+```json
+{
+  "from":"2026-10-30T00:00:00Z", "to":"2026-10-31T00:00:00Z", "observedAt":"2026-10-31T08:00:00Z",
+  "total":42, "stateCounts":{"READY":1,"RUNNING":2,"RETRY_WAIT":1,"SUCCEEDED":34,"FAILED":4},
+  "finished":38, "succeeded":34, "failed":4, "successRate":0.8947,
+  "attemptTotal":47, "retriedRunCount":5,
+  "latency":{"avgMillis":1240,"p95Millis":4300,"sampled":38,"truncated":false},
+  "failures":[{"jobId":7,"resultCode":"HANDLER_FAILED","runCount":3,"lastFailedAt":"2026-10-31T07:12:00Z"}]
+}
+```
+
+- 时间窗按 `run_execution.created_at` 过滤，`from` 含、`to` 不含，均为带时区的 UTC ISO-8601（以 `Z` 结尾）。
+- `from`、`to` 要么都省略（默认最近 24 小时），要么都提供；只给一个为 400。
+- 窗口必须 `from < to` 且跨度 ≤ 7 天，否则 400 / `INVALID_ARGUMENT`。
+- Run 状态只有 `READY / RUNNING / RETRY_WAIT / SUCCEEDED / FAILED`；`TIMED_OUT` 只属于 Attempt。
+- `finished` = `SUCCEEDED + FAILED`；`successRate = succeeded / finished`，四舍五入 4 位小数，`finished = 0` 时为 `null`（不要返回 0 或 NaN）。
+- Run 耗时 = `run_execution.finished_at - started_at`，**包含排队、派发与重试间隔，不等于 Handler 执行时间**。
+- `p95` 用 nearest-rank。为控制查询量，只取窗口内按 `created_at, id` 升序的前 10,000 个已完成 Run 作为样本；`sampled` 返回实际样本数，`truncated` 表示样本已截断（此时 p95 为近似值，文档必须写明）。
+- 失败列表按 `(jobId, resultCode)` 聚合，`resultCode` 为空时记作 `UNKNOWN`，按 `runCount` 倒序，最多 5 条。
+- 四个统计查询是同一 Scheduler 数据库上的多次读取，**不是一致性快照**；`observedAt` 只表示观察时刻。
+
+我将四次读取划分为状态与完整窗口平均耗时、Attempt 总量与重试 Run 数、耗时样本、失败分组。attemptTotal 统计窗口内 Run 的所有 Attempt，retriedRunCount 为存在 attempt_number > 1 的不同 Run 数；不按 Attempt 自身时间过滤。stateCounts 始终补齐五个状态键。失败组同数量时按 jobId、resultCode 排序，lastFailedAt 取组内 Run 的最大 finished_at，null 和空字符串均归 UNKNOWN。
+
+avgMillis 使用整个窗口内具有开始及结束时间的终态 Run 算术平均，四舍五入到整数毫秒；p95Millis 使用同样有效的耗时样本，按 nearest-rank 取值。没有可用耗时样本时平均和 P95 均为 null，sampled 为 0。采样超过 10,000 时只保留最早样本，不作随机抽样。有效耗时记录总数超过上限时 truncated=true。由于读取间状态可能变化，计数和样本数可能短暂不一致。
+
+started_at 首次进入 RUNNING 时写入，故耗时仅涵盖此后发生的等待、派发与重试间隔，不含初始排队；历史回填以 Attempt 最早开始为准。快速回调先于 RUNNING 完成时开始时间可能为空，此类 Run 计入结果，不进入耗时统计。详见 [运行统计设计](run-reporting.md) 与 [验证记录](run-reporting-verification.md)。
 
 ## 代码分层
 

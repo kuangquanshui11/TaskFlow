@@ -8,6 +8,7 @@ public interface IRunService {
     @org.springframework.security.access.prepost.PreAuthorize("hasAuthority('run:trigger')")
     JsonNode insert(Insert request);
     JsonNode select(long jobId, int page, int pageSize);
+    JsonNode selectSummary(String from, String to);
     JsonNode selectById(UUID id);
     JsonNode selectByRequestKey(UUID requestKey);
 }
