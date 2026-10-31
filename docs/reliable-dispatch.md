@@ -160,6 +160,10 @@ MQ 未部署时可显式用 http，并设置 `TASKFLOW_MQ_HEALTH_ENABLED=false`�
 
 每条工作队列对应一个 Worker 身份、一个执行进程及其持久化 Inbox。带不同 Inbox 的 Worker 不竞争同一队列。Scheduler 为新 Attempt 按能力/负载选择节点，保存目标和 Outbox 路由，Relay 重发不改投；租约失效按快照上限新增 Attempt 后可选择其他节点。执行有界续租已实现，MQ 三副本与 Worker 多进程是两个独立层次；不提供同一 Attempt 跨 Inbox 接管，外部副作用仍需业务幂等。部署见 [水平扩展](worker-horizontal-scaling.md)。
 
+## 排障指标
+
+我通过 [积压与延迟指标](observability-metrics.md) 查询 Outbox 各状态、发布逾期、领取过期与 Worker 结果积压；失败保留旧值，需结合 sample.age 判断新鲜度。
+
 ## 验收
 
 真实发布后未标记时退出、执行中退出、旧 Inbox 恢复后迟到结果及发布连接故障使用独立专项；步骤、数据库最终状态、证据和后续节点/死信演练见 [进程故障窗口验证](dispatch-fault-verification.md)。

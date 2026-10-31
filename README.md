@@ -4,6 +4,8 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 ## 当前能力
 
+Scheduler/Worker 已支持积压与延迟指标独立采样、失败保值及本机 Actuator 查询，OTLP 指标导出默认关闭，见 [指标字典](docs/observability-metrics.md)。
+
 工作台已提供最近 24 小时 / 7 天的运行总数、成功率、失败数、P95 耗时、状态分布和失败 Top 5，由 Admin 在 run:read 权限下查询 Scheduler，不缓存统计。
 
 控制台已接入独立 Keycloak 登录、前端登录/退出和权限按钮、Gateway/Admin 双重 JWT 校验与角色权限。Admin 在 Redis 缓存 JWT 会话，每次有效请求续期 30 分钟，闲置过期后要求重新登录；Gateway 使用自有 Redis 分组限流，Nginx 做 IP 粗限流。启动 Admin/Gateway 前需配置 issuer、Keycloak 用户及各自 Redis；缺失配置或 Redis 故障不会放开访问。首次部署及验证边界见 [登录与入口安全](docs/access-security.md)。
@@ -44,6 +46,8 @@ Worker 对同一份执行结果有限重试写库，恢复后继续上报，耗�
 - [手动执行 HTTP 协议](docs/execution-protocol.md)
 - [运行统计与工作台总览设计](docs/run-reporting.md)
 - [运行统计验证记录](docs/run-reporting-verification.md)
+- [积压与延迟指标字典、配置及查询](docs/observability-metrics.md)
+- [积压指标验证记录](docs/observability-metrics-verification.md)
 - [Worker 有界续租与 Handler 上下文](docs/execution-leases.md)
 - [执行租约验证](docs/execution-leases-verification.md)
 - [配置异步同步、状态与恢复](docs/config-sync.md)

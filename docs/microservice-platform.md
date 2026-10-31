@@ -108,7 +108,7 @@ Eureka 存活租约与 Scheduler 的 Worker 心跳表承担不同职责：前者
 
 ## 链路与部署包
 
-Gateway、MVC 入口和 Feign 通过 Micrometer Observation 传播 W3C `traceparent`；Trace ID 进入日志及响应。默认不导出，避免未部署收集器时不断请求 localhost。OTLP 日志/指标导出关闭，HTTP 请求观测和进程内指标仍可使用。
+Gateway、MVC 入口和 Feign 通过 Micrometer Observation 传播 W3C `traceparent`；Trace ID 进入日志及响应。默认不导出，避免未部署收集器时不断请求 localhost。OTLP 日志导出关闭；Scheduler/Worker 指标导出通过 TASKFLOW_OTLP_METRICS_ENABLED 控制，默认 false，指标 URL 从 TASKFLOW_OTLP_ENDPOINT 的 /v1/traces 推导为 /v1/metrics，HTTP 请求观测和进程内指标仍可使用，见 [积压指标](observability-metrics.md)。
 
 同步 Gateway → Admin → Scheduler 已有真实请求及 OTLP 验证。持久化 Outbox、MQ 和 Inbox 等待后尚未把原 trace 上下文持久化传播，后台调用可能开启新 trace；跨异步业务使用 requestKey、Run ID、Attempt ID 关联。整个 Cron/MQ 执行尚不能关联到同一条 trace。
 
