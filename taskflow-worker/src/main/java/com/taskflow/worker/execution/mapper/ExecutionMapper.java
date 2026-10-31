@@ -62,4 +62,11 @@ public class ExecutionMapper {
         var value = rs.getTimestamp(name); return value == null ? null : value.toInstant();
     }
     private Timestamp ts(Instant value) { return Timestamp.from(value); }
+    public long countUnreported() {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM worker_execution WHERE reported=FALSE AND state IN ('SUCCEEDED','FAILED')", Long.class);
+    }
+    public long countAccepted() {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM worker_execution WHERE state='ACCEPTED'", Long.class);
+    }
+
 }

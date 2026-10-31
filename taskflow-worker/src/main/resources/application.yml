@@ -63,7 +63,8 @@ management:
   otlp:
     metrics:
       export:
-        enabled: false
+        enabled: "${TASKFLOW_OTLP_METRICS_ENABLED:false}"
+        step: 60s
   tracing:
     export:
       otlp:
@@ -83,7 +84,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,metrics
   endpoint:
     health:
       show-details: never
@@ -91,6 +92,9 @@ eureka:
   client:
     enabled: false
 taskflow:
+  metrics:
+    enabled: "${TASKFLOW_METRICS_ENABLED:true}"
+    sample-interval: "${TASKFLOW_METRICS_SAMPLE_INTERVAL:15s}"
   nodes:
     enabled: "${TASKFLOW_NODE_HEARTBEAT_ENABLED:true}"
     worker-id: "${TASKFLOW_WORKER_ID:worker-default}"
