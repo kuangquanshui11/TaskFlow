@@ -104,6 +104,33 @@ public class RunServiceImpl implements IRunService {
     }
 
     @Override
+    public Overview selectSummary(Instant from, Instant to) {
+        var observed = Instant.now();
+        if (from == null && to == null) { to = observed; from = to.minus(java.time.Duration.ofHours(24)); }
+        if (from == null || to == null || !from.isBefore(to) || java.time.Duration.between(from, to).compareTo(java.time.Duration.ofDays(7)) > 0)
+            throw new RunException(400, "INVALID_ARGUMENT", "时间窗必须同时提供、起点早于终点且不超过 7 天");
+        // 四次读取不持有共同事务快照；观察时间不承诺各项统计完全同步。
+        var states = mapper.summaryStates(from, to);
+        var attempts = mapper.summaryAttempts(from, to);
+        var samples = mapper.summaryLatencies(from, to).stream().sorted().toList();
+        var failures = mapper.summaryFailures(from, to);
+        var counts = new java.util.LinkedHashMap<String, Long>();
+        for (var state : List.of("READY", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED")) counts.put(state, 0L);
+        states.forEach(row -> counts.put(row.state(), row.count()));
+        long succeeded = counts.get("SUCCEEDED"), failed = counts.get("FAILED"), finished = succeeded + failed;
+        long timed = states.stream().mapToLong(StateCount::timedCount).sum();
+        var totalMillis = states.stream().map(StateCount::totalMillis).filter(java.util.Objects::nonNull)
+                .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+        Long average = timed == 0 ? null : totalMillis.divide(java.math.BigDecimal.valueOf(timed), 0, java.math.RoundingMode.HALF_UP).longValue();
+        Long p95 = samples.isEmpty() ? null : samples.get((int) Math.ceil(samples.size() * 0.95) - 1);
+        var rate = finished == 0 ? null : java.math.BigDecimal.valueOf(succeeded)
+                .divide(java.math.BigDecimal.valueOf(finished), 4, java.math.RoundingMode.HALF_UP);
+        return new Overview(from, to, observed, counts.values().stream().mapToLong(Long::longValue).sum(), counts,
+                finished, succeeded, failed, rate, attempts.attemptTotal(), attempts.retriedRunCount(),
+                new Latency(average, p95, samples.size(), timed > 10000), failures);
+    }
+
+    @Override
     public void updateResult(Result result) {
         if (!java.util.Set.of("SUCCEEDED", "FAILED").contains(result.status()))
             throw new RunException(400, "INVALID_ARGUMENT", "不支持的执行终态");

@@ -19,6 +19,19 @@ public class RunController {
     public RunView selectById(@RequestParam UUID id) { return runs.selectById(id); }
     @GetMapping("/selectByRequestKey")
     public RunView selectByRequestKey(@RequestParam UUID requestKey) { return runs.selectByRequestKey(requestKey); }
+    @GetMapping("/selectSummary")
+    public Overview selectSummary(@RequestParam(required = false) String from, @RequestParam(required = false) String to) {
+        return runs.selectSummary(parseWindowTime(from), parseWindowTime(to));
+    }
+    private java.time.Instant parseWindowTime(String value) {
+        if (value == null) return null;
+        try {
+            if (!value.endsWith("Z")) throw new IllegalArgumentException();
+            return java.time.Instant.parse(value);
+        } catch (java.time.format.DateTimeParseException | IllegalArgumentException invalid) {
+            throw new com.taskflow.scheduler.execution.exception.RunException(400, "INVALID_ARGUMENT", "时间必须为以 Z 结尾的 UTC ISO-8601");
+        }
+    }
     @GetMapping("/select")
     public Page select(@RequestParam long jobId, @RequestParam(defaultValue="1") int page,
                        @RequestParam(defaultValue="10") int pageSize) { return runs.select(jobId, page, pageSize); }

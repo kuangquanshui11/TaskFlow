@@ -37,4 +37,12 @@ public final class RunRecords {
     public record Summary(UUID id, long jobId, long configVersion, String state, int attemptCount,
             String resultCode, String message, Instant createdAt, Instant updatedAt, String triggerType, Instant scheduledAt) { }
     public record Page(List<Summary> records, long total, int page, int pageSize) { }
+    public record Overview(Instant from, Instant to, Instant observedAt, long total,
+            java.util.Map<String, Long> stateCounts, long finished, long succeeded, long failed,
+            java.math.BigDecimal successRate, long attemptTotal, long retriedRunCount,
+            Latency latency, List<FailureGroup> failures) { }
+    public record Latency(Long avgMillis, Long p95Millis, int sampled, boolean truncated) { }
+    public record FailureGroup(long jobId, String resultCode, long runCount, Instant lastFailedAt) { }
+    public record StateCount(String state, long count, long timedCount, java.math.BigDecimal totalMillis) { }
+    public record AttemptTotals(long attemptTotal, long retriedRunCount) { }
 }

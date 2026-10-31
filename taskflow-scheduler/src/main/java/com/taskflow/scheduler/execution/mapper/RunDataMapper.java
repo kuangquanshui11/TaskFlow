@@ -96,8 +96,26 @@ public class RunDataMapper {
                 expected.leaseVersion(), expected.state()) == 1;
     }
     public boolean runState(RunRow expected, String state, int attempt, String code, String message, Instant now) {
-        return jdbc.update("UPDATE run_execution SET state=?,current_attempt=?,result_code=?,message=?,updated_at=? WHERE id=? AND current_attempt=? AND state=? AND state IN ('READY','RUNNING','RETRY_WAIT')",
-                state, attempt, code, message, ts(now), expected.id().toString(), expected.currentAttempt(), expected.state()) == 1;
+        return jdbc.update("UPDATE run_execution SET state=?,current_attempt=?,result_code=?,message=?,updated_at=?,started_at=COALESCE(started_at,?),finished_at=COALESCE(finished_at,?) WHERE id=? AND current_attempt=? AND state=? AND state IN ('READY','RUNNING','RETRY_WAIT')",
+                state, attempt, code, message, ts(now), ts("RUNNING".equals(state) ? now : null),
+                ts(java.util.Set.of("SUCCEEDED", "FAILED").contains(state) ? now : null),
+                expected.id().toString(), expected.currentAttempt(), expected.state()) == 1;
+    }
+    public List<StateCount> summaryStates(Instant from, Instant to) {
+        return jdbc.query("SELECT state,COUNT(*) AS n,COUNT(CASE WHEN state IN ('SUCCEEDED','FAILED') AND started_at IS NOT NULL THEN finished_at END) AS timed_count,SUM(CASE WHEN state IN ('SUCCEEDED','FAILED') THEN TIMESTAMPDIFF(MICROSECOND,started_at,finished_at)/1000.0 END) AS total_millis FROM run_execution WHERE created_at>=? AND created_at<? GROUP BY state",
+                (rs, i) -> new StateCount(rs.getString("state"), rs.getLong("n"), rs.getLong("timed_count"), rs.getBigDecimal("total_millis")), ts(from), ts(to));
+    }
+    public AttemptTotals summaryAttempts(Instant from, Instant to) {
+        return jdbc.queryForObject("SELECT COUNT(*) AS n,COUNT(DISTINCT CASE WHEN a.attempt_number>1 THEN a.run_id END) AS retried FROM run_attempt a JOIN run_execution r ON r.id=a.run_id WHERE r.created_at>=? AND r.created_at<?",
+                (rs, i) -> new AttemptTotals(rs.getLong("n"), rs.getLong("retried")), ts(from), ts(to));
+    }
+    public List<Long> summaryLatencies(Instant from, Instant to) {
+        return jdbc.query("SELECT started_at,finished_at FROM run_execution WHERE created_at>=? AND created_at<? AND state IN ('SUCCEEDED','FAILED') AND started_at IS NOT NULL AND finished_at IS NOT NULL ORDER BY created_at,id LIMIT 10000",
+                (rs, i) -> java.time.Duration.between(instant(rs, "started_at"), instant(rs, "finished_at")).toMillis(), ts(from), ts(to));
+    }
+    public List<FailureGroup> summaryFailures(Instant from, Instant to) {
+        return jdbc.query("SELECT job_id,COALESCE(NULLIF(result_code,''),'UNKNOWN') AS code,COUNT(*) AS n,MAX(finished_at) AS last_failed_at FROM run_execution WHERE created_at>=? AND created_at<? AND state='FAILED' GROUP BY job_id,COALESCE(NULLIF(result_code,''),'UNKNOWN') ORDER BY n DESC,job_id,code LIMIT 5",
+                (rs, i) -> new FailureGroup(rs.getLong("job_id"), rs.getString("code"), rs.getLong("n"), instant(rs, "last_failed_at")), ts(from), ts(to));
     }
     private RunRow readRun(ResultSet rs, int index) throws SQLException {
         return new RunRow(UUID.fromString(rs.getString("id")), rs.getLong("job_id"), rs.getLong("config_version"),
