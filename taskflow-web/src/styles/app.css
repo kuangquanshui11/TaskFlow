@@ -140,6 +140,26 @@ svg { flex-shrink: 0; vertical-align: middle; }
 .panel-heading { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding: 18px 23px; }
 .panel-heading p { margin-top: 4px; font-size: 10px; color: var(--muted); }
 .panel-heading > svg { color: #a4adbd; }
+.run-overview { margin-bottom: 26px; }
+.run-overview .panel-heading { flex-wrap: wrap; }
+.run-overview .button { min-height: 44px; }
+.run-state-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.run-summary-body { padding: 20px; min-width: 0; }
+.run-summary-note { color: var(--muted); font-size: 13px; line-height: 1.7; margin: 0 0 18px; }
+.run-summary-message { padding: 24px 20px; color: var(--muted); font-size: 14px; }
+.run-overview .metric-number { font-size: clamp(20px, 2vw, 28px); overflow-wrap: anywhere; letter-spacing: 0; }
+.run-overview .metric-card { min-width: 0; }
+.run-distribution-bar { height: 12px; display: flex; overflow: hidden; border-radius: 6px; background: var(--canvas); }
+.run-distribution .ready { background: var(--muted); }
+.run-distribution .running { background: var(--primary); }
+.run-distribution .retry_wait { background: var(--sidebar); }
+.run-distribution .succeeded { background: var(--green); }
+.run-distribution .failed { background: var(--red); }
+.run-state-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 16px 0; margin: 0; }
+.run-state-legend li { display: flex; gap: 8px; align-items: center; font-size: 13px; font-variant-numeric: tabular-nums; }
+.run-summary-body h3 { font-size: 15px; margin: 20px 0 12px; }
+.run-failure-list article { display: flex; flex-wrap: wrap; gap: 12px 20px; padding: 12px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.run-failure-list code { overflow-wrap: anywhere; min-width: 0; }
 .overview-layout { display: grid; grid-template-columns: minmax(0,1fr) 286px; gap: 22px; align-items: start; }
 .recent-panel { min-height: 486px; }
 .overview-aside { display: grid; gap: 20px; }

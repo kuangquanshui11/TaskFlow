@@ -87,7 +87,7 @@ Worker 节点管理已实现：独立注册/心跳协议与密钥、Scheduler �
 
 平台治理包含：Nginx → Gateway → Admin，内部服务名发现与 Feign 调用、熔断及同步 HTTP 链路追踪；注册/配置中心独立认证、非秘密策略仓库及可选 Jaeger Compose 已提供。默认配置变更重启生效，不提供完整热刷新；Eureka/Config 单实例，HA 和真实 Jaeger 容器验收仍未完成。
 
-- 运行统计、结构化日志、任务延迟、待发布积压、Worker 状态。
+- 运行统计（S1）已实现：Scheduler 时间窗汇总、Admin run:read 代理、工作台 24 小时 / 7 天运行概览及失败 Top 5，见 [设计](run-reporting.md) 与 [验证](run-reporting-verification.md)。Worker 状态已有独立节点页面；告警、积压指标、结构化日志和任务延迟专项尚未实现。
 - Keycloak 用户登录、JWT 验证、管理权限、Redis 30 分钟滑动会话及入口限流已实现，见 [登录与入口安全](access-security.md)；告警、持久化操作审计另行实施。2026-10-28 安全验证时 Redis 不可达，真实 Redis 会话与限流集成验收未执行。
 - 各服务镜像和 Compose、一键启动说明、API 示例。
 - 在明确拓扑和负载下测量吞吐与延迟，不提前填写性能结论。

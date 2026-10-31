@@ -103,19 +103,24 @@ public class RunDataMapper {
     }
     public List<StateCount> summaryStates(Instant from, Instant to) {
         return jdbc.query("SELECT state,COUNT(*) AS n,COUNT(CASE WHEN state IN ('SUCCEEDED','FAILED') AND started_at IS NOT NULL THEN finished_at END) AS timed_count,SUM(CASE WHEN state IN ('SUCCEEDED','FAILED') THEN TIMESTAMPDIFF(MICROSECOND,started_at,finished_at)/1000.0 END) AS total_millis FROM run_execution WHERE created_at>=? AND created_at<? GROUP BY state",
-                (rs, i) -> new StateCount(rs.getString("state"), rs.getLong("n"), rs.getLong("timed_count"), rs.getBigDecimal("total_millis")), ts(from), ts(to));
+                (rs, i) -> new StateCount(rs.getString("state"), rs.getLong("n"), rs.getLong("timed_count"), rs.getBigDecimal("total_millis")), windowTs(from), windowTs(to));
     }
     public AttemptTotals summaryAttempts(Instant from, Instant to) {
         return jdbc.queryForObject("SELECT COUNT(*) AS n,COUNT(DISTINCT CASE WHEN a.attempt_number>1 THEN a.run_id END) AS retried FROM run_attempt a JOIN run_execution r ON r.id=a.run_id WHERE r.created_at>=? AND r.created_at<?",
-                (rs, i) -> new AttemptTotals(rs.getLong("n"), rs.getLong("retried")), ts(from), ts(to));
+                (rs, i) -> new AttemptTotals(rs.getLong("n"), rs.getLong("retried")), windowTs(from), windowTs(to));
     }
     public List<Long> summaryLatencies(Instant from, Instant to) {
         return jdbc.query("SELECT started_at,finished_at FROM run_execution WHERE created_at>=? AND created_at<? AND state IN ('SUCCEEDED','FAILED') AND started_at IS NOT NULL AND finished_at IS NOT NULL ORDER BY created_at,id LIMIT 10000",
-                (rs, i) -> java.time.Duration.between(instant(rs, "started_at"), instant(rs, "finished_at")).toMillis(), ts(from), ts(to));
+                (rs, i) -> java.time.Duration.between(instant(rs, "started_at"), instant(rs, "finished_at")).toMillis(), windowTs(from), windowTs(to));
     }
     public List<FailureGroup> summaryFailures(Instant from, Instant to) {
         return jdbc.query("SELECT job_id,COALESCE(NULLIF(result_code,''),'UNKNOWN') AS code,COUNT(*) AS n,MAX(finished_at) AS last_failed_at FROM run_execution WHERE created_at>=? AND created_at<? AND state='FAILED' GROUP BY job_id,COALESCE(NULLIF(result_code,''),'UNKNOWN') ORDER BY n DESC,job_id,code LIMIT 5",
-                (rs, i) -> new FailureGroup(rs.getLong("job_id"), rs.getString("code"), rs.getLong("n"), instant(rs, "last_failed_at")), ts(from), ts(to));
+                (rs, i) -> new FailureGroup(rs.getLong("job_id"), rs.getString("code"), rs.getLong("n"), instant(rs, "last_failed_at")), windowTs(from), windowTs(to));
+    }
+    // 存储精度为毫秒；半开窗口的两端均向上取整，保留亚毫秒输入的包含/排除语义。
+    private Timestamp windowTs(Instant value) {
+        var millis = value.truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        return Timestamp.from(value.equals(millis) ? millis : millis.plusMillis(1));
     }
     private RunRow readRun(ResultSet rs, int index) throws SQLException {
         return new RunRow(UUID.fromString(rs.getString("id")), rs.getLong("job_id"), rs.getLong("config_version"),

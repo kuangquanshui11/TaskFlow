@@ -62,6 +62,9 @@ class RunSummaryTests {
         seed("FAILED", 2, "BAD", to, 1L); seed("READY", 1, null, to.plusMillis(1), null);
         var result = runs.selectSummary(from, to);
         assertThat(result.total()).isEqualTo(1); assertThat(result.attemptTotal()).isEqualTo(1); assertThat(result.failures()).isEmpty();
+        var fractional = runs.selectSummary(from.plusNanos(1), to.plusNanos(1));
+        assertThat(fractional.total()).isEqualTo(1); assertThat(fractional.failed()).isEqualTo(1);
+        assertThat(fractional.attemptTotal()).isEqualTo(1); assertThat(fractional.failures()).hasSize(1);
     }
     @Test void stateFlowKeepsFirstStartAndOnlyTerminalFinish() {
         var run = runs.insert(new Create(UUID.randomUUID(), new Snapshot(7, 2, "flow", "demoSuccess", null,
