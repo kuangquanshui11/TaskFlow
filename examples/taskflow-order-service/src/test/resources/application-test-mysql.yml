@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    url: "${TASKFLOW_ORDER_TEST_DB_URL:jdbc:mysql://127.0.0.1:${TASKFLOW_ORDER_TEST_DB_PORT:13389}/${TASKFLOW_ORDER_TEST_DB_SCHEMA:taskflow_it_order}?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=3000&socketTimeout=10000}"
+    username: "${TASKFLOW_ORDER_TEST_DB_USERNAME:root}"
+    password: "${TASKFLOW_ORDER_TEST_DB_PASSWORD:}"
+    hikari:
+      connection-init-sql: "SET time_zone = '+00:00'"

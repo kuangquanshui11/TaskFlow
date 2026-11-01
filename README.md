@@ -264,3 +264,7 @@ TaskFlow/
 带登录的完整任务回归入口、隔离身份与 Redis、MQ 前置条件和故障场景见 [带登录的任务链路回归](docs/authenticated-regression.md)。
 
 Relay 发布后未标记时退出、Worker 执行中退出、旧 Inbox 恢复后真实迟到上报与发布连接恢复的专项入口见 [进程故障窗口验证](docs/dispatch-fault-verification.md)。后续工作聚焦在途 Broker 节点停机、可靠死信、多数派丢失、失联恢复、Jaeger 容器实测及全量配置对账。现有能力和故障保障的验证范围见 [微服务技术栈](docs/microservice-platform.md)。
+
+## 独立订单业务示例
+
+新增 [订单服务](examples/taskflow-order-service/README.md)，默认端口 8083，使用独立 MySQL schema/账号；可选 Redis 查询缓存。它实现下单预占、模拟付款、超时关单和库存释放，Worker 通过可选 `orderTimeoutCheck` Handler 接入。启动、鉴权、故障验收见示例 README。

@@ -364,3 +364,34 @@ Admin 通过 Scheduler HTTP 查询，不访问 Scheduler 表或 Job 详情缓存
 - [Spring MVC 请求校验](https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-controller/ann-validation.html)
 - [MyBatis-Plus Spring Boot 4 安装](https://baomidou.com/getting-started/install/)
 - [Spring Boot JSON 与 Jackson 3](https://docs.spring.io/spring-boot/reference/features/json.html)
+
+## 独立订单示例 API（v1）
+
+我将以下接口部署在独立订单服务（默认本机 8083）。公共 Gateway 当前不路由此业务示例。除健康探针外均要求 `X-Taskflow-Token`；业务 API 使用 `TASKFLOW_ORDER_API_TOKEN`，内部超时接口使用另一个 `TASKFLOW_ORDER_WORKER_TOKEN`，空令牌拒绝所有请求。业务令牌仅用于受控演示，包含初始化和模拟付款权限，不作为真实用户支付鉴权方案。
+
+| 方法与路径 | 参数 | 行为 |
+| --- | --- | --- |
+| POST `/api/v1/inventory/insert` | JSON `skuId`（正整数）、`available`（0–10亿） | 初始化 SKU，重复 SKU 返回 409 |
+| GET `/api/v1/inventory/select` | query `skuId` | 库存快照：skuId、available、reserved、version；可能在 TTL 内滞后 |
+| POST `/api/v1/orders/insert` | JSON `requestKey`（非空，最多100字符）、`skuId`、`quantity`（1–100万） | 幂等下单并预占；同键不同参数或库存不足返回 409 |
+| GET `/api/v1/orders/select` | query `id` | 返回 `order` 与业务 `ledger`；不存在返回 404 |
+| POST `/api/v1/orders/updatePayment` | JSON `orderId` | 受保护的模拟付款；已付款幂等；过期/已关闭返回 409 |
+| POST `/internal/v1/orders/updateTimeout` | JSON `batchSize`（1–500）、可选 `cutoff/afterExpiresAt/afterId`；必填 `X-Request-Id`（1–128字符） | 逐单短事务关单；返回 scanned/closed/skipped/failed 与继续扫描游标 |
+
+订单保存单个 SKU 明细、创建/付款截止/付款/关闭时间、关闭原因。期限由服务 `order.payment-window`（默认30分钟）在创建时确定。订单状态为 PENDING/PAID/CLOSED。付款必须严格早于截止时间；超时关单使用小于等于截止时间的候选并在订单锁内复核。内部请求首次不传游标，后续原样携带返回的 cutoff/afterExpiresAt/afterId；cutoff 不允许未来时间，游标两字段必须成对提供。非法参数返回 400；鉴权失败 401；未知服务故障 5xx。调用方不得自动重放 POST。
+
+示例请求体（均发送至对应 POST 路径）：
+
+```json
+{"skuId":1001,"available":10}
+```
+
+```json
+{"requestKey":"checkout-001","skuId":1001,"quantity":2}
+```
+
+```json
+{"batchSize":100}
+```
+
+Worker Handler 参数为 `{"batchSize":100,"maxBatches":10}`，上限分别500和100，旧 `timeoutMinutes` 参数拒绝执行。节点仅在 `taskflow.order.enabled=true` 时注册能力。业务流水记录请求关联键；该键不替代订单/预占唯一约束。任务成功表示本轮有限预算处理完成，具体订单结果以本服务流水为准。

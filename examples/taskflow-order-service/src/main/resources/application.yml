@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: taskflow-order-service
+  config:
+    import: optional:file:./config/taskflow-order-local.yml
+  datasource:
+    url: "${TASKFLOW_ORDER_DB_URL:jdbc:mysql://localhost:3306/taskflow_order?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=3000&socketTimeout=5000}"
+    username: "${TASKFLOW_ORDER_DB_USERNAME:taskflow_order}"
+    password: "${TASKFLOW_ORDER_DB_PASSWORD:}"
+    hikari:
+      connection-init-sql: "SET time_zone = '+00:00'"
+      maximum-pool-size: 16
+      connection-timeout: 3000
+  data:
+    redis:
+      host: "${TASKFLOW_ORDER_REDIS_HOST:localhost}"
+      port: "${TASKFLOW_ORDER_REDIS_PORT:6379}"
+      password: "${TASKFLOW_ORDER_REDIS_PASSWORD:}"
+      connect-timeout: 500ms
+      timeout: 500ms
+server:
+  address: "${TASKFLOW_ORDER_BIND_ADDRESS:127.0.0.1}"
+  port: "${TASKFLOW_ORDER_PORT:8083}"
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    arg-name-based-constructor-auto-mapping: true
+eureka:
+  client:
+    enabled: false
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  health:
+    redis:
+      enabled: false
+order:
+  api-token: "${TASKFLOW_ORDER_API_TOKEN:}"
+  worker-token: "${TASKFLOW_ORDER_WORKER_TOKEN:}"
+  payment-window: "${TASKFLOW_ORDER_PAYMENT_WINDOW:30m}"
+  cache-enabled: "${TASKFLOW_ORDER_CACHE_ENABLED:true}"
+  cache-ttl: 30s
+  outbox-delay: 1000
+  outbox-retry-delay: 5s
+  outbox-max-attempts: 10

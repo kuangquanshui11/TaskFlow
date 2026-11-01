@@ -44,5 +44,6 @@
 		<module>taskflow-admin</module>
 		<module>taskflow-scheduler</module>
 		<module>taskflow-worker</module>
+		<module>examples/taskflow-order-service</module>
 	</modules>
 </project>

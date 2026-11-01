@@ -1,0 +1,6 @@
+spring:
+  data:
+    redis:
+      host: 127.0.0.1
+      port: ${TASKFLOW_ORDER_TEST_REDIS_PORT}
+      password: ""

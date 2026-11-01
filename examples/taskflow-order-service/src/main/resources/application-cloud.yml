@@ -1,0 +1,8 @@
+eureka:
+  client:
+    enabled: true
+    service-url:
+      defaultZone: "${TASKFLOW_REGISTRY_URL}"
+  instance:
+    instance-id: "${spring.application.name}:${TASKFLOW_INSTANCE_ID:${random.uuid}}"
+    hostname: "${TASKFLOW_INSTANCE_HOST:localhost}"
