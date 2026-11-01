@@ -145,7 +145,7 @@ taskflow:
     max-page-size: 100
   jobs:
     # 配置允许项；实际在线节点及 Handler 能力从 Scheduler 的节点接口查询。
-    allowed-handler-keys: "${TASKFLOW_ADMIN_ALLOWED_HANDLER_KEYS:demoSuccess,demoFail,demoSlow,demoFailOnce}"
+    allowed-handler-keys: "${TASKFLOW_ADMIN_ALLOWED_HANDLER_KEYS:demoSuccess,demoFail,demoSlow,demoFailOnce,orderTimeoutCheck}"
     detail-cache:
       enabled: "${TASKFLOW_ADMIN_JOB_CACHE_ENABLED:true}"
       ttl: "${TASKFLOW_ADMIN_JOB_CACHE_TTL:60s}"

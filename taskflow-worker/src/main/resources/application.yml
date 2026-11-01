@@ -92,6 +92,12 @@ eureka:
   client:
     enabled: false
 taskflow:
+  order:
+    enabled: "${TASKFLOW_ORDER_HANDLER_ENABLED:false}"
+    url: "${TASKFLOW_ORDER_URL:http://localhost:8083}"
+    token: "${TASKFLOW_ORDER_WORKER_TOKEN:}"
+    connect-timeout: 2s
+    request-timeout: 5s
   metrics:
     enabled: "${TASKFLOW_METRICS_ENABLED:true}"
     sample-interval: "${TASKFLOW_METRICS_SAMPLE_INTERVAL:15s}"

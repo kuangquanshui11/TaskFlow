@@ -115,7 +115,7 @@ class WorkerExecutionTests {
                 throw new org.springframework.dao.DataAccessResourceFailureException("temporary save failure");
             return call.callRealMethod();
         }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), any());
-        var stopped = new ExecutionServiceImpl(mapper, handlers, reports, properties, json, transactions, results, leases);
+        var stopped = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, properties, json, transactions, results, leases);
         try {
             stopped.recover(); stopped.insert(command); stopped.shutdown();
             assertThatCode(stopped::executePending).doesNotThrowAnyException();
@@ -367,7 +367,7 @@ class WorkerExecutionTests {
         var limited = new ExecutionProperties(properties.schedulerUrl(), properties.dispatchToken(), properties.reportToken(),
                 properties.connectTimeout(), properties.requestTimeout(), properties.scanInterval(), properties.parallelism(),
                 properties.maxPending(), properties.maxReportAttempts(), properties.reportRetryDelay(), false, Duration.ofMillis(1));
-        var reporting = new ExecutionServiceImpl(mapper, handlers, reports, limited, json, transactions, results, leases);
+        var reporting = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, limited, json, transactions, results, leases);
         try {
             reporting.recover(); reporting.reportPending();
             verify(reports, atMostOnce()).report(any());

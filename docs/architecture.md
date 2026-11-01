@@ -28,6 +28,7 @@ Tomcat 使用 Admin 内嵌容器；Redis 由业务代码访问，数据库仍是
 | taskflow-admin | 8080 | 管理台、Job 配置、配置对账与受控修复、管理接口；转发运行查询和手动触发请求 | Job 定义、配置版本、配置同步 Outbox、对账和修复记录及限速闸门 |
 | taskflow-scheduler | 8081 | 计划、触发、Run/Attempt、派发、重试、租约校验、节点在线状态、MQ 节点选择和固定 Attempt 目标 | 计划副本、配置 Inbox、Run、Attempt、派发 Outbox、节点及会话历史 |
 | taskflow-worker | 8082 | Handler 执行、并发控制、注册/心跳及结果上报 | 本地执行 Inbox、待上报结果；不拥有全局 Run 或节点权威状态 |
+| taskflow-order-service（examples） | 8083 | 下单预占、模拟付款、超时关单与库存查询 | 独立订单、库存、预占、业务流水和缓存同步 Outbox |
 
 Admin 不执行任务；Scheduler 不包含业务 Handler；Worker 不直连 Admin 或 Scheduler 的表。运行查询由 Admin 通过 Scheduler API 获取。
 
@@ -131,3 +132,7 @@ Java 21 / Boot 4.1.1 与 Spring Cloud 2025.1.4 BOM 由父 POM 管理版本，六
 - [XXL-JOB 官方文档](https://github.com/xuxueli/xxl-job/blob/master/doc/XXL-JOB%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3.md)
 
 以上用于核对框架能力；服务划分、配置同步和数据所有权是 TaskFlow 自身的设计决定。
+
+## 订单业务接入边界
+
+我将订单示例放在 `examples/taskflow-order-service`，独立启动、持有订单/库存/预占/流水及缓存 Outbox；不与平台服务共享数据库或 Maven 应用依赖。订单和库存同属该业务服务，关单与释放库存使用本地事务。TaskFlow Worker 的 Handler 注册表发现实际处理器，执行服务和节点能力上报统一使用注册表；订单 Handler 仅通过版本化 HTTP 协议调用业务服务。Scheduler 仍独占 Run/Attempt 权威状态。具体一致性和时效边界见 [订单服务](../examples/taskflow-order-service/README.md)。

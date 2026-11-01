@@ -23,6 +23,8 @@ eureka:
     metadata-map:
       worker-id: "${taskflow.nodes.worker-id}"
 taskflow:
+  order:
+    url: ""
   remote:
     report-url: ""
     registration-url: ""

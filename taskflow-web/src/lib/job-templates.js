@@ -4,11 +4,11 @@ export const jobTemplates = [
   {
     id: 'orders', icon: 'clock', title: '检查超时未付款订单', category: '订单管理',
     problem: '待付款订单长期未处理，需要人工反复检查。', schedule: '每分钟检查一次',
-    action: '调用订单服务，查找超过 30 分钟未付款的订单，由订单服务按规则关闭。',
+    action: '调用订单服务，按订单创建时保存的付款截止时间检查未付款订单，由订单服务按规则关闭。',
     benefit: '减少人工巡查，及时处理过期订单。', cron: '0 * * * * *', handler: 'orderTimeoutCheck',
-    payload: { timeoutMinutes: 30, batchSize: 100 },
-    parameters: 'timeoutMinutes 是未付款超时分钟数；batchSize 是每批最多检查的订单数。请确认订单服务负责校验付款状态和关闭规则。',
-    integration: '订单服务提供超时检查与关闭能力，处理器负责调用；重复执行时避免重复处理订单。',
+    payload: { batchSize: 100, maxBatches: 10 },
+    parameters: 'batchSize 是每批最多检查的订单数；maxBatches 限制本次执行的批数。付款期限由订单服务创建订单时确定。',
+    integration: '启用 Worker 订单 Handler 并配置订单服务鉴权；订单服务负责状态互斥和库存释放幂等。每分钟检查可能延迟，任务成功仅表示本轮处理完成。',
   },
   {
     id: 'reports', icon: 'jobs', title: '生成销售报表', category: '经营分析',

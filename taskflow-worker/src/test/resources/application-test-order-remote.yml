@@ -1,0 +1,15 @@
+spring:
+  cloud:
+    discovery:
+      client:
+        simple:
+          instances:
+            taskflow-order-service:
+              - uri: "http://127.0.0.1:${order.stub-port}"
+taskflow:
+  order:
+    enabled: true
+    url: ""
+    token: test-order-worker
+    connect-timeout: 1s
+    request-timeout: 2s

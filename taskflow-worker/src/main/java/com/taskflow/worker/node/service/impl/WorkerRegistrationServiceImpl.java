@@ -20,13 +20,13 @@ public class WorkerRegistrationServiceImpl implements IWorkerRegistrationService
     private final ExecutionProperties execution;
     private final DispatchProperties dispatch;
     private final IExecutionService executions;
-    private final IDemoHandlerService handlers;
+    private final IHandlerRegistryService handlers;
     private final String vhost;
     private final UUID sessionId=UUID.randomUUID();
     private long generation;
     private long sequence;
     public WorkerRegistrationServiceImpl(WorkerNodeClient client,WorkerRegistrationProperties properties,ExecutionProperties execution,
-            DispatchProperties dispatch,IExecutionService executions,IDemoHandlerService handlers,@Value("${spring.rabbitmq.virtual-host}") String vhost) {
+            DispatchProperties dispatch,IExecutionService executions,IHandlerRegistryService handlers,@Value("${spring.rabbitmq.virtual-host}") String vhost) {
         this.client=client;this.properties=properties;this.execution=execution;this.dispatch=dispatch;this.executions=executions;this.handlers=handlers;this.vhost=vhost;
     }
     @Override

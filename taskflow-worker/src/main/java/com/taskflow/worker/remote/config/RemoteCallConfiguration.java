@@ -2,6 +2,7 @@ package com.taskflow.worker.remote.config;
 import org.springframework.context.annotation.*;
 import org.springframework.cloud.openfeign.*;
 @Configuration(proxyBeanMethods=false)
+@org.springframework.boot.context.properties.EnableConfigurationProperties(com.taskflow.worker.order.config.OrderHandlerProperties.class)
 @EnableFeignClients(basePackages="com.taskflow.worker.remote.client")
 public class RemoteCallConfiguration {
     @Bean public feign.Retryer noImplicitRemoteRetry() { return feign.Retryer.NEVER_RETRY; }

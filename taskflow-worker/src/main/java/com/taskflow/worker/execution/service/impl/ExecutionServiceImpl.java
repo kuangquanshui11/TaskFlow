@@ -16,7 +16,8 @@ import com.taskflow.worker.execution.model.ExecutionCompletion;
 import com.taskflow.worker.execution.model.ExecutionContext;
 import com.taskflow.worker.execution.exception.ExecutionCancelledException;
 import com.taskflow.worker.execution.service.IExecutionLeaseService;
-import com.taskflow.worker.execution.service.IDemoHandlerService;
+import com.taskflow.worker.execution.service.IHandlerRegistryService;
+import com.taskflow.worker.execution.exception.HandlerFailureException;
 import com.taskflow.worker.execution.service.IExecutionService;
 import com.taskflow.worker.execution.service.IExecutionResultService;
 import jakarta.annotation.PreDestroy;
@@ -29,7 +30,7 @@ import tools.jackson.databind.json.JsonMapper;
 @Service
 public class ExecutionServiceImpl implements IExecutionService {
     private final ExecutionMapper mapper;
-    private final IDemoHandlerService handlers;
+    private final IHandlerRegistryService handlers;
     private final SchedulerReportClient reports;
     private final IExecutionResultService results;
     private final IExecutionLeaseService leases;
@@ -40,7 +41,7 @@ public class ExecutionServiceImpl implements IExecutionService {
     private final ScheduledExecutorService timeouts;
     private final Semaphore slots;
     private final AtomicBoolean recovered = new AtomicBoolean();
-    public ExecutionServiceImpl(ExecutionMapper mapper, IDemoHandlerService handlers, SchedulerReportClient reports,
+    public ExecutionServiceImpl(ExecutionMapper mapper, IHandlerRegistryService handlers, SchedulerReportClient reports,
                                 ExecutionProperties properties, JsonMapper json, PlatformTransactionManager manager,
                                 IExecutionResultService results, IExecutionLeaseService leases) {
         this.mapper = mapper; this.handlers = handlers; this.reports = reports; this.properties = properties; this.json = json;
@@ -154,10 +155,13 @@ public class ExecutionServiceImpl implements IExecutionService {
                     state = "FAILED";
                     code = handlerStarted ? "INVALID_HANDLER_ARGUMENT" : "LEASE_UNCONFIRMED";
                     message = handlerStarted ? "处理器参数不合法" : "执行租约确认不合法，未执行 Handler";
+                } catch (HandlerFailureException failed) {
+                    state = "FAILED"; code = "BUSINESS_HANDLER_FAILED"; message = failed.getMessage();
+                    retryable = failed.retryable();
                 } catch (RuntimeException failed) {
                     state = "FAILED";
                     code = handlerStarted ? "HANDLER_FAILED" : "LEASE_UNCONFIRMED";
-                    message = handlerStarted ? "示例处理器执行失败" : "未能确认执行租约，未执行 Handler";
+                    message = handlerStarted ? "处理器执行失败" : "未能确认执行租约，未执行 Handler";
                     retryable = handlerStarted;
                 } finally {
                     synchronized (active) {
