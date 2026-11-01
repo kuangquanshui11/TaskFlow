@@ -1,0 +1,10 @@
+spring:
+  config:
+    import: ""
+  datasource:
+    url: "jdbc:mysql://127.0.0.1:${TASKFLOW_ORDER_TEST_DB_PORT}/${TASKFLOW_ORDER_TEST_DB_SCHEMA}?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=3000&socketTimeout=5000"
+    username: "${TASKFLOW_ORDER_TEST_DB_USERNAME:root}"
+    password: "${TASKFLOW_ORDER_TEST_DB_PASSWORD:}"
+order:
+  payment-window: 2s
+  cache-enabled: false

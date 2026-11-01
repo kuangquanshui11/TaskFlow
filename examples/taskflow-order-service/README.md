@@ -55,8 +55,12 @@ HTTP POST 不自动重放。Worker 的 Feign 客户端使用 YAML 超时、现�
 .\tools\test-order-mysql.ps1
 # 先在根目录完成 verify，生成三个服务的 JAR，再执行进程故障验收：
 .\tools\test-order-mysql.ps1 -IncludeFlow
+# RedisServerPath 指向本机 Redis 可执行文件：
+.\tools\test-order-redis.ps1 -RedisServerPath $env:REDIS_SERVER_PATH
 ```
 
 MySQL 脚本要求 PATH 中有 mysqld/mysql/mysqladmin；在 `.tools/order-mysql` 新建临时实例，只监听回环端口 13389，结束时停止进程，保留数据和日志证据。进程验收还需要 Node，启动 Scheduler、Worker、订单服务与故障代理，默认使用 19380–19383；订单用独立 MySQL，平台用各自 H2 文件。不会复用业务数据库。不要把此测试配置用于部署。
 
 启动失败先检查对应日志、端口、schema 权限和令牌；迁移失败不应跳过校验或自动清库。进程故障测试在 finally 中关闭所启动的进程。真实支付、独立仓储补偿、Redis 前置预扣以及跨机器故障仍不属于此示例的保证范围。
+
+当前验证日期、环境、证据和未验证范围见 [订单验收记录](../../docs/order-verification.md)。

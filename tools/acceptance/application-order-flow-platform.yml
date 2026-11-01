@@ -1,0 +1,48 @@
+spring:
+  config:
+    import: ""
+  datasource:
+    url: "jdbc:h2:file:${TASKFLOW_ORDER_FLOW_DB_PATH};MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_ON_EXIT=FALSE;WRITE_DELAY=0"
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+    hikari:
+      connection-init-sql: "SET TIME ZONE 'UTC'"
+  cloud:
+    config:
+      enabled: false
+eureka:
+  client:
+    enabled: false
+management:
+  health:
+    rabbit:
+      enabled: false
+taskflow:
+  metrics:
+    enabled: false
+  nodes:
+    enabled: true
+    worker-id: worker-default
+    target-worker-id: worker-default
+    heartbeat-interval: 500ms
+    initial-delay: 200ms
+    offline-timeout: 3s
+    dispatch-gating-enabled: true
+  dispatch:
+    transport: http
+  execution:
+    scan-interval: 200
+    retry-interval: 200ms
+    lease-grace: 2s
+    retry-on-lease-loss: true
+    lease:
+      duration: 10s
+      renewal-interval: 500ms
+      safety-margin: 1s
+    connect-timeout: 1s
+    request-timeout: 1s
+  order:
+    enabled: true
+    connect-timeout: 500ms
+    request-timeout: 2s
