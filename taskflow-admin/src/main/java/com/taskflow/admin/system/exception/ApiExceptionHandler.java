@@ -20,6 +20,10 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 
 @RestControllerAdvice
 public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
+    @ExceptionHandler(com.taskflow.admin.sales.exception.SalesReportException.class)
+    public ResponseEntity<Object> handleSales(com.taskflow.admin.sales.exception.SalesReportException error) {
+        return ResponseEntity.status(error.status()).body(ApiResponse.failure("SALES_REPORT_ERROR",error.getMessage(),null));
+    }
     @ExceptionHandler(com.taskflow.admin.access.exception.AccessSessionException.class)
     public ResponseEntity<Object> handleSession(com.taskflow.admin.access.exception.AccessSessionException exception) {
         return ResponseEntity.status(exception.status()).body(ApiResponse.failure(exception.code(), exception.getMessage(), null));

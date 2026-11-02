@@ -20,7 +20,10 @@ public class OrderServiceImpl implements IOrderService {
     private final IInventoryService inventory;
     private final OrderProperties properties;
     private final TransactionTemplate transactions;
-    public OrderServiceImpl(OrderMapper mapper,IInventoryService inventory,OrderProperties properties,PlatformTransactionManager manager) {
+    private final com.taskflow.orders.report.mapper.SalesMapper sales;
+    public OrderServiceImpl(OrderMapper mapper,IInventoryService inventory,OrderProperties properties,PlatformTransactionManager manager,
+                            com.taskflow.orders.report.mapper.SalesMapper sales) {
+        this.sales=sales;
         this.mapper=mapper;this.inventory=inventory;this.properties=properties;transactions=new TransactionTemplate(manager);
     }
     @Override public Order insert(Create request) {
@@ -35,6 +38,8 @@ public class OrderServiceImpl implements IOrderService {
                         "PENDING",now,now.plus(properties.paymentWindow()),null,null,null);
                 // 先插入唯一请求键，竞争请求在扣库存之前等待；异常必须退出整个事务后再查询获胜者。
                 mapper.insert(order);inventory.hold(order.id(),order.skuId(),order.quantity(),request.requestKey());
+                var product=sales.product(order.skuId());
+                if(product!=null) sales.snapshot(order.id(),product,Math.multiplyExact(product.unitPriceCents(),order.quantity()));
                 return mapper.find(order.id());
             });
         } catch(DuplicateKeyException duplicate) {

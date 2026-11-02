@@ -4,6 +4,8 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 ## 当前能力
 
+销售日报已接入订单示例、Worker salesReport 与控制台查询/CSV 下载。可按固定种子导入样例订单，按店铺及付款日期生成持久化快照；准备、启动和统计边界见 [销售日报](docs/sales-reports.md)。
+
 Scheduler/Worker 已支持积压与延迟指标独立采样、失败保值及本机 Actuator 查询，OTLP 指标导出默认关闭，见 [指标字典](docs/observability-metrics.md)。
 
 工作台已提供最近 24 小时 / 7 天的运行总数、成功率、失败数、P95 耗时、状态分布和失败 Top 5，由 Admin 在 run:read 权限下查询 Scheduler，不缓存统计。
@@ -28,6 +30,7 @@ Worker 对同一份执行结果有限重试写库，恢复后继续上报，耗�
 | taskflow-admin | 8080 | 任务定义、管理 API、控制台 |
 | taskflow-scheduler | 8081 | 调度计划、Run/Attempt 状态、派发与恢复 |
 | taskflow-worker | 8082 | Handler 执行、消费去重、节点注册/心跳与结果上报 |
+| examples/taskflow-order-service | 8083 | 可选订单/库存与销售日报业务示例，独立数据库 |
 | taskflow-web / Nginx | 8090（本机） | 静态控制台与 /api/ 反向代理；独立前端构建 |
 
 根 pom.xml 只聚合和管理构建，各服务分别打包为可执行 JAR。服务之间通过 HTTP API 或版本化消息事件协作，不直接引用业务实现，各自拥有数据和迁移。

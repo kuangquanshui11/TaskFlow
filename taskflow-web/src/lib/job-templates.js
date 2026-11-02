@@ -13,10 +13,10 @@ export const jobTemplates = [
   {
     id: 'reports', icon: 'jobs', title: '生成销售报表', category: '经营分析',
     problem: '每天手工汇总销售数据，容易遗漏或延迟。', schedule: '每天凌晨 01:00',
-    action: '调用报表服务，汇总指定店铺的销售数据并生成报表。',
+    action: '调用订单服务，按付款时间汇总指定店铺的销售日报，保存汇总与商品明细。',
     benefit: '按时准备报表，失败时可查询原因并重新执行。', cron: '0 0 1 * * *', handler: 'salesReport',
-    payload: { shopId: 8 }, parameters: '将 shopId 替换为你的店铺标识，并与报表服务确认统计日期和报表保存位置。',
-    integration: '报表服务提供统计与生成能力，并约定统计日期；处理器负责调用。',
+    payload: { shopId: 8 }, parameters: 'shopId 为店铺编号，样例店铺为 8、9、10。默认统计首次受理时任务时区的前一天；可增加 businessDate（如 2026-11-01）指定已结束的日期。',
+    integration: 'Worker 启用 salesReport 并接入订单服务后执行；同一 Run 的统计日期固定，日报按店铺、日期和时区去重。生成后在「销售日报」查看明细并下载 CSV。',
   },
   {
     id: 'inventory', icon: 'refresh', title: '定期同步库存', category: '库存管理',

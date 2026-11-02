@@ -135,4 +135,6 @@ Java 21 / Boot 4.1.1 与 Spring Cloud 2025.1.4 BOM 由父 POM 管理版本，六
 
 ## 订单业务接入边界
 
+我将销售日报和成交快照也归入订单服务，所有统计只读本服务订单。平台只保留任务及运行事实；Admin 通过版本化 HTTP 代理报表查询，Worker 的 salesReport 调用生成接口，不共享报表 Entity、Mapper 或数据库账号。固定范围日报、独立日期绑定及样例导入事务见 [销售日报](sales-reports.md)。
+
 我将订单示例放在 `examples/taskflow-order-service`，独立启动、持有订单/库存/预占/流水及缓存 Outbox；不与平台服务共享数据库或 Maven 应用依赖。订单和库存同属该业务服务，关单与释放库存使用本地事务。TaskFlow Worker 的 Handler 注册表发现实际处理器，执行服务和节点能力上报统一使用注册表；订单 Handler 仅通过版本化 HTTP 协议调用业务服务。Scheduler 仍独占 Run/Attempt 权威状态。具体一致性和时效边界见 [订单服务](../examples/taskflow-order-service/README.md)。

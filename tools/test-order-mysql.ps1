@@ -1,4 +1,4 @@
-param([ValidateRange(1024,65535)][int]$Port = 13389, [switch]$IncludeFlow)
+param([ValidateRange(1024,65535)][int]$Port = 13389, [switch]$IncludeFlow, [switch]$IncludeSales)
 $ErrorActionPreference = 'Stop'
 $repoPath = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoPath
@@ -40,7 +40,8 @@ try {
     $env:TASKFLOW_ORDER_TEST_DB_USERNAME = 'root'
     $env:TASKFLOW_ORDER_TEST_DB_PASSWORD = ''
     # 数据源 URL 与会话隔离级别由 application-test-mysql.yml 提供。
-    & (Join-Path $repoPath 'mvnw.cmd') -B -l (Join-Path $runPath 'tests.log') -pl examples/taskflow-order-service "-Dtest=OrderMysqlTests" test
+    $testClasses = if ($IncludeSales) { 'OrderMysqlTests,SalesReportMysqlTests' } else { 'OrderMysqlTests' }
+    & (Join-Path $repoPath 'mvnw.cmd') -B -l (Join-Path $runPath 'tests.log') -pl examples/taskflow-order-service ("-Dtest=" + $testClasses) test
     if ($LASTEXITCODE -ne 0) { throw ('Order MySQL tests failed. Evidence: ' + $runPath) }
     Write-Output ('Order MySQL tests passed. Evidence: ' + $runPath)
     if($IncludeFlow) { & (Join-Path $PSScriptRoot 'test-order-flow.ps1') }

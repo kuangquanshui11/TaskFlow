@@ -4,6 +4,8 @@
 
 ## 启动
 
+销售日报、店铺/价格快照与可重复样例导入见 [销售日报说明](../../docs/sales-reports.md)。原订单 API 保持兼容，未建立销售目录的旧 SKU 仍可用于库存/超时示例，但不纳入金额统计。
+
 前置条件：Java 21、MySQL 8 InnoDB，以及启用缓存时的 Redis。先用数据库管理员创建独立 `taskflow_order` schema 和仅拥有该 schema 权限的 `taskflow_order` 账号。不要复用 Admin/Scheduler/Worker 的数据库账号。Flyway 首次启动自动执行本模块迁移。
 
 在仓库根目录创建被忽略的 `config/taskflow-order-local.yml`，填写实际连接配置和两个不同的随机令牌；示意字段如下，值须由本机配置提供：

@@ -22,6 +22,8 @@ management:
       enabled: false
 
 taskflow:
+  sales:
+    token: ""
   access:
     issuer: https://identity.test/realms/taskflow
     audience: taskflow-api

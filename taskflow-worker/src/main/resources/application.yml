@@ -41,6 +41,7 @@ spring:
       - optional:file:./config/taskflow-worker-local.yml
       - optional:file:./config/taskflow-worker-mq-local.yml
       - optional:file:./config/taskflow-mq-cluster-local.yml
+      - optional:file:./config/taskflow-sales-local.yml
   datasource:
     url: "${TASKFLOW_WORKER_DB_URL:jdbc:mysql://localhost:3306/taskflow_worker?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=3000&socketTimeout=5000}"
     username: "${TASKFLOW_WORKER_DB_USERNAME:taskflow_worker}"
@@ -92,6 +93,8 @@ eureka:
   client:
     enabled: false
 taskflow:
+  sales:
+    enabled: "${TASKFLOW_SALES_HANDLER_ENABLED:false}"
   order:
     enabled: "${TASKFLOW_ORDER_HANDLER_ENABLED:false}"
     url: "${TASKFLOW_ORDER_URL:http://localhost:8083}"

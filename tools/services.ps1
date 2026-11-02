@@ -1,6 +1,6 @@
 param(
     [ValidateSet('start','stop','restart','status')][string]$Action = 'status',
-    [ValidateSet('registry','config-server','gateway','admin','scheduler','worker','all')][string]$Service = 'all',
+    [ValidateSet('registry','config-server','gateway','admin','scheduler','worker','order','all')][string]$Service = 'all',
     [switch]$Standalone
 )
 $ErrorActionPreference = 'Stop'
@@ -14,6 +14,14 @@ if (Test-Path -LiteralPath $registryFile) {
     foreach ($property in $saved.PSObject.Properties) { $registry[$property.Name] = $property.Value }
 }
 function Save-Registry { $registry | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $registryFile -Encoding utf8 }
+function Read-Health([int]$Port) {
+    $handler = [Net.Http.HttpClientHandler]::new()
+    $handler.UseProxy = $false
+    $client = [Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(2)
+    try { return ($client.GetStringAsync("http://127.0.0.1:$Port/actuator/health").GetAwaiter().GetResult() | ConvertFrom-Json) }
+    finally { $client.Dispose() }
+}
 function Find-OwnedProcess($Entry) {
     if (!$Entry) { return $null }
     $running = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $Entry.processId)
@@ -36,7 +44,9 @@ function Start-Owned([string]$Name) {
         if ($registry[$Name].port -gt 0) { Write-Output ("taskflow-" + $Name + " already running."); return }
         Stop-Owned $Name
     }
-    $source = Join-Path $repoPath ("taskflow-$Name/target/taskflow-$Name-0.0.1-SNAPSHOT.jar")
+    $module = if ($Name -eq 'order') { 'examples/taskflow-order-service' } else { "taskflow-$Name" }
+    $artifact = if ($Name -eq 'order') { 'taskflow-order-service' } else { "taskflow-$Name" }
+    $source = Join-Path $repoPath ("$module/target/$artifact-0.0.1-SNAPSHOT.jar")
     if (!(Test-Path -LiteralPath $source)) { throw 'Build the service with mvnw.cmd verify first.' }
     $tag = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
     $jar = Join-Path $runtimeRoot ("taskflow-$Name-$tag.jar")
@@ -45,7 +55,7 @@ function Start-Owned([string]$Name) {
     Copy-Item -LiteralPath $source -Destination $jar
     $java = (Get-Command java -CommandType Application).Source
     $javaArguments=@('-jar',('"'+$jar+'"'))
-    if(!$Standalone -and $Name -in @('gateway','admin','scheduler','worker')) { $javaArguments+='--spring.profiles.active=cloud' }
+    if(!$Standalone -and $Name -in @('gateway','admin','scheduler','worker','order')) { $javaArguments+='--spring.profiles.active=cloud' }
     $oldAdminUrl=[Environment]::GetEnvironmentVariable('TASKFLOW_ADMIN_URL','Process')
     if($Name -eq 'gateway' -and $registry.ContainsKey('admin') -and $registry['admin'].port -gt 0 -and !$oldAdminUrl) {
         $env:TASKFLOW_ADMIN_URL='http://127.0.0.1:'+$registry['admin'].port
@@ -67,7 +77,7 @@ function Start-Owned([string]$Name) {
         if ($match.Success) {
             $entry.port = [int]$match.Groups[1].Value
             try {
-                $health = Invoke-RestMethod -Uri ("http://localhost:" + $entry.port + '/actuator/health') -TimeoutSec 2
+                $health = Read-Health $entry.port
                 if ($health.status -eq 'UP') {
                     Save-Registry
                     if ($Name -eq 'admin') { $entry | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $repoPath '.tools/admin-runtime.json') -Encoding utf8 }
@@ -81,6 +91,9 @@ function Start-Owned([string]$Name) {
     throw ("taskflow-" + $Name + " readiness timed out. Inspect " + $stdout)
 }
 $names = if ($Service -eq 'all') { @('registry','config-server','scheduler','worker','admin','gateway') } else { @($Service) }
+if ($Service -eq 'all' -and ($registry.ContainsKey('order') -or (Test-Path (Join-Path $repoPath 'config/taskflow-order-local.yml')))) {
+    $names = @('registry','config-server','order','scheduler','worker','admin','gateway')
+}
 if($Action -eq 'stop' -and $Service -eq 'all') { [array]::Reverse($names) }
 foreach ($name in $names) {
     switch ($Action) {
@@ -91,7 +104,10 @@ foreach ($name in $names) {
             if ($registry.ContainsKey($name) -and (Find-OwnedProcess $registry[$name])) {
                 $entry = $registry[$name]
                 $status = 'UNREACHABLE'
-                try { $status = (Invoke-RestMethod -Uri ("http://localhost:" + $entry.port + '/actuator/health') -TimeoutSec 2).status } catch { }
+                try {
+                    $health = Read-Health $entry.port
+                    $status = $health.status
+                } catch { }
                 [pscustomobject]@{ service = $name; processId = $entry.processId; port = $entry.port; health = $status }
             } else { [pscustomobject]@{ service = $name; health = 'STOPPED' } }
         }

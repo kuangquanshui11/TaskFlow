@@ -37,6 +37,7 @@ management:
     redis:
       enabled: false
 order:
+  samples-enabled: "${TASKFLOW_ORDER_SAMPLES_ENABLED:false}"
   api-token: "${TASKFLOW_ORDER_API_TOKEN:}"
   worker-token: "${TASKFLOW_ORDER_WORKER_TOKEN:}"
   payment-window: "${TASKFLOW_ORDER_PAYMENT_WINDOW:30m}"

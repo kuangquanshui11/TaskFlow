@@ -16,7 +16,7 @@ public class ApiAuthenticationFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         String path = request.getRequestURI();
         if (path.equals("/actuator/health")) { chain.doFilter(request, response); return; }
-        boolean internal = path.equals("/internal/v1/orders/updateTimeout");
+        boolean internal = path.equals("/internal/v1/orders/updateTimeout") || path.startsWith("/internal/v1/sales-reports/");
         String expected = internal ? properties.workerToken() : properties.apiToken();
         String supplied = request.getHeader("X-Taskflow-Token");
         if (expected == null || expected.isBlank() || supplied == null || !MessageDigest.isEqual(

@@ -25,6 +25,7 @@ spring:
       - classpath:governance.yml
       - optional:file:./config/taskflow-platform-local.yml
       - optional:file:./config/taskflow-access-local.yml
+      - optional:file:./config/taskflow-sales-local.yml
   datasource:
     url: "${TASKFLOW_ADMIN_DB_URL:jdbc:mysql://localhost:3306/taskflow_admin?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=5000&socketTimeout=10000}"
     username: "${TASKFLOW_ADMIN_DB_USERNAME:root}"
@@ -103,6 +104,11 @@ eureka:
   client:
     enabled: false
 taskflow:
+  sales:
+    url: "${TASKFLOW_SALES_URL:http://localhost:8083}"
+    token: "${TASKFLOW_ORDER_WORKER_TOKEN:}"
+    connect-timeout: 1s
+    request-timeout: 5s
   reconciliation:
     max-batch-size: 100
     scan-interval: 10s
@@ -145,7 +151,7 @@ taskflow:
     max-page-size: 100
   jobs:
     # 配置允许项；实际在线节点及 Handler 能力从 Scheduler 的节点接口查询。
-    allowed-handler-keys: "${TASKFLOW_ADMIN_ALLOWED_HANDLER_KEYS:demoSuccess,demoFail,demoSlow,demoFailOnce,orderTimeoutCheck}"
+    allowed-handler-keys: "${TASKFLOW_ADMIN_ALLOWED_HANDLER_KEYS:demoSuccess,demoFail,demoSlow,demoFailOnce,orderTimeoutCheck,salesReport}"
     detail-cache:
       enabled: "${TASKFLOW_ADMIN_JOB_CACHE_ENABLED:true}"
       ttl: "${TASKFLOW_ADMIN_JOB_CACHE_TTL:60s}"

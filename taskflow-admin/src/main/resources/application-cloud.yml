@@ -21,6 +21,8 @@ eureka:
     lease-renewal-interval-in-seconds: 10
     lease-expiration-duration-in-seconds: 30
 taskflow:
+  sales:
+    url: "${TASKFLOW_SALES_URL:}"
   remote:
     run-url: ""
     plan-url: ""

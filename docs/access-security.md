@@ -18,6 +18,8 @@ Scheduler / Worker 保持原有独立服务间密钥。Admin 发往 Scheduler �
 
 ## 角色与接口权限
 
+销售日报三个 GET 接口 /api/v1/sales-reports/select、selectById、selectExport 使用 run:read；VIEWER、OPERATOR、ADMIN 均可读。属于实例范围授权，第一版不提供逐店铺数据隔离。生成接口和样例导入不通过公共 Gateway，分别使用订单内部令牌及受控业务 API 令牌，见 [销售日报](sales-reports.md)。
+
 | 权限 | VIEWER | OPERATOR | ADMIN | 路径 |
 | --- | --- | --- | --- | --- |
 | job:read | 是 | 是 | 是 | jobs/select、selectById、selectSummary、preview；job-handlers/select；job-sync 两个查询；config-reconciliation 两个查询 |

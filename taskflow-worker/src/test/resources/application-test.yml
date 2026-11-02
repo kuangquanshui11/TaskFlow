@@ -14,6 +14,8 @@ spring:
   flyway:
     enabled: true
 taskflow:
+  sales:
+    enabled: false
   metrics:
     enabled: false
   nodes:

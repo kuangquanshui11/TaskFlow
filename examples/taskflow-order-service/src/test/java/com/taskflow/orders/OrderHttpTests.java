@@ -26,4 +26,11 @@ class OrderHttpTests {
         assertThat(post("/api/v1/orders/updatePayment","test-order-worker","{\"orderId\":\"absent\"}")).isEqualTo(401);
         assertThat(post("/api/v1/orders/insert","test-order-api","{\"requestKey\":\"bad\",\"skuId\":1,\"quantity\":0}")).isEqualTo(400);
     }
+    @Test void reportGenerationRequiresInternalIdentityAndSamplesAreOffByDefault() throws Exception {
+        String body="{\"requestKey\":\"report-http\",\"shopId\":8,\"timeZone\":\"Asia/Shanghai\"}";
+        assertThat(post("/internal/v1/sales-reports/insert","test-order-api",body)).isEqualTo(401);
+        assertThat(post("/internal/v1/sales-reports/insert",null,body)).isEqualTo(401);
+        assertThat(post("/internal/v1/sales-reports/insert","test-order-worker",body)).isEqualTo(404);
+        assertThat(post("/api/v1/sales-samples/insert","test-order-api","{}")).isEqualTo(404);
+    }
 }

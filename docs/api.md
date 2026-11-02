@@ -395,3 +395,29 @@ Admin 通过 Scheduler HTTP 查询，不访问 Scheduler 表或 Job 详情缓存
 ```
 
 Worker Handler 参数为 `{"batchSize":100,"maxBatches":10}`，上限分别500和100，旧 `timeoutMinutes` 参数拒绝执行。节点仅在 `taskflow.order.enabled=true` 时注册能力。业务流水记录请求关联键；该键不替代订单/预占唯一约束。任务成功表示本轮有限预算处理完成，具体订单结果以本服务流水为准。
+
+## 销售日报 API（v1）
+
+公共查询经 Nginx/Gateway/Admin，要求 JWT、有效 Redis 会话和 run:read。响应沿用 code/message/data/requestId；金额字段 totalAmountCents、unitPriceCents 均为人民币整数分，日期为 ISO 日期，时间戳为 UTC Instant。
+
+| 方法与路径 | 参数 | data |
+| --- | --- | --- |
+| GET /api/v1/sales-reports/select | 可选 shopId；page 默认1、范围1–100万；pageSize 默认20、范围1–100 | items、total、page、pageSize |
+| GET /api/v1/sales-reports/selectById | id（报表 UUID） | report 与 items（商品明细） |
+| GET /api/v1/sales-reports/selectExport | id | filename、content；前端将 UTF-8 CSV 内容下载为文件 |
+
+Report 字段：id、shopId、businessDate、timeZone、orderCount、totalQuantity、totalAmountCents、generatedAt。Item 字段：skuId、productName、orderCount、totalQuantity、totalAmountCents。暂无日报返回空 items；合法的零销售日报保留零汇总；上游故障或损坏响应返回 503，不伪造空报表。未知报表返回404，无读权限403，参数错误400。
+
+以下接口仅在独立订单服务开放，公共 Gateway 不转发；成功时直接返回业务对象，不套 Admin 响应信封。
+
+| 方法与路径 | 鉴权与参数 | 行为 |
+| --- | --- | --- |
+| POST /internal/v1/sales-reports/insert | X-Taskflow-Token 使用订单 worker-token；JSON requestKey（1–100字符）、shopId（正整数）、可选 businessDate、timeZone（合法 ZoneId，最多100字符） | 固定统计日期并幂等保存日报，返回 Report |
+| GET /internal/v1/sales-reports/select | worker-token；同公共分页参数 | 返回 Page |
+| GET /internal/v1/sales-reports/selectById | worker-token；id | 返回 Detail |
+| GET /internal/v1/sales-reports/selectExport | worker-token；id | 返回 Export |
+| POST /api/v1/sales-samples/insert | 订单 api-token 且 order.samples-enabled=true；JSON dataset（小写字母开头、最多32字符，仅字母数字连字符）、startDate、days（1–90）、orderCount（1–10000）、seed（long） | 事务导入并返回批次参数；样例日期区间必须已经结束 |
+
+生成只允许已结束的业务日，未指定日期取首次成功绑定时任务时区的前一天；同 requestKey 改店铺/原始日期/时区返回409；未知店铺404；同范围不同 Run 返回同一份报表。每日快照不自动包含生成后的后补/迟到数据，未建成交快照的旧订单不计入。样例同 dataset 同参数不重复导入，不同参数409，关闭样例入口时404。详细事务、时区、幂等及故障边界见 [销售日报](sales-reports.md)。
+
+Worker salesReport 参数示例为 `{"shopId":8}`，回补示例为 `{"shopId":8,"businessDate":"2026-11-01"}`；默认关闭，开启 taskflow.sales.enabled 并配置订单 worker-token 后注册实际能力。HTTP POST 不自动重放，有限业务重试复用 Run 操作键。

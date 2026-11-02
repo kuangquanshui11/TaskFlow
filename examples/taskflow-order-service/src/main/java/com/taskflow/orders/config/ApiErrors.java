@@ -11,8 +11,8 @@ public class ApiErrors {
     ResponseEntity<?> business(org.springframework.web.server.ResponseStatusException error) {
         return ResponseEntity.status(error.getStatusCode()).body(Map.of("code",error.getReason()==null?"BUSINESS_ERROR":error.getReason()));
     }
-    @ExceptionHandler(IllegalArgumentException.class)
-    ResponseEntity<?> invalid(IllegalArgumentException error) { return ResponseEntity.badRequest().body(Map.of("code","INVALID_ARGUMENT")); }
+    @ExceptionHandler({IllegalArgumentException.class,java.time.DateTimeException.class})
+    ResponseEntity<?> invalid(RuntimeException error) { return ResponseEntity.badRequest().body(Map.of("code","INVALID_ARGUMENT")); }
     @ExceptionHandler(DuplicateKeyException.class)
     ResponseEntity<?> duplicate(DuplicateKeyException error) { return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("code","ALREADY_EXISTS")); }
 }
