@@ -40,6 +40,15 @@ public class SchedulerClient {
                 validateSummary(data);
                 return data;
             }
+            if (path.startsWith("/internal/v1/runs/selectGlobal?")) {
+                if (data == null || !data.isObject() || !data.path("records").isArray()
+                        || !data.path("total").isIntegralNumber() || data.path("total").longValue() < 0
+                        || !data.path("page").isIntegralNumber() || data.path("page").intValue() < 1
+                        || !data.path("pageSize").isIntegralNumber() || data.path("pageSize").intValue() < 1
+                        || data.path("pageSize").intValue() > 100 || data.path("records").size() > data.path("pageSize").intValue())
+                    throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "调度服务返回格式不合法");
+                return data;
+            }
             if (data==null || !data.isObject() || (path.startsWith("/internal/v1/runs/select?")
                     ? !data.has("records") || !data.has("total") : !data.hasNonNull("id") || !data.hasNonNull("state")))
                 throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "调度服务返回格式不合法");

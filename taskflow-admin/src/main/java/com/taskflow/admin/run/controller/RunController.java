@@ -23,6 +23,13 @@ public class RunController {
     }
     @GetMapping("/selectById")
     public ApiResponse<JsonNode> selectById(@RequestParam UUID id) { return ApiResponse.success(runs.selectById(id)); }
+    @GetMapping("/selectGlobal")
+    public ApiResponse<JsonNode> selectGlobal(@RequestParam(required = false) String from, @RequestParam(required = false) String to,
+            @RequestParam(required = false) Long jobId, @RequestParam(required = false) String state,
+            @RequestParam(required = false) String triggerType, @RequestParam(required = false) UUID runId,
+            @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "20") int pageSize) {
+        return ApiResponse.success(runs.selectGlobal(new com.taskflow.admin.run.dto.RunQuery(from, to, jobId, state, triggerType, runId, page, pageSize)));
+    }
     @GetMapping("/selectSummary")
     public ApiResponse<JsonNode> selectSummary(@RequestParam(required = false) String from, @RequestParam(required = false) String to) {
         return ApiResponse.success(runs.selectSummary(from, to));

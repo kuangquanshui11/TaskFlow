@@ -17,6 +17,13 @@ public class RunController {
     public RunView insert(@Valid @RequestBody Create request) { return runs.insert(request); }
     @GetMapping("/selectById")
     public RunView selectById(@RequestParam UUID id) { return runs.selectById(id); }
+    @GetMapping("/selectGlobal")
+    public Page selectGlobal(@RequestParam(required = false) String from, @RequestParam(required = false) String to,
+            @RequestParam(required = false) Long jobId, @RequestParam(required = false) String state,
+            @RequestParam(required = false) String triggerType, @RequestParam(required = false) UUID runId,
+            @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "20") int pageSize) {
+        return runs.selectGlobal(new com.taskflow.scheduler.execution.dto.RunQuery(from, to, jobId, state, triggerType, runId, page, pageSize));
+    }
     @GetMapping("/selectByRequestKey")
     public RunView selectByRequestKey(@RequestParam UUID requestKey) { return runs.selectByRequestKey(requestKey); }
     @GetMapping("/selectSummary")

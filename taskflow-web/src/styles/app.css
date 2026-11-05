@@ -414,3 +414,34 @@ input::placeholder, textarea::placeholder { color: #69768d; }
 .login-caption { color: var(--muted); font-size: 12px; }
 .signed-in-user { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 480px) { .login-card { padding: 28px 24px; } .signed-in-user { max-width: 100px; } }
+.runs-filter-panel { margin-bottom: 24px; }
+.runs-filters { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 20px; padding: 24px; }
+.runs-filters .field { min-width: 0; }
+.runs-filters input, .runs-filters select { width: 100%; min-width: 0; min-height: 44px; }
+.run-id-filter { grid-column: span 3; }
+.runs-filter-actions { display: flex; align-items: start; gap: 8px; flex-wrap: wrap; padding-top: 24px; }
+.runs-validation { grid-column: 1 / -1; margin: 0; }
+.runs-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.runs-table th, .runs-table td { text-align: left; padding: 18px 20px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+.runs-table th { font-size: 12px; color: var(--muted); }
+.runs-table th:first-child { width: 30%; }
+.runs-table th:last-child { width: 24%; }
+.run-list-id { font-size: 12px; }
+.run-list-message { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.runs-pagination { flex-wrap: wrap; gap: 16px; }
+.runs-pagination > p { width: 100%; }
+@media (max-width: 1100px) {
+  .runs-filters { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .run-id-filter { grid-column: span 2; }
+  .runs-filter-actions { padding-top: 0; grid-column: span 2; }
+}
+@media (max-width: 700px) {
+  .runs-filters { grid-template-columns: minmax(0,1fr); padding: 20px; }
+  .run-id-filter, .runs-filter-actions { grid-column: auto; }
+  .runs-table, .runs-table tbody, .runs-table tr, .runs-table td { display: block; width: 100%; }
+  .runs-table thead { display: none; }
+  .runs-table tr { padding: 12px 20px; border-bottom: 1px solid var(--line); }
+  .runs-table td { border: 0; padding: 8px 0; }
+  .runs-table td::before { content: attr(data-label); display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .runs-pagination .pagination-controls { flex-wrap: wrap; gap: 12px; }
+}

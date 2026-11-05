@@ -55,6 +55,7 @@ Gateway 保留以下 API 路径，只路由 `/api/v1/**`；`/internal/v1/**`、�
 | GET | /api/v1/runs/selectSummary | run:read；from/to 同时省略或提供 UTC 时间窗，最长 7 天 |
 | POST | /api/v1/runs/insert | 使用配置快照创建手动 Run |
 | GET | /api/v1/runs/select?jobId=1&page=1&pageSize=10 | 查询 Job 的运行历史 |
+| GET | /api/v1/runs/selectGlobal | run:read；跨任务运行列表，支持时间、状态、任务、触发来源与精确 Run ID |
 | GET | /api/v1/runs/selectById?id=UUID | 运行详情、快照与 Attempt 历史 |
 | GET | /api/v1/runs/selectByRequestKey?requestKey=UUID | 按原提交标识确认接收结果 |
 
@@ -257,6 +258,23 @@ POST /api/v1/runs/insert：
 同 requestKey 的原请求重复提交返回同一个 Run；不同任务或版本复用同 key 返回 409 / IDEMPOTENCY_CONFLICT。新请求版本过期返回 409 / JOB_VERSION_CONFLICT。Scheduler 不可用或调用超时返回 503 / SCHEDULER_UNAVAILABLE，尚未配置内部密钥时返回 503 / SERVICE_NOT_CONFIGURED。超时后不要自动换 key：可 GET /api/v1/runs/selectByRequestKey 查验，或用原请求重试。管理台将未确认的请求保留在当前浏览器会话，关闭并重新打开详情仍可重试。
 
 GET /api/v1/runs/select 的 jobId 必须为正数，page 默认 1、范围 1–1000000，pageSize 默认 10、范围 1–100。data 为 records、total、page、pageSize；records 包含运行 id、jobId、configVersion、state、attemptCount、resultCode、message 和创建/更新时间。运行历史来自 Scheduler，即使 Job 后来删除也继续保留。
+
+GET /api/v1/runs/selectGlobal 是独立的全局查询，不改变上述单任务历史接口。所有筛选条件取交集：
+
+| 参数 | 默认与校验 |
+| --- | --- |
+| from / to | 同时省略或同时提供以 Z 结尾的 UTC ISO-8601；按 Run 创建时间筛选，`[from,to)`，起点早于终点，最长 7 天 |
+| jobId | 可选，正整数；按运行保存的任务 ID 查询，不要求任务当前存在 |
+| state | 可选，READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED；TIMED_OUT 是 Attempt 状态，不是 Run 状态 |
+| triggerType | 可选，MANUAL、CRON |
+| runId | 可选，UUID 精确匹配；不存在返回成功空页 |
+| page / pageSize | 默认 1 / 20；范围 1–10000 / 1–100；页码超出数据范围返回空 records 并保留 total |
+
+未提供 from/to 且没有 runId 时，Scheduler 在请求内确定最近 24 小时窗口；提供 runId 而省略时间时可查询任意历史记录。显式时间窗仍约束 runId，不自动忽略其他筛选。控制台将相对时间在提交时转换为绝对 UTC 窗口，翻页、调整每页数量、刷新和重试沿用本次窗口；重新查询或重置才重新确定窗口。自定义时间与结果使用浏览器时区，并显示时区名称。
+
+响应 data 沿用 records、total、page、pageSize；记录字段与单任务列表一致，并包含 triggerType、scheduledAt。按 createdAt DESC、id DESC 稳定排序，不返回快照或 Attempt 明细。每次请求的记录与总数使用 Scheduler 本地 REPEATABLE_READ 只读事务；不同翻页请求不是同一快照，并发新增/状态变化可能改变页边界。内部 GET /internal/v1/runs/selectGlobal 使用同名参数和控制密钥，返回裸 Page；不经 Gateway 公开。Admin 事务外调用、不缓存、不跨服务联表。
+
+非法筛选、时间、UUID 或分页返回 400 / INVALID_ARGUMENT；未登录 401、无 run:read 403；远程不可用为 503 / SCHEDULER_UNAVAILABLE，损坏的分页结构为 503 / SCHEDULER_PROTOCOL_ERROR。设计与验收见 [全局运行查询](global-run-query.md)。
 
 GET /api/v1/runs/selectById 与 selectByRequestKey 返回同一详情结构；不存在返回 404 / RUN_NOT_FOUND。snapshot 包含原配置的名称、描述、处理器、参数、执行策略、Cron、时区和配置版本。后续编辑 Job 不改变已有 Run。attempts 按 attemptNumber 排序，包含 id、runId、leaseVersion、state、dispatchCount、nextDispatchAt、expiresAt、startedAt、finishedAt、resultCode、message，以及 nullable 的 targetWorkerId、leaseUntil、ownerWorkerId、ownerSessionId。当前 startedAt 为开始派发时间；expiresAt 是不可延长的硬截止，leaseUntil 是执行资格短租约。
 

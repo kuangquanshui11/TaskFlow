@@ -31,8 +31,9 @@ function saved() {
     <div class="workspace-switch"><span class="workspace-avatar">T</span><span><strong>我的工作空间</strong><small>个人项目</small></span><span class="workspace-dot"></span></div>
     <p class="nav-caption">工作空间</p>
     <nav class="nav-items"><RouterLink v-for="item in navigation" :key="item.to" :to="item.to" class="nav-item" :class="{ active: route.path === item.to }" :aria-current="route.path === item.to ? 'page' : undefined"><AppIcon :name="item.icon" :size="19" /><span>{{ item.label }}</span><span v-if="item.to === '/jobs'" class="nav-count">{{ formatCount(workspace.state.summary?.total) }}</span></RouterLink></nav>
-    <p class="nav-caption">全局观测 <span>规划中</span></p>
-    <div class="nav-items future-nav"><button v-for="item in [{ name: '执行总览', icon: 'play' }, { name: '告警中心', icon: 'bell' }]" :key="item.name" class="nav-item" disabled><AppIcon :name="item.icon" :size="19" /><span>{{ item.name }}</span><span class="soon-dot"></span></button></div>
+    <p class="nav-caption">全局观测</p>
+    <nav v-if="access.user.permissions.includes('run:read')" class="nav-items"><RouterLink to="/runs" class="nav-item" :class="{ active: route.path === '/runs' }" :aria-current="route.path === '/runs' ? 'page' : undefined"><AppIcon name="play" :size="19" /><span>全局运行列表</span></RouterLink></nav>
+    <div class="nav-items future-nav"><button class="nav-item" disabled><AppIcon name="bell" :size="19" /><span>告警中心</span><span class="soon-dot"></span></button></div>
     <div class="sidebar-note"><span class="note-icon"><AppIcon name="bolt" :size="20" /></span><strong>从计划到有序执行</strong><p>先把任务配置好，让每一步都有清晰的起点。</p><RouterLink to="/schedule">探索时间预览<AppIcon name="arrow" :size="15" /></RouterLink></div>
     <div class="sidebar-footer"><span class="tiny-logo">TF</span><span>TaskFlow<span class="sidebar-version">Workspace · v0.1</span></span><span class="footer-status-dot"></span></div>
   </aside>

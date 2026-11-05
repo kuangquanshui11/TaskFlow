@@ -54,6 +54,31 @@ public class RunDataMapper {
     public long count(long jobId) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM run_execution WHERE job_id=?", Long.class, jobId);
     }
+    public List<Summary> selectGlobal(com.taskflow.scheduler.execution.model.RunFilter filter, int page, int size) {
+        var args = new java.util.ArrayList<Object>();
+        String where = globalWhere(filter, args);
+        args.add(size); args.add((long) (page - 1) * size);
+        // 列表不读取配置参数，也不逐条查询 Attempt 或其他服务的任务表。
+        return jdbc.query("SELECT id,job_id,config_version,state,current_attempt,result_code,message,created_at,updated_at,trigger_type,scheduled_at FROM run_execution"
+                + where + " ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",
+                (rs, index) -> new Summary(UUID.fromString(rs.getString("id")), rs.getLong("job_id"), rs.getLong("config_version"),
+                        rs.getString("state"), rs.getInt("current_attempt"), rs.getString("result_code"), rs.getString("message"),
+                        instant(rs, "created_at"), instant(rs, "updated_at"), rs.getString("trigger_type"), instant(rs, "scheduled_at")), args.toArray());
+    }
+    public long countGlobal(com.taskflow.scheduler.execution.model.RunFilter filter) {
+        var args = new java.util.ArrayList<Object>();
+        String where = globalWhere(filter, args);
+        return jdbc.queryForObject("SELECT COUNT(*) FROM run_execution" + where, Long.class, args.toArray());
+    }
+    private String globalWhere(com.taskflow.scheduler.execution.model.RunFilter filter, List<Object> args) {
+        var where = new StringBuilder(" WHERE 1=1");
+        if (filter.from() != null) { where.append(" AND created_at>=? AND created_at<?"); args.add(windowTs(filter.from())); args.add(windowTs(filter.to())); }
+        if (filter.jobId() != null) { where.append(" AND job_id=?"); args.add(filter.jobId()); }
+        if (filter.state() != null) { where.append(" AND state=?"); args.add(filter.state()); }
+        if (filter.triggerType() != null) { where.append(" AND trigger_type=?"); args.add(filter.triggerType()); }
+        if (filter.runId() != null) { where.append(" AND id=?"); args.add(filter.runId().toString()); }
+        return where.toString();
+    }
     public List<UUID> due(Instant now) {
         return jdbc.query("SELECT id FROM run_attempt WHERE state IN ('READY','DISPATCHING') AND next_dispatch_at<=? ORDER BY next_dispatch_at,id LIMIT 100",
                 (rs, index) -> UUID.fromString(rs.getString(1)), ts(now));

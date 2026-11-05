@@ -54,6 +54,35 @@ public class RunServiceImpl implements IRunService {
     }
     @Override public JsonNode selectById(UUID id) { return scheduler.get("/internal/v1/runs/selectById?id=" + id); }
     @Override
+    public JsonNode selectGlobal(com.taskflow.admin.run.dto.RunQuery query) {
+        if (query.page() < 1 || query.page() > 10000 || query.pageSize() < 1 || query.pageSize() > 100
+                || (query.jobId() != null && query.jobId() < 1)
+                || (query.state() != null && !java.util.Set.of("READY", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED").contains(query.state()))
+                || (query.triggerType() != null && !java.util.Set.of("MANUAL", "CRON").contains(query.triggerType())))
+            throw new RunException(400, "INVALID_ARGUMENT", "运行筛选或分页参数不合法");
+        var params = new java.util.LinkedHashMap<String, String>();
+        params.put("page", Integer.toString(query.page())); params.put("pageSize", Integer.toString(query.pageSize()));
+        if (query.from() != null || query.to() != null) {
+            try {
+                if (query.from() == null || query.to() == null || !query.from().endsWith("Z") || !query.to().endsWith("Z"))
+                    throw new IllegalArgumentException();
+                var from = java.time.Instant.parse(query.from()); var to = java.time.Instant.parse(query.to());
+                if (!from.isBefore(to) || java.time.Duration.between(from, to).compareTo(java.time.Duration.ofDays(7)) > 0)
+                    throw new IllegalArgumentException();
+                params.put("from", from.toString()); params.put("to", to.toString());
+            } catch (java.time.format.DateTimeParseException | IllegalArgumentException invalid) {
+                throw new RunException(400, "INVALID_ARGUMENT", "时间窗须同时提供以 Z 结尾的 UTC 时间、起点早于终点且不超过 7 天");
+            }
+        }
+        if (query.jobId() != null) params.put("jobId", query.jobId().toString());
+        if (query.state() != null) params.put("state", query.state());
+        if (query.triggerType() != null) params.put("triggerType", query.triggerType());
+        if (query.runId() != null) params.put("runId", query.runId().toString());
+        var encoded = params.entrySet().stream().map(entry -> entry.getKey() + "="
+                + java.net.URLEncoder.encode(entry.getValue(), java.nio.charset.StandardCharsets.UTF_8)).collect(java.util.stream.Collectors.joining("&"));
+        return scheduler.get("/internal/v1/runs/selectGlobal?" + encoded);
+    }
+    @Override
     public JsonNode selectSummary(String from, String to) {
         String path = "/internal/v1/runs/selectSummary";
         if (from != null || to != null) {

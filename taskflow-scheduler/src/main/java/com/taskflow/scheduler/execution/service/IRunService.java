@@ -10,6 +10,7 @@ public interface IRunService {
     RunView selectById(UUID id);
     RunView selectByRequestKey(UUID key);
     Page select(long jobId, int page, int pageSize);
+    Page selectGlobal(com.taskflow.scheduler.execution.dto.RunQuery query);
     Overview selectSummary(java.time.Instant from, java.time.Instant to);
     void updateResult(Result result);
     void dispatchPending();

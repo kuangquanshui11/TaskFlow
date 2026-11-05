@@ -103,6 +103,32 @@ public class RunServiceImpl implements IRunService {
         return new Page(rows, mapper.count(jobId), page, pageSize);
     }
 
+    @Override @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public Page selectGlobal(com.taskflow.scheduler.execution.dto.RunQuery query) {
+        if (query.page() < 1 || query.page() > 10000 || query.pageSize() < 1 || query.pageSize() > 100
+                || (query.jobId() != null && query.jobId() < 1)
+                || (query.state() != null && !java.util.Set.of("READY", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED").contains(query.state()))
+                || (query.triggerType() != null && !java.util.Set.of("MANUAL", "CRON").contains(query.triggerType())))
+            throw new RunException(400, "INVALID_ARGUMENT", "运行筛选或分页参数不合法");
+        Instant from = null, to = null;
+        if (query.from() != null || query.to() != null) {
+            try {
+                if (query.from() == null || query.to() == null || !query.from().endsWith("Z") || !query.to().endsWith("Z"))
+                    throw new IllegalArgumentException();
+                from = Instant.parse(query.from()); to = Instant.parse(query.to());
+                if (!from.isBefore(to) || java.time.Duration.between(from, to).compareTo(java.time.Duration.ofDays(7)) > 0)
+                    throw new IllegalArgumentException();
+            } catch (java.time.format.DateTimeParseException | IllegalArgumentException invalid) {
+                throw new RunException(400, "INVALID_ARGUMENT", "时间窗须同时提供以 Z 结尾的 UTC 时间、起点早于终点且不超过 7 天");
+            }
+        } else if (query.runId() == null) {
+            to = Instant.now(); from = to.minus(java.time.Duration.ofHours(24));
+        }
+        // 精确 ID 查询可跨历史；显式提供的时间、任务和状态仍取交集。记录与总数使用同一只读快照。
+        var filter = new com.taskflow.scheduler.execution.model.RunFilter(from, to, query.jobId(), query.state(), query.triggerType(), query.runId());
+        return new Page(mapper.selectGlobal(filter, query.page(), query.pageSize()), mapper.countGlobal(filter), query.page(), query.pageSize());
+    }
+
     @Override
     public Overview selectSummary(Instant from, Instant to) {
         var observed = Instant.now();
