@@ -78,7 +78,7 @@ onBeforeUnmount(() => { disposed = true; generation++; controller?.abort(); });
         <div v-else-if="error" class="list-error" role="alert"><h3>运行记录查询失败</h3><p>{{ error }}</p><button class="button secondary" @click="load(requestedPage)">重试查询</button></div>
         <div v-else-if="result && !result.records.length" class="worker-empty" role="status"><AppIcon name="search" :size="30" /><h3>没有匹配的运行记录</h3><p>可调整时间、状态、任务或触发来源后重新查询。</p></div>
         <table v-else-if="result" class="runs-table"><caption class="sr-only">全局运行记录，创建时间从新到旧</caption><thead><tr><th scope="col">运行 / 任务</th><th scope="col">状态</th><th scope="col">触发来源</th><th scope="col" aria-sort="descending">创建时间</th><th scope="col">结果</th></tr></thead><tbody><tr v-for="run in result.records" :key="run.id" :data-run-id="run.id">
-          <td data-label="运行 / 任务"><code class="run-list-id">{{ run.id }}</code><small class="cell-sub">任务 #{{ run.jobId }} · 配置 v{{ run.configVersion }}</small></td>
+          <td data-label="运行 / 任务"><RouterLink class="run-list-id" :to="{ name: 'run-detail', params: { runId: run.id } }" :aria-label="`查看运行详情 ${run.id}`"><code>{{ run.id }}</code></RouterLink><small class="cell-sub">任务 #{{ run.jobId }} · 配置 v{{ run.configVersion }}</small></td>
           <td data-label="状态"><RunStatusBadge :state="run.state" /><small class="cell-sub">{{ run.attemptCount }} 次尝试</small></td>
           <td data-label="触发来源">{{ TRIGGER_TYPES[run.triggerType] || run.triggerType }}</td>
           <td data-label="创建时间"><time :datetime="run.createdAt">{{ fullDate(run.createdAt, timezone) }}</time></td>

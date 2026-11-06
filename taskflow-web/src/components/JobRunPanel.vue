@@ -112,6 +112,7 @@ onBeforeUnmount(() => { alive = false; clearTimeout(timer); reads.abort(); });
     <div v-if="selected" class="run-result">
       <div class="run-result-title" aria-live="polite" aria-atomic="true"><h4>运行结果</h4><RunStatusBadge :state="selected.state" /></div>
       <p class="run-id"><span>运行标识</span><code>{{ selected.id }}</code></p>
+      <RouterLink v-if="can('run:read')" class="button secondary" :to="{ name: 'run-detail', params: { runId: selected.id } }">查看完整运行详情<AppIcon name="arrow" :size="15" /></RouterLink>
       <p v-if="selected.scheduledAt" class="muted">计划时间 {{ fullDate(selected.scheduledAt, selected.snapshot.timeZone) }} · {{ selected.snapshot.timeZone }}</p>
       <p v-if="selected.message" class="run-message">{{ selected.message }}</p>
       <ol class="attempt-list"><li v-for="attempt in selected.attempts" :key="attempt.id"><div><strong>第 {{ attempt.attemptNumber }} 次尝试</strong><RunStatusBadge :state="attempt.state" /></div><p>{{ attempt.message || (attempt.state === 'READY' ? '等待派发' : '等待执行结果') }}</p><small>{{ fullDate(attempt.startedAt) }}<template v-if="attempt.finishedAt"> → {{ fullDate(attempt.finishedAt) }}</template></small></li></ol>

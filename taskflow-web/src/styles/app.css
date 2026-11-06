@@ -426,7 +426,7 @@ input::placeholder, textarea::placeholder { color: #69768d; }
 .runs-table th { font-size: 12px; color: var(--muted); }
 .runs-table th:first-child { width: 30%; }
 .runs-table th:last-child { width: 24%; }
-.run-list-id { font-size: 12px; }
+.run-list-id { display: inline-block; padding: 6px 0; color: var(--primary-hover); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
 .run-list-message { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 .runs-pagination { flex-wrap: wrap; gap: 16px; }
 .runs-pagination > p { width: 100%; }

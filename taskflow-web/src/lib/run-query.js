@@ -1,12 +1,13 @@
 export const RUN_STATES = { READY: '待派发', RUNNING: '运行中', RETRY_WAIT: '等待重试', SUCCEEDED: '成功', FAILED: '失败' };
 export const TRIGGER_TYPES = { MANUAL: '手动触发', CRON: '定时触发' };
 export const emptyRunFilters = () => ({ range: '24h', from: '', to: '', jobId: '', state: '', triggerType: '', runId: '' });
+export const isRunId = (value) => /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(value);
 
 export function buildRunQuery(form, now = Date.now()) {
   const query = {};
   const runId = form.runId.trim();
   if (runId) {
-    if (!/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(runId)) throw new Error('请输入完整的 Run ID（UUID）。');
+    if (!isRunId(runId)) throw new Error('请输入完整的 Run ID（UUID）。');
     query.runId = runId.toLowerCase();
   }
   const jobId = form.jobId.trim();

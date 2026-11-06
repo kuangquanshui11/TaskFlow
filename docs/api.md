@@ -56,7 +56,7 @@ Gateway 保留以下 API 路径，只路由 `/api/v1/**`；`/internal/v1/**`、�
 | POST | /api/v1/runs/insert | 使用配置快照创建手动 Run |
 | GET | /api/v1/runs/select?jobId=1&page=1&pageSize=10 | 查询 Job 的运行历史 |
 | GET | /api/v1/runs/selectGlobal | run:read；跨任务运行列表，支持时间、状态、任务、触发来源与精确 Run ID |
-| GET | /api/v1/runs/selectById?id=UUID | 运行详情、快照与 Attempt 历史 |
+| GET | /api/v1/runs/selectById?id=UUID | run:read；运行详情、配置快照与 Attempt 历史 |
 | GET | /api/v1/runs/selectByRequestKey?requestKey=UUID | 按原提交标识确认接收结果 |
 
 成功响应：
@@ -276,7 +276,9 @@ GET /api/v1/runs/selectGlobal 是独立的全局查询，不改变上述单任�
 
 非法筛选、时间、UUID 或分页返回 400 / INVALID_ARGUMENT；未登录 401、无 run:read 403；远程不可用为 503 / SCHEDULER_UNAVAILABLE，损坏的分页结构为 503 / SCHEDULER_PROTOCOL_ERROR。设计与验收见 [全局运行查询](global-run-query.md)。
 
-GET /api/v1/runs/selectById 与 selectByRequestKey 返回同一详情结构；不存在返回 404 / RUN_NOT_FOUND。snapshot 包含原配置的名称、描述、处理器、参数、执行策略、Cron、时区和配置版本。后续编辑 Job 不改变已有 Run。attempts 按 attemptNumber 排序，包含 id、runId、leaseVersion、state、dispatchCount、nextDispatchAt、expiresAt、startedAt、finishedAt、resultCode、message，以及 nullable 的 targetWorkerId、leaseUntil、ownerWorkerId、ownerSessionId。当前 startedAt 为开始派发时间；expiresAt 是不可延长的硬截止，leaseUntil 是执行资格短租约。
+GET /api/v1/runs/selectById 与 selectByRequestKey 均要求 `run:read`，返回同一详情结构。不存在时返回 404 / RUN_NOT_FOUND。snapshot 包含原配置的名称、描述、处理器、参数、执行策略、Cron、时区和配置版本。编辑或删除 Job 后仍可按 Run ID 查询原快照。attempts 按 attemptNumber 升序排列，包含 id、runId、leaseVersion、state、dispatchCount、nextDispatchAt、expiresAt、startedAt、finishedAt、resultCode、message，以及可空的 targetWorkerId、leaseUntil、ownerWorkerId、ownerSessionId。
+
+控制台 `/runs/:runId` 复用 `selectById`。`startedAt` 表示开始派发，`finishedAt` 表示 Scheduler 记录 Attempt 结束的时间。两者都有值时，控制台用其差值展示耗时，包含派发等待；缺少任一时间时显示暂无数据。`targetWorkerId` 是 Scheduler 选定的派发目标，旧记录和尚未绑定目标的记录可以为空。`expiresAt` 是不可延长的硬截止，`leaseUntil` 是执行资格短租约。
 
 Worker 内部续租使用 `POST /internal/v1/attempts/updateLease`，请求含 attemptId、runId、leaseVersion、workerId、sessionId，使用结果上报密钥。返回 HTTP 200，包含身份字段与 serverTime、leaseUntil、executionDeadline、hardDeadline；校验失败返回 400，鉴权失败 401，过期/终态/执行者或版本不匹配返回 409 / STALE_LEASE。该接口不经 Gateway 公开。领取与续租不改变原派发消息或 leaseVersion；续租次数无上限，但不可越过 hardDeadline。完整协议及 Handler 幂等/fencing 约定见 [执行租约](execution-leases.md)。
 

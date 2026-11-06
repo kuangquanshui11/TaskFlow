@@ -26,7 +26,10 @@ test.describe('三服务执行闭环', () => {
     expect(await dialog.evaluate(element => element.scrollWidth <= innerWidth)).toBeTruthy();
     if (evidenceDir) await page.screenshot({ path: path.join(evidenceDir, 'execution-mobile.png') });
     expect(errors).toEqual([]);
-    await page.keyboard.press('Escape');
+    await dialog.getByRole('link', { name: '查看完整运行详情' }).click();
+    await expect(page).toHaveURL(/\/runs\/[\da-f-]{36}$/);
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('region', { name: '运行概况' })).toContainText('成功');
     const removed = await request.post('/api/v1/jobs/delete', { data: { id: job.id, configVersion: job.configVersion } });
     expect(removed.status()).toBe(200);
   });

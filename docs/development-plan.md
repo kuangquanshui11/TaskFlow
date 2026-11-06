@@ -85,7 +85,7 @@ Worker 节点管理已实现：独立注册/心跳协议与密钥、Scheduler �
 
 ## 第六步 运维与交付
 
-全局运行列表已实现：Scheduler 独立查询、Admin run:read 代理、控制台 `/runs` 提供时间/状态/任务 ID/触发来源交集筛选及精确 Run ID 定位。现有单任务历史契约保持不变；独立详情页及告警另行实施。范围见 [全局运行查询](global-run-query.md)，验证结果见 [验证记录](global-run-query-verification.md)。
+全局运行列表已实现：Scheduler 独立查询、Admin run:read 代理、控制台 `/runs` 提供时间/状态/任务 ID/触发来源交集筛选及精确 Run ID 定位。独立运行详情 `/runs/:runId` 从全局列表与单任务运行结果进入，展示配置快照、Attempt 历史、结果码、目标 Worker 和派发起止时间。范围见 [全局运行查询与详情](global-run-query.md)，验证见 [全局列表验证](global-run-query-verification.md) 和 [运行详情验证](run-detail-verification.md)。
 
 平台治理包含：Nginx → Gateway → Admin，内部服务名发现与 Feign 调用、熔断及同步 HTTP 链路追踪；注册/配置中心独立认证、非秘密策略仓库及可选 Jaeger Compose 已提供。默认配置变更重启生效，不提供完整热刷新；Eureka/Config 单实例，HA 和真实 Jaeger 容器验收仍未完成。
 
