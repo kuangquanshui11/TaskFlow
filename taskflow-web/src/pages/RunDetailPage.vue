@@ -54,7 +54,7 @@ onBeforeUnmount(() => controller?.abort());
   <div class="run-detail-page">
     <div class="page-heading">
       <div>
-        <RouterLink v-if="authorized" class="back-link" :to="{ name: 'runs' }"><AppIcon name="chevron" class="rotate-180" :size="15" />返回全局运行列表</RouterLink>
+        <RouterLink v-if="authorized" class="back-link" :to="{ name: 'runs', query: route.query }"><AppIcon name="chevron" class="rotate-180" :size="15" />返回全局运行列表</RouterLink>
         <h1 ref="title" tabindex="-1">运行详情</h1>
         <p>查看触发时保存的配置和每次尝试的结果。时间显示为 {{ timezone }}。</p>
       </div>

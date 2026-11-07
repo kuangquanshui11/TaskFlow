@@ -33,7 +33,7 @@ test('独立运行详情保留已删除任务的快照并展示真实重试历�
     await page.getByLabel('Run ID 精确查询').fill(id);
     await page.getByRole('button', { name: '查询运行', exact: true }).click();
     await page.getByRole('link', { name: '查看运行详情 ' + id }).click();
-    await expect(page).toHaveURL('/runs/' + id);
+    await expect(page).toHaveURL(url => url.pathname === '/runs/' + id && url.searchParams.get('runId') === id);
     const overview = page.getByRole('region', { name: '运行概况' });
     const snapshot = page.getByRole('region', { name: '配置快照' });
     const history = page.getByRole('region', { name: 'Attempt 历史' });

@@ -68,6 +68,7 @@ public class RunServiceImpl implements IRunService {
     public JsonNode selectGlobal(com.taskflow.admin.run.dto.RunQuery query) {
         if (query.page() < 1 || query.page() > 10000 || query.pageSize() < 1 || query.pageSize() > 100
                 || (query.jobId() != null && query.jobId() < 1)
+                || (query.resultCode() != null && (query.resultCode().isEmpty() || query.resultCode().length() > 64))
                 || (query.state() != null && !java.util.Set.of("READY", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED").contains(query.state()))
                 || (query.triggerType() != null && !java.util.Set.of("MANUAL", "CRON").contains(query.triggerType())))
             throw new RunException(400, "INVALID_ARGUMENT", "运行筛选或分页参数不合法");
@@ -78,6 +79,7 @@ public class RunServiceImpl implements IRunService {
         if (query.state() != null) params.put("state", query.state());
         if (query.triggerType() != null) params.put("triggerType", query.triggerType());
         if (query.runId() != null) params.put("runId", query.runId().toString());
+        if (query.resultCode() != null) params.put("resultCode", query.resultCode());
         return scheduler.get("/internal/v1/runs/selectGlobal?" + encodeQuery(params));
     }
     @Override

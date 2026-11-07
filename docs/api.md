@@ -55,7 +55,7 @@ Gateway 保留以下 API 路径，只路由 `/api/v1/**`；`/internal/v1/**`、�
 | GET | /api/v1/runs/selectSummary | run:read；from/to 同时省略或提供 UTC 时间窗，最长 7 天 |
 | POST | /api/v1/runs/insert | 使用配置快照创建手动 Run |
 | GET | /api/v1/runs/select?jobId=1&page=1&pageSize=10 | 查询 Job 的运行历史 |
-| GET | /api/v1/runs/selectGlobal | run:read；跨任务运行列表，支持时间、状态、任务、触发来源与精确 Run ID |
+| GET | /api/v1/runs/selectGlobal | run:read；跨任务运行列表，支持时间、状态、任务、触发来源、结果码与精确 Run ID |
 | GET | /api/v1/runs/selectById?id=UUID | run:read；运行详情、配置快照与 Attempt 历史 |
 | GET | /api/v1/runs/selectByRequestKey?requestKey=UUID | 按原提交标识确认接收结果 |
 | GET | /api/v1/runs/selectAttemptEvents?runId=UUID&attemptId=UUID | run:read；单次 Attempt 的执行事件 |
@@ -268,6 +268,7 @@ GET /api/v1/runs/selectGlobal 是独立的全局查询，不改变上述单任�
 | jobId | 可选，正整数；按运行保存的任务 ID 查询，不要求任务当前存在 |
 | state | 可选，READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED；TIMED_OUT 是 Attempt 状态，不是 Run 状态 |
 | triggerType | 可选，MANUAL、CRON |
+| resultCode | 可选，1–64 个字符，按结果码等值筛选；数据库中为空或 NULL 的结果码归入 UNKNOWN，与失败统计分组一致 |
 | runId | 可选，UUID 精确匹配；不存在返回成功空页 |
 | page / pageSize | 默认 1 / 20；范围 1–10000 / 1–100；页码超出数据范围返回空 records 并保留 total |
 
@@ -316,7 +317,7 @@ GET /api/v1/runs/selectSummary?from=2026-10-30T00:00:00Z&to=2026-10-31T00:00:00Z
   "finished":38, "succeeded":34, "failed":4, "successRate":0.8947,
   "attemptTotal":47, "retriedRunCount":5,
   "latency":{"avgMillis":1240,"p95Millis":4300,"sampled":38,"truncated":false},
-  "failures":[{"jobId":7,"resultCode":"HANDLER_FAILED","runCount":3,"lastFailedAt":"2026-10-31T07:12:00Z"}]
+  "failures":[{"jobId":7,"jobIdText":"7","resultCode":"HANDLER_FAILED","runCount":3,"lastFailedAt":"2026-10-31T07:12:00Z"}]
 }
 ```
 
@@ -331,6 +332,8 @@ GET /api/v1/runs/selectSummary?from=2026-10-30T00:00:00Z&to=2026-10-31T00:00:00Z
 - 四个统计查询是同一 Scheduler 数据库上的多次读取，**不是一致性快照**；`observedAt` 只表示观察时刻。
 
 我将四次读取划分为状态与完整窗口平均耗时、Attempt 总量与重试 Run 数、耗时样本、失败分组。attemptTotal 统计窗口内 Run 的所有 Attempt，retriedRunCount 为存在 attempt_number > 1 的不同 Run 数；不按 Attempt 自身时间过滤。stateCounts 始终补齐五个状态键。失败组同数量时按 jobId、resultCode 排序，lastFailedAt 取组内 Run 的最大 finished_at，null 和空字符串均归 UNKNOWN。
+
+失败组的 `jobIdText` 是 `jobId` 的十进制字符串。浏览器可用它原样填入全局运行查询，避免长整数在 JSON 解析时舍入。
 
 avgMillis 使用整个窗口内具有开始及结束时间的终态 Run 算术平均，四舍五入到整数毫秒；p95Millis 使用同样有效的耗时样本，按 nearest-rank 取值。没有可用耗时样本时平均和 P95 均为 null，sampled 为 0。采样超过 10,000 时只保留最早样本，不作随机抽样。有效耗时记录总数超过上限时 truncated=true。由于读取间状态可能变化，计数和样本数可能短暂不一致。
 

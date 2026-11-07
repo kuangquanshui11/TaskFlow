@@ -20,6 +20,12 @@ const summaryLoading = ref(false);
 const summaryError = ref('');
 let summaryController;
 const runStates = computed(() => stateDistribution(runSummary.value?.stateCounts, runSummary.value?.total));
+function failedRunsLocation(failure) {
+  const { from, to } = runSummary.value;
+  const query = { from, to, state: 'FAILED' };
+  if (failure) Object.assign(query, { jobId: String(failure.jobIdText ?? failure.jobId), resultCode: failure.resultCode });
+  return { name: 'runs', query };
+}
 async function loadSummary() {
   summaryController?.abort();
   if (!can('run:read')) { runSummary.value = null; summaryLoading.value = false; return; }
@@ -64,7 +70,7 @@ onBeforeUnmount(() => { controller?.abort(); summaryController?.abort(); });
       <div class="metrics-grid" aria-label="运行结果统计">
         <article class="metric-card"><div class="metric-label">运行总数</div><div class="metric-number">{{ formatCount(runSummary.total) }}</div><p>窗口内创建的 Run</p></article>
         <article class="metric-card"><div class="metric-label">成功率</div><div class="metric-number">{{ formatSuccessRate(runSummary.successRate) }}</div><p>成功 / 已完成</p></article>
-        <article class="metric-card"><div class="metric-label">失败数</div><div class="metric-number">{{ formatCount(runSummary.failed) }}</div><p>最终失败的 Run</p></article>
+        <article class="metric-card"><div class="metric-label">失败数</div><div class="metric-number">{{ formatCount(runSummary.failed) }}</div><p>最终失败的 Run</p><RouterLink :to="failedRunsLocation()" class="text-link run-failure-link">查看失败运行<AppIcon name="arrow" :size="15" /></RouterLink></article>
         <article class="metric-card"><div class="metric-label">P95 耗时{{ runSummary.latency.truncated ? '（近似）' : '' }}</div><div class="metric-number">{{ formatLatency(runSummary.latency.p95Millis) }}</div><p>有效样本 {{ formatCount(runSummary.latency.sampled) }} 个</p></article>
       </div>
       <p v-if="!runSummary.total" class="run-summary-message" role="status">暂无数据：此时间窗内没有运行记录</p>
@@ -74,7 +80,14 @@ onBeforeUnmount(() => { controller?.abort(); summaryController?.abort(); });
       </div>
       <p class="run-summary-note">耗时包含首次进入执行中之后的等待与重试间隔，不代表 Handler 执行时间。{{ runSummary.latency.truncated ? 'P95 仅取最早 10,000 个有效已完成样本，为近似值。' : '' }}</p>
       <h3>失败 Top 5</h3>
-      <div v-if="runSummary.failures.length" class="run-failure-list"><article v-for="failure in runSummary.failures" :key="failure.jobId + ':' + failure.resultCode"><strong>任务 #{{ failure.jobId }}</strong><code>{{ failure.resultCode }}</code><span>{{ formatCount(failure.runCount) }} 次失败</span><span>最近失败 {{ formatDate(failure.lastFailedAt) }}</span></article></div>
+      <div v-if="runSummary.failures.length" class="run-failure-list">
+        <article v-for="failure in runSummary.failures" :key="(failure.jobIdText ?? failure.jobId) + ':' + failure.resultCode">
+          <strong>任务 #{{ failure.jobIdText ?? failure.jobId }}</strong><code>{{ failure.resultCode }}</code>
+          <span>{{ formatCount(failure.runCount) }} 次失败</span><span>最近失败 {{ formatDate(failure.lastFailedAt) }}</span>
+          <RouterLink :to="failedRunsLocation(failure)" class="text-link run-failure-link"
+            :aria-label="`查看任务 #${failure.jobIdText ?? failure.jobId} 的 ${failure.resultCode} 失败运行`">查看运行<AppIcon name="arrow" :size="15" /></RouterLink>
+        </article>
+      </div>
       <p v-else class="run-summary-note">暂无失败记录</p>
     </div>
   </section>

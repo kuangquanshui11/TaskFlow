@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRunQuery, emptyRunFilters } from '../../src/lib/run-query.js';
+import { buildRunQuery, emptyRunFilters, readRunLocation } from '../../src/lib/run-query.js';
+
+test('failure links keep the exact statistics window, result group, and full task identifier', () => {
+  const query = { from: '2026-11-01T06:30:00.123Z', to: '2026-11-08T06:30:00.123Z',
+    jobId: '9223372036854775807', state: 'FAILED', resultCode: 'ERROR+X' };
+  const { filters, applied } = readRunLocation(query);
+  assert.deepEqual(applied, query);
+  assert.equal(filters.range, 'custom');
+  assert.deepEqual(buildRunQuery(filters, Date.now(), applied), query);
+  assert.throws(() => readRunLocation({ ...query, to: null }), /链接无效/);
+  assert.throws(() => readRunLocation({ ...query, from: '' }), /UTC 起止时间/);
+  assert.throws(() => readRunLocation({ ...query, resultCode: 'x'.repeat(65) }), /64/);
+});
 
 test('relative windows freeze at submission and all filters intersect', () => {
   const query = buildRunQuery({ ...emptyRunFilters(), jobId: '9223372036854775807', state: 'FAILED', triggerType: 'CRON' }, Date.parse('2026-11-05T00:00:00Z'));

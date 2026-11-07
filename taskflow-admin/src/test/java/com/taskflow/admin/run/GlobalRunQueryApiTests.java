@@ -30,9 +30,9 @@ class GlobalRunQueryApiTests {
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse(); return json.readTree(PAGE);
         });
         var id = UUID.randomUUID();
-        var response = get("?from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z&jobId=7&state=FAILED&triggerType=CRON&runId=" + id, true);
+        var response = get("?from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z&jobId=7&state=FAILED&triggerType=CRON&runId=" + id + "&resultCode=BAD%2BCODE", true);
         assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
-        verify(scheduler).get("/internal/v1/runs/selectGlobal?page=1&pageSize=20&from=2026-11-01T00%3A00%3A00Z&to=2026-11-02T00%3A00%3A00Z&jobId=7&state=FAILED&triggerType=CRON&runId=" + id);
+        verify(scheduler).get("/internal/v1/runs/selectGlobal?page=1&pageSize=20&from=2026-11-01T00%3A00%3A00Z&to=2026-11-02T00%3A00%3A00Z&jobId=7&state=FAILED&triggerType=CRON&runId=" + id + "&resultCode=BAD%2BCODE");
         assertThat(get("?runId=" + id, true).statusCode()).isEqualTo(200);
         verify(scheduler).get("/internal/v1/runs/selectGlobal?page=1&pageSize=20&runId=" + id);
     }
@@ -45,6 +45,7 @@ class GlobalRunQueryApiTests {
     }
     @Test void rejectsBadArgumentsBeforeRemoteCall() throws Exception {
         for (String query : List.of("?jobId=-1", "?state=TIMED_OUT", "?triggerType=HTTP", "?runId=bad", "?page=10001", "?pageSize=101",
+                "?resultCode=", "?resultCode=" + "x".repeat(65),
                 "?from=2026-11-01T00:00:00Z", "?from=bad&to=bad", "?from=2026-11-02T00:00:00Z&to=2026-11-01T00:00:00Z",
                 "?from=2026-11-01T00:00:00Z&to=2026-11-09T00:00:00Z",
                 "?from=%2B500000000-01-01T00:00:00Z&to=%2B500000000-01-02T00:00:00Z"))

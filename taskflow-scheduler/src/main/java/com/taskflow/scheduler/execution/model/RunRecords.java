@@ -3,6 +3,7 @@ package com.taskflow.scheduler.execution.model;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.List;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.taskflow.scheduler.execution.dto.ExecutionProtocol.Snapshot;
 
 public final class RunRecords {
@@ -42,7 +43,10 @@ public final class RunRecords {
             java.math.BigDecimal successRate, long attemptTotal, long retriedRunCount,
             Latency latency, List<FailureGroup> failures) { }
     public record Latency(Long avgMillis, Long p95Millis, int sampled, boolean truncated) { }
-    public record FailureGroup(long jobId, String resultCode, long runCount, Instant lastFailedAt) { }
+    public record FailureGroup(long jobId, String resultCode, long runCount, Instant lastFailedAt) {
+        @JsonProperty("jobIdText")
+        public String jobIdText() { return Long.toString(jobId); }
+    }
     public record StateCount(String state, long count, long timedCount, java.math.BigDecimal totalMillis) { }
     public record AttemptTotals(long attemptTotal, long retriedRunCount) { }
 }

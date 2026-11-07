@@ -158,8 +158,9 @@ svg { flex-shrink: 0; vertical-align: middle; }
 .run-state-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 16px 0; margin: 0; }
 .run-state-legend li { display: flex; gap: 8px; align-items: center; font-size: 13px; font-variant-numeric: tabular-nums; }
 .run-summary-body h3 { font-size: 15px; margin: 20px 0 12px; }
-.run-failure-list article { display: flex; flex-wrap: wrap; gap: 12px 20px; padding: 12px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.run-failure-list article { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 20px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
 .run-failure-list code { overflow-wrap: anywhere; min-width: 0; }
+.run-failure-link { min-height: 44px; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
 .overview-layout { display: grid; grid-template-columns: minmax(0,1fr) 286px; gap: 22px; align-items: start; }
 .recent-panel { min-height: 486px; }
 .overview-aside { display: grid; gap: 20px; }

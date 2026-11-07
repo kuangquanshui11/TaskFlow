@@ -112,6 +112,7 @@ public class RunServiceImpl implements IRunService {
     public Page selectGlobal(com.taskflow.scheduler.execution.dto.RunQuery query) {
         if (query.page() < 1 || query.page() > 10000 || query.pageSize() < 1 || query.pageSize() > 100
                 || (query.jobId() != null && query.jobId() < 1)
+                || (query.resultCode() != null && (query.resultCode().isEmpty() || query.resultCode().length() > 64))
                 || (query.state() != null && !java.util.Set.of("READY", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED").contains(query.state()))
                 || (query.triggerType() != null && !java.util.Set.of("MANUAL", "CRON").contains(query.triggerType())))
             throw new RunException(400, "INVALID_ARGUMENT", "运行筛选或分页参数不合法");
@@ -130,7 +131,7 @@ public class RunServiceImpl implements IRunService {
             to = Instant.now(); from = to.minus(Duration.ofHours(24));
         }
         // 精确 ID 查询可跨历史；显式提供的时间、任务和状态仍取交集。记录与总数使用同一只读快照。
-        var filter = new com.taskflow.scheduler.execution.model.RunFilter(from, to, query.jobId(), query.state(), query.triggerType(), query.runId());
+        var filter = new com.taskflow.scheduler.execution.model.RunFilter(from, to, query.jobId(), query.state(), query.triggerType(), query.runId(), query.resultCode());
         return new Page(mapper.selectGlobal(filter, query.page(), query.pageSize()), mapper.countGlobal(filter), query.page(), query.pageSize());
     }
 

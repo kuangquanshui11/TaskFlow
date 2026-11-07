@@ -14,6 +14,7 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public class RunDataMapper {
+    private static final String GROUPED_RESULT_CODE = "COALESCE(NULLIF(result_code,''),'UNKNOWN')";
     private final JdbcTemplate jdbc;
     public RunDataMapper(JdbcTemplate jdbc) { this.jdbc = jdbc; }
     public void insert(RunRow row) {
@@ -86,6 +87,7 @@ public class RunDataMapper {
         if (filter.jobId() != null) { where.append(" AND job_id=?"); args.add(filter.jobId()); }
         if (filter.state() != null) { where.append(" AND state=?"); args.add(filter.state()); }
         if (filter.triggerType() != null) { where.append(" AND trigger_type=?"); args.add(filter.triggerType()); }
+        if (filter.resultCode() != null) { where.append(" AND ").append(GROUPED_RESULT_CODE).append("=?"); args.add(filter.resultCode()); }
         if (filter.runId() != null) { where.append(" AND id=?"); args.add(filter.runId().toString()); }
         return where.toString();
     }
@@ -158,7 +160,9 @@ public class RunDataMapper {
                 (rs, i) -> java.time.Duration.between(instant(rs, "started_at"), instant(rs, "finished_at")).toMillis(), windowTs(from), windowTs(to));
     }
     public List<FailureGroup> summaryFailures(Instant from, Instant to) {
-        return jdbc.query("SELECT job_id,COALESCE(NULLIF(result_code,''),'UNKNOWN') AS code,COUNT(*) AS n,MAX(finished_at) AS last_failed_at FROM run_execution WHERE created_at>=? AND created_at<? AND state='FAILED' GROUP BY job_id,COALESCE(NULLIF(result_code,''),'UNKNOWN') ORDER BY n DESC,job_id,code LIMIT 5",
+        return jdbc.query("SELECT job_id," + GROUPED_RESULT_CODE + " AS code,COUNT(*) AS n,MAX(finished_at) AS last_failed_at"
+                        + " FROM run_execution WHERE created_at>=? AND created_at<? AND state='FAILED' GROUP BY job_id,"
+                        + GROUPED_RESULT_CODE + " ORDER BY n DESC,job_id,code LIMIT 5",
                 (rs, i) -> new FailureGroup(rs.getLong("job_id"), rs.getString("code"), rs.getLong("n"), instant(rs, "last_failed_at")), windowTs(from), windowTs(to));
     }
     // 存储精度为毫秒；半开窗口的两端均向上取整，保留亚毫秒输入的包含/排除语义。

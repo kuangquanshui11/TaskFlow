@@ -49,7 +49,7 @@ class GlobalRunQueryTests {
         var upper = seed(7, "READY", "MANUAL", to);
         seed(7, "READY", "MANUAL", to.plusMillis(1));
         assertThat(runs.selectGlobal(query(null, null, null, null, 1, 20)).records()).extracting(r -> r.id()).containsExactly(lower);
-        var shifted = new RunQuery(from.plusNanos(1).toString(), to.plusNanos(1).toString(), null, null, null, null, 1, 20);
+        var shifted = new RunQuery(from.plusNanos(1).toString(), to.plusNanos(1).toString(), null, null, null, null, null, 1, 20);
         assertThat(runs.selectGlobal(shifted).records()).extracting(r -> r.id()).containsExactly(upper);
     }
     @Test void deterministicPaginationAndCountUseIdenticalFilters() {
@@ -67,13 +67,38 @@ class GlobalRunQueryTests {
     @Test void defaultWindowAndExactHistoricalIdHaveDifferentScopes() {
         var old = seed(7, "FAILED", "MANUAL", from.minus(Duration.ofDays(100)));
         var current = seed(7, "SUCCEEDED", "MANUAL", Instant.now().minusSeconds(60));
-        assertThat(runs.selectGlobal(new RunQuery(null, null, null, null, null, null, 1, 20)).records()).extracting(r -> r.id()).containsExactly(current);
-        assertThat(runs.selectGlobal(new RunQuery(null, null, null, null, null, old, 1, 20)).records()).extracting(r -> r.id()).containsExactly(old);
+        assertThat(runs.selectGlobal(new RunQuery(null, null, null, null, null, null, null, 1, 20)).records()).extracting(r -> r.id()).containsExactly(current);
+        assertThat(runs.selectGlobal(new RunQuery(null, null, null, null, null, old, null, 1, 20)).records()).extracting(r -> r.id()).containsExactly(old);
         assertThat(runs.selectGlobal(query(null, null, null, old, 1, 20)).records()).isEmpty();
-        assertThat(runs.selectGlobal(new RunQuery(null, null, null, null, null, UUID.randomUUID(), 1, 20)).total()).isZero();
+        assertThat(runs.selectGlobal(new RunQuery(null, null, null, null, null, UUID.randomUUID(), null, 1, 20)).total()).isZero();
+    }
+    @Test void failureGroupAndResultCodeFilterUseTheSameNormalization() {
+        long job = Long.MAX_VALUE;
+        var nullCode = seed(job, "FAILED", "MANUAL", from);
+        var emptyCode = seed(job, "FAILED", "MANUAL", from.plusMillis(1));
+        var unknownCode = seed(job, "FAILED", "MANUAL", from.plusMillis(2));
+        var otherCode = seed(job, "FAILED", "MANUAL", from.plusMillis(3));
+        seed(7, "FAILED", "MANUAL", from);
+        seed(job, "SUCCEEDED", "MANUAL", from);
+        jdbc.update("UPDATE run_execution SET result_code=NULL WHERE id=?", nullCode.toString());
+        jdbc.update("UPDATE run_execution SET result_code='' WHERE id=?", emptyCode.toString());
+        jdbc.update("UPDATE run_execution SET result_code='UNKNOWN' WHERE id=?", unknownCode.toString());
+
+        var summary = runs.selectSummary(from, to);
+        var group = summary.failures().getFirst();
+        assertThat(group.jobId()).isEqualTo(job);
+        assertThat(group.resultCode()).isEqualTo("UNKNOWN");
+        assertThat(json.valueToTree(group).path("jobIdText").asString()).isEqualTo(Long.toString(job));
+        var filter = new RunQuery(from.toString(), to.toString(), job, "FAILED", null, null, group.resultCode(), 1, 2);
+        var filtered = runs.selectGlobal(filter);
+        assertThat(filtered.total()).isEqualTo(group.runCount()).isEqualTo(3);
+        assertThat(filtered.records()).extracting(r -> r.id()).containsExactly(unknownCode, emptyCode);
+        assertThat(runs.selectGlobal(new RunQuery(from.toString(), to.toString(), job, "FAILED", null, null, "EXAMPLE", 1, 20))
+                .records()).extracting(r -> r.id()).containsExactly(otherCode);
     }
     @Test void httpRejectsInvalidFiltersWindowsAndPaging() throws Exception {
         for (var query : List.of("?jobId=0", "?jobId=x", "?state=TIMED_OUT", "?state=failed", "?triggerType=HTTP", "?runId=broken",
+                "?resultCode=", "?resultCode=" + "x".repeat(65),
                 "?page=0", "?page=10001", "?pageSize=101", "?pageSize=0", "?from=" + from, "?to=" + to,
                 "?from=bad&to=bad", "?from=" + to + "&to=" + from,
                 "?from=" + from + "&to=" + from, "?from=" + from + "&to=" + from.plus(Duration.ofDays(7)).plusMillis(1),
@@ -94,7 +119,7 @@ class GlobalRunQueryTests {
         assertThat(jdbc.queryForObject("SELECT state FROM run_execution WHERE id=?", String.class, id.toString())).isEqualTo("FAILED");
     }
     private RunQuery query(Long jobId, String state, String trigger, UUID runId, int page, int size) {
-        return new RunQuery(from.toString(), to.toString(), jobId, state, trigger, runId, page, size);
+        return new RunQuery(from.toString(), to.toString(), jobId, state, trigger, runId, null, page, size);
     }
     private UUID seed(long job, String state, String trigger, Instant created) {
         var id = UUID.randomUUID();
