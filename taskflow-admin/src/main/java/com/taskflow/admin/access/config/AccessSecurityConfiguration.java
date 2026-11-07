@@ -70,7 +70,8 @@ public class AccessSecurityConfiguration {
                                 "/api/v1/sales-reports/selectExport").hasAuthority("run:read")
                         .requestMatchers(HttpMethod.POST, "/api/v1/runs/insert").hasAuthority("run:trigger")
                         .requestMatchers(HttpMethod.GET, "/api/v1/runs/select", "/api/v1/runs/selectById",
-                                "/api/v1/runs/selectByRequestKey", "/api/v1/runs/selectSummary", "/api/v1/runs/selectGlobal").hasAuthority("run:read")
+                                "/api/v1/runs/selectByRequestKey", "/api/v1/runs/selectSummary", "/api/v1/runs/selectGlobal",
+                                "/api/v1/runs/selectAttemptEvents").hasAuthority("run:read")
                         .requestMatchers(HttpMethod.POST, "/api/v1/job-sync/updateRetry").hasAuthority("job-sync:retry")
                         .requestMatchers(HttpMethod.GET, "/api/v1/config-reconciliation/selectById",
                                 "/api/v1/config-reconciliation/selectRepairById").hasAuthority("job:read")

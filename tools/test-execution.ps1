@@ -1,9 +1,12 @@
-param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster, [switch]$IncludeConfigReconciliation,
+param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster, [switch]$IncludeConfigReconciliation, [switch]$IncludeAttemptTimeline,
     [ValidateSet('http','rabbitmq')][string]$Transport = 'http', [string]$MqSettingsPath,[string]$PlatformSettingsPath,
     [ValidateRange(1024,65535)][int]$IdentityPort = 19190)
 $ErrorActionPreference = 'Stop'
 if ($IncludeWorkerCluster -and ($Transport -ne 'rabbitmq' -or $PlatformSettingsPath)) {
     throw 'Worker cluster acceptance requires standalone RabbitMQ mode and an isolated test vhost.'
+}
+if ($IncludeAttemptTimeline -and ($Transport -ne 'http' -or $PlatformSettingsPath)) {
+    throw 'Attempt timeline crash acceptance requires isolated standalone HTTP mode.'
 }
 $repoPath = Split-Path -Parent $PSScriptRoot
 Set-Location $repoPath
@@ -152,6 +155,15 @@ function Wait-TestRun([string]$Id) {
     }
     throw 'Run did not reach a terminal state.'
 }
+function Wait-TestAttemptEvents([string]$RunId, [string]$AttemptId, [scriptblock]$Ready) {
+    $uri = "http://127.0.0.1:19080/api/v1/runs/selectAttemptEvents?runId=$RunId&attemptId=$AttemptId"
+    for ($i = 0; $i -lt 80; $i++) {
+        $result = Call-Api 'GET' $uri
+        if ($result.status -eq 200 -and (& $Ready $result.body.data)) { return $result.body.data }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "Attempt timeline did not reach the expected state for $AttemptId."
+}
 function Wait-TestSync([long]$JobId, [string]$State, [long]$Version) {
     for ($i = 0; $i -lt 80; $i++) {
         $result = Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/job-sync/selectByJobId?id=" + $JobId)
@@ -217,7 +229,7 @@ try {
         }
         $accessImport = if ($name -eq 'admin') { 'file:' + (Join-Path $PSScriptRoot 'acceptance/application-access-admin.yml').Replace('\','/') } else { '' }
         $testImport = @($testImport, $accessImport | Where-Object { $_ }) -join ','
-        $executionLeaseYaml = if ($IncludeExecutionLease -or $IncludeWorkerCluster) { "    lease:`n      duration: 10s`n      renewal-interval: 500ms" } else { '' }
+        $executionLeaseYaml = if ($IncludeExecutionLease -or $IncludeWorkerCluster -or $IncludeAttemptTimeline) { "    lease:`n      duration: 10s`n      renewal-interval: 500ms" } else { '' }
         $configuration = @"
 spring:
   config:
@@ -646,6 +658,46 @@ info:
         Assert-Check ($late.status -eq 409) 'Old Worker result cannot overwrite the replacement Attempt'
         Start-TestService $victim
         $null = Wait-TestNode 'ONLINE' $old.targetWorkerId
+    }
+
+    if ($IncludeAttemptTimeline) {
+        $crashJob = New-TestJob 'demoSlow' 2 20 8000
+        $crash = New-TestRun $crashJob
+        $crashRunId = $crash.run.id
+        $firstAttemptId = $crash.run.attempts[0].id
+        $beforeExit = Wait-TestAttemptEvents $crashRunId $firstAttemptId {
+            param($timeline)
+            $timeline.worker.events.eventType -contains 'HANDLER_STARTED'
+        }
+        Assert-Check ($beforeExit.worker.events.eventType -notcontains 'HANDLER_FINISHED') 'Worker exit is injected after Handler entry and before completion'
+        Stop-TestService 'worker'
+        $offline = Wait-TestAttemptEvents $crashRunId $firstAttemptId {
+            param($timeline)
+            $timeline.workerStatus -eq 'UNAVAILABLE' -and
+                ($timeline.scheduler.events | Where-Object { $_.eventType -eq 'ATTEMPT_FINISHED' -and $_.resultCode -eq 'LEASE_EXPIRED' })
+        }
+        Assert-Check ($offline.worker.events.Count -eq 0 -and $offline.workerId -eq $beforeExit.workerId) 'Scheduler shows lease expiry and original target while the killed Worker is offline'
+        Start-TestService 'worker'
+        $final = Wait-TestRun $crashRunId
+        Assert-Check ($final.state -eq 'SUCCEEDED' -and @($final.attempts).Count -eq 2 -and
+            $final.attempts[0].id -eq $firstAttemptId -and $final.attempts[0].state -eq 'TIMED_OUT' -and
+            $final.attempts[1].state -eq 'SUCCEEDED') 'Original Run succeeds on its second Attempt after Worker restart'
+        $old = Wait-TestAttemptEvents $crashRunId $firstAttemptId {
+            param($timeline)
+            $timeline.worker.events.eventType -contains 'EXECUTION_RECOVERED' -and
+                $timeline.worker.events.eventType -contains 'REPORT_STALE'
+        }
+        Assert-Check ($old.scheduler.events.resultCode -contains 'LEASE_EXPIRED') 'Recovered Worker report is stale and leaves the authoritative expiry intact'
+        $second = Wait-TestAttemptEvents $crashRunId $final.attempts[1].id {
+            param($timeline)
+            $timeline.worker.events.eventType -contains 'HANDLER_FINISHED' -and
+                $timeline.worker.events.eventType -contains 'REPORT_ACKNOWLEDGED'
+        }
+        Assert-Check ($second.workerId -eq $final.attempts[1].targetWorkerId) 'Replacement Attempt timeline identifies the Worker and completed Handler'
+        @{ retryRunId = $retried.id; crashRunId = $crashRunId; firstAttemptId = $firstAttemptId;
+            secondAttemptId = $final.attempts[1].id; firstWorkerId = $old.workerId;
+            secondWorkerId = $second.workerId; offline = $offline } | ConvertTo-Json -Depth 12 |
+            Set-Content -LiteralPath (Join-Path $runRoot 'attempt-timeline-cases.json') -Encoding utf8
     }
 
     # 只清理这个隔离 Admin 创建的任务配置，运行历史保留供重启检查。

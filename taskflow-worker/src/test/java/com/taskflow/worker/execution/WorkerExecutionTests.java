@@ -423,6 +423,33 @@ class WorkerExecutionTests {
             }
         } finally { reporting.shutdown(); }
     }
+    @Test void eventReadRequiresDispatchTokenAndMatchingWorkerAndRun() throws Exception {
+        var command = command("demoSuccess", 1, 30, "{}");
+        executions.insert(command);
+        executions.executePending();
+        finished(command);
+        String workerId = leases.owner().workerId();
+        String uri = "http://localhost:" + port + "/internal/v1/executions/selectAttemptEvents?attemptId="
+                + command.attemptId() + "&runId=";
+        try (var client = HttpClient.newHttpClient()) {
+            var unsigned = HttpRequest.newBuilder(URI.create(uri + command.runId())).header("X-Taskflow-Worker-Id", workerId).GET().build();
+            assertThat(client.send(unsigned, HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(401);
+            var misrouted = eventRequest(uri + command.runId(), "another-worker");
+            assertThat(client.send(misrouted, HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(409);
+            var differentRun = client.send(eventRequest(uri + UUID.randomUUID(), workerId), HttpResponse.BodyHandlers.ofString());
+            assertThat(differentRun.statusCode()).isEqualTo(200);
+            assertThat(json.readTree(differentRun.body()).path("events").size()).isZero();
+            var response = client.send(eventRequest(uri + command.runId(), workerId), HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).isEqualTo(200);
+            var body = json.readTree(response.body());
+            assertThat(body.path("workerId").asString()).isEqualTo(workerId);
+            assertThat(body.path("events").get(0).path("eventType").asString()).isEqualTo("HANDLER_FINISHED");
+        }
+    }
+    private HttpRequest eventRequest(String url, String workerId) {
+        return HttpRequest.newBuilder(URI.create(url)).header("X-Taskflow-Worker-Id", workerId)
+                .header("X-Taskflow-Token", "test-dispatch-token").GET().build();
+    }
     private void finished(Dispatch command) {
         await().atMost(Duration.ofSeconds(4)).until(() -> java.util.Set.of("SUCCEEDED", "FAILED").contains(mapper.find(command.attemptId()).orElseThrow().state()));
     }

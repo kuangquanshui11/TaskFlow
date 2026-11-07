@@ -11,5 +11,6 @@ public interface IRunService {
     JsonNode selectGlobal(com.taskflow.admin.run.dto.RunQuery query);
     JsonNode selectSummary(String from, String to);
     JsonNode selectById(UUID id);
+    JsonNode selectAttemptEvents(UUID runId, UUID attemptId);
     JsonNode selectByRequestKey(UUID requestKey);
 }

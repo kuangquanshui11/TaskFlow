@@ -3,6 +3,7 @@ package com.taskflow.worker.execution.mapper;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;
+import com.taskflow.worker.execution.dto.AttemptEvents.Event;
 import com.taskflow.worker.execution.model.ExecutionRow;
 import com.taskflow.worker.execution.model.ExecutionOwner;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -14,6 +15,14 @@ public class ExecutionMapper {
     public ExecutionMapper(JdbcTemplate jdbc) { this.jdbc = jdbc; }
     public Optional<ExecutionRow> find(UUID id) {
         return jdbc.query("SELECT * FROM worker_execution WHERE attempt_id=?", this::read, id.toString()).stream().findFirst();
+    }
+    public List<Event> selectAttemptEvents(UUID runId, UUID attemptId, String workerId, int limit) {
+        return jdbc.query("""
+                SELECT id,event_type,occurred_at,report_number,state,result_code
+                FROM worker_attempt_event WHERE run_id=? AND attempt_id=? AND worker_id=? ORDER BY id DESC LIMIT ?
+                """, (rs, i) -> new Event(rs.getLong("id"), rs.getString("event_type"), instant(rs, "occurred_at"),
+                rs.getObject("report_number", Integer.class), rs.getString("state"), rs.getString("result_code")),
+                runId.toString(), attemptId.toString(), workerId, limit);
     }
     public void insert(UUID attemptId, UUID runId, String fingerprint, String encoded, Instant now) {
         jdbc.update("INSERT INTO worker_execution (attempt_id,run_id,fingerprint,dispatch_json,state,retryable,reported,report_count,next_report_at,created_at) VALUES (?,?,?,?,'ACCEPTED',FALSE,FALSE,0,?,?)",

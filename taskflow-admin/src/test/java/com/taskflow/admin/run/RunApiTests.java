@@ -82,6 +82,33 @@ class RunApiTests {
         assertThat(json.readTree(response.body()).get("code").stringValue()).isEqualTo("SCHEDULER_UNAVAILABLE");
         assertThat(jobs.selectById(job.id()).configVersion()).isEqualTo(1);
     }
+    @Test void attemptTimelineRequiresRunReadAndProxiesOutsideTheLocalTransaction() throws Exception {
+        var runId = UUID.randomUUID();
+        var attemptId = UUID.randomUUID();
+        var query = "runId=" + runId + "&attemptId=" + attemptId;
+        var uri = URI.create("http://localhost:" + port + "/api/v1/runs/selectAttemptEvents?" + query);
+        Map<String, Object> roles = Map.of("resource_access", Map.of("taskflow-api", Map.of("roles", java.util.List.of("VIEWER"))));
+        var reader = com.taskflow.admin.support.TestTokens.token(roles);
+        var noRead = com.taskflow.admin.support.TestTokens.token(
+                Map.of("resource_access", Map.of("taskflow-api", Map.of("roles", java.util.List.of()))));
+        com.taskflow.admin.support.TestSessionConfiguration.register(reader);
+        com.taskflow.admin.support.TestSessionConfiguration.register(noRead);
+        try (var client = HttpClient.newHttpClient()) {
+            assertThat(client.send(HttpRequest.newBuilder(uri).GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(401);
+            var forbidden = HttpRequest.newBuilder(uri).header("Authorization", "Bearer " + noRead).GET().build();
+            assertThat(client.send(forbidden, HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(403);
+            verifyNoInteractions(scheduler);
+            when(scheduler.get("/internal/v1/runs/selectAttemptEvents?" + query)).thenAnswer(call -> {
+                assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+                return json.readTree("{\"workerStatus\":\"UNAVAILABLE\"}");
+            });
+            var allowed = HttpRequest.newBuilder(uri).header("Authorization", "Bearer " + reader).GET().build();
+            var response = client.send(allowed, HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).isEqualTo(200);
+            assertThat(json.readTree(response.body()).path("data").path("workerStatus").asString()).isEqualTo("UNAVAILABLE");
+        }
+    }
+
     private JobDefinition job(String name) {
         return jobs.insert(new JobDefinition.Configuration(name, null, "demoSuccess", "{\"n\":1}",
                 JobDefinition.ScheduleType.MANUAL, null, "Asia/Shanghai", false, 30, 3, 1, JobDefinition.MisfirePolicy.SKIP));

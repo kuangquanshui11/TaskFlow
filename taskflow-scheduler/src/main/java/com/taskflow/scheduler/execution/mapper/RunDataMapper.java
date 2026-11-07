@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import com.taskflow.scheduler.execution.dto.AttemptEvents.SchedulerEvent;
 import com.taskflow.scheduler.execution.model.RunRecords.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -46,6 +47,15 @@ public class RunDataMapper {
     }
     public List<Attempt> attempts(UUID id) {
         return jdbc.query("SELECT * FROM run_attempt WHERE run_id=? ORDER BY attempt_number", this::readAttempt, id.toString());
+    }
+    public List<SchedulerEvent> selectAttemptEvents(UUID runId, UUID attemptId, int limit) {
+        return jdbc.query("""
+                SELECT id,worker_id,event_type,occurred_at,lease_version,sequence_number,state,result_code,deadline_at
+                FROM scheduler_attempt_event WHERE run_id=? AND attempt_id=? ORDER BY id DESC LIMIT ?
+                """, (rs, i) -> new SchedulerEvent(rs.getLong("id"), rs.getString("worker_id"),
+                rs.getString("event_type"), instant(rs, "occurred_at"), rs.getLong("lease_version"),
+                rs.getObject("sequence_number", Integer.class), rs.getString("state"), rs.getString("result_code"),
+                instant(rs, "deadline_at")), runId.toString(), attemptId.toString(), limit);
     }
     public List<RunRow> select(long jobId, int page, int size) {
         return jdbc.query("SELECT * FROM run_execution WHERE job_id=? ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",

@@ -6,17 +6,27 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import com.taskflow.scheduler.execution.dto.ExecutionProtocol.Create;
 import com.taskflow.scheduler.execution.model.RunRecords.*;
+import com.taskflow.scheduler.execution.dto.AttemptEvents;
+import com.taskflow.scheduler.execution.service.IAttemptEventService;
 import com.taskflow.scheduler.execution.service.IRunService;
 
 @RestController
 @RequestMapping("/internal/v1/runs")
 public class RunController {
     private final IRunService runs;
-    public RunController(IRunService runs) { this.runs = runs; }
+    private final IAttemptEventService events;
+    public RunController(IRunService runs, IAttemptEventService events) {
+        this.runs = runs;
+        this.events = events;
+    }
     @PostMapping("/insert") @ResponseStatus(HttpStatus.ACCEPTED)
     public RunView insert(@Valid @RequestBody Create request) { return runs.insert(request); }
     @GetMapping("/selectById")
     public RunView selectById(@RequestParam UUID id) { return runs.selectById(id); }
+    @GetMapping("/selectAttemptEvents")
+    public AttemptEvents.Timeline selectAttemptEvents(@RequestParam UUID runId, @RequestParam UUID attemptId) {
+        return events.select(runId, attemptId);
+    }
     @GetMapping("/selectGlobal")
     public Page selectGlobal(@RequestParam(required = false) String from, @RequestParam(required = false) String to,
             @RequestParam(required = false) Long jobId, @RequestParam(required = false) String state,

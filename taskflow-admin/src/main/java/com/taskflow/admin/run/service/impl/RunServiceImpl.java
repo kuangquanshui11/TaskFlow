@@ -61,6 +61,10 @@ public class RunServiceImpl implements IRunService {
     }
     @Override public JsonNode selectById(UUID id) { return scheduler.get("/internal/v1/runs/selectById?id=" + id); }
     @Override
+    public JsonNode selectAttemptEvents(UUID runId, UUID attemptId) {
+        return scheduler.get("/internal/v1/runs/selectAttemptEvents?runId=" + runId + "&attemptId=" + attemptId);
+    }
+    @Override
     public JsonNode selectGlobal(com.taskflow.admin.run.dto.RunQuery query) {
         if (query.page() < 1 || query.page() > 10000 || query.pageSize() < 1 || query.pageSize() > 100
                 || (query.jobId() != null && query.jobId() < 1)

@@ -11,6 +11,7 @@ import com.taskflow.scheduler.execution.dto.ExecutionProtocol.*;
 import com.taskflow.scheduler.execution.exception.RunException;
 import com.taskflow.scheduler.execution.mapper.RunDataMapper;
 import com.taskflow.scheduler.execution.service.IRunService;
+import com.taskflow.scheduler.remote.client.WorkerAttemptEventsRemote;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.*;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -32,6 +33,7 @@ class RunExecutionTests {
     @Autowired JsonMapper json;
     @Value("${local.server.port}") int port;
     @MockitoBean WorkerClient worker;
+    @MockitoBean WorkerAttemptEventsRemote workerEvents;
     @MockitoSpyBean RunDataMapper mapper;
     @BeforeEach void clean() throws Exception {
         try (var connection = jdbc.getDataSource().getConnection()) {
@@ -153,6 +155,34 @@ class RunExecutionTests {
         assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion(), "SUCCEEDED", "SUCCEEDED", "late", false, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001"))))
                 .isInstanceOf(RunException.class);
     }
+    @Test void timelineChecksAttemptOwnershipAndPreservesSchedulerEventsWhenWorkerUnavailable() throws Exception {
+        var run = runs.insert(create(UUID.randomUUID(), "timeline", 1));
+        var attempt = run.attempts().getFirst();
+        String prefix = "/internal/v1/runs/selectAttemptEvents?attemptId=" + attempt.id() + "&runId=";
+        assertThat(http("GET", prefix + run.id(), null, null).statusCode()).isEqualTo(401);
+        assertThat(http("GET", prefix + UUID.randomUUID(), null, "test-control-token").statusCode()).isEqualTo(404);
+        var pending = json.readTree(http("GET", prefix + run.id(), null, "test-control-token").body());
+        assertThat(pending.path("workerStatus").asString()).isEqualTo("NOT_ASSIGNED");
+        verifyNoInteractions(workerEvents);
+        runs.dispatchPending();
+        for (int i = 0; i < 101; i++) {
+            mapper.appendAttemptEvent(run.id(), attempt.id(), "worker-default", attempt.leaseVersion(),
+                    "LEASE_RENEWED", Instant.now(), i, "RUNNING", null, null);
+        }
+        when(workerEvents.select(eq(run.id()), eq(attempt.id()), eq("worker-default"), anyMap())).thenAnswer(call -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            throw mock(feign.FeignException.class);
+        });
+        var response = http("GET", prefix + run.id(), null, "test-control-token");
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        var timeline = json.readTree(response.body());
+        assertThat(timeline.path("workerStatus").asString()).isEqualTo("UNAVAILABLE");
+        assertThat(timeline.path("worker").path("events").size()).isZero();
+        assertThat(timeline.path("scheduler").path("truncated").asBoolean()).isTrue();
+        assertThat(timeline.path("scheduler").path("events").size()).isEqualTo(100);
+        assertThat(timeline.path("scheduler").path("events").get(0).path("sequenceNumber").asInt()).isEqualTo(100);
+    }
+
     private java.util.List<String> eventTypes(UUID runId, UUID attemptId) {
         return jdbc.queryForList("SELECT event_type FROM scheduler_attempt_event WHERE run_id=? AND attempt_id=? ORDER BY id",
                 String.class, runId.toString(), attemptId.toString());

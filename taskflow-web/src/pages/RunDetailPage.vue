@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router';
 import { runsApi } from '../api/runs.js';
 import { can } from '../auth/access.js';
 import AppIcon from '../components/AppIcon.vue';
+import RunAttemptTimeline from '../components/RunAttemptTimeline.vue';
 import RunStatusBadge from '../components/RunStatusBadge.vue';
 import { fullDate } from '../lib/format.js';
 import { isRunId, TRIGGER_TYPES } from '../lib/run-query.js';
@@ -105,6 +106,7 @@ onBeforeUnmount(() => controller?.abort());
               <div><dt>耗时</dt><dd>{{ elapsed(attempt) }}</dd></div>
               <div v-if="attempt.message" class="wide"><dt>结果说明</dt><dd class="result-message">{{ attempt.message }}</dd></div>
             </dl>
+            <RunAttemptTimeline :run-id="run.id" :attempt-id="attempt.id" :timezone="timezone" />
           </li>
         </ol>
       </section>
@@ -148,7 +150,7 @@ onBeforeUnmount(() => controller?.abort());
 .result-message { white-space: pre-wrap; }
 .empty-attempts { padding: 20px; }
 .attempt-history { display: grid; gap: 12px; list-style: none; margin: 0; padding: 20px; }
-.attempt-history li { border: 1px solid var(--line); border-radius: 8px; }
+.attempt-history > li { border: 1px solid var(--line); border-radius: 8px; }
 .attempt-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 16px; background: var(--canvas); border-radius: 8px 8px 0 0; }
 .attempt-heading h3 { font-size: 14px; }
 .attempt-history .detail-grid { padding: 16px; }

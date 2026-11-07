@@ -34,7 +34,13 @@
 
 ## 升级与范围
 
-启动时由两个服务分别执行 Flyway 新迁移；历史数据继续使用原状态，事件从升级后的写入开始采集。事件随数据库保留，当前没有自动归档。交付范围是记录与持久化，后续再接有界查询代理和控制台时间线。公网 API 和服务间请求字段沿用原契约。
+启动时由两个服务分别执行 Flyway 迁移。历史数据继续使用原状态，事件从升级后的写入开始采集。事件随数据库保留，当前没有自动归档。
+
+## 有界读取
+
+我在独立运行详情中为每次 Attempt 提供可展开的执行时间线。Admin 复用 `run:read` 和现有 Scheduler HTTP 客户端。Scheduler 验证 Attempt 属于指定 Run，读取本地事件后在 SQL 事务外至多查询一次绑定的 Worker，旧记录可用已领取租约的 Worker 标识补充定位。每个来源最多返回按本地事件 ID 倒序排列的最近 100 条，另取一条判断是否截断。浏览器按来源展示阶段、观察时间和结果码。
+
+cloud 使用 Eureka 的 `worker-id` 元数据定位该节点，local/test 使用现有显式直连地址。Worker 验证目标标识及内部派发密钥，再按 Run、Attempt、Worker 三个标识读取本地数据。读取使用 500 ms 连接超时、1 s 响应读取超时和现有熔断策略，不自动重试。Worker 不可达、响应无效或目标身份不匹配时，Scheduler 返回本地事件并标记 Worker 信息暂不可用。两个来源各自观察和排序，查询期间状态可以继续变化。接口字段见 [API](api.md#attempt-执行时间线)。
 
 ## 验证
 
@@ -46,3 +52,14 @@
 | `mvn.cmd -B -o -pl taskflow-worker verify` | Worker 补充事务创建失败回归后重新构建成功，86 项通过，1 项真实 Broker 条件测试跳过 | `.tools/attempt-events-worker-final-verify.log` |
 
 集成测试覆盖 HTTP 响应晚于终态、MQ 发布确认丢失和重发、派发准备回滚、租约领取及续租、同一 Run 的多次 Attempt、迟到结果拒绝、Worker 入口记录失败、结果保存回滚和提交确认丢失，以及上报重试、耗尽和重启补报。未执行真实 MySQL 迁移或真实 Broker 故障演练。
+
+### 查询与界面
+
+2026-11-07（Asia/Shanghai），Windows、Java 21、隔离 H2、直连 HTTP 和 Chrome。以下记录覆盖时间线读取与显示。
+
+| 命令 | 结果 | 证据 |
+| --- | --- | --- |
+| 在独立变更快照执行 `mvn.cmd -o -pl taskflow-admin,taskflow-scheduler,taskflow-worker -Dtest=RunApiTests,RunExecutionTests,WorkerDiscoveryTests,WorkerExecutionTests test` | 36 项通过，覆盖权限、归属校验、查询上限、Worker 定向和部分响应 | `.tools/attempt-timeline-snapshot-tests.log` |
+| 在根目录执行 `.\tools\test-execution.ps1 -SkipBuild -IncludeAttemptTimeline` | Worker 强制退出与恢复检查通过，两项时间线浏览器测试通过。全量浏览器随后在全局运行列表用例超时 | `.tools/attempt-timeline-process.log` |
+
+进程验收在 Handler 开始后停止 Worker，确认 Scheduler 在 Worker 离线期间返回首个 Attempt 的 `LEASE_EXPIRED`。Worker 重启后，迟到上报被拒绝，同一 Run 的第二次 Attempt 成功。浏览器用离线期间保存的真实响应复现提示，再查询重启后的事件，覆盖 375 px 窗口。验收截图位于 `.tools/execution-e2e/20261107-101031-326/`。本次读取验证覆盖本机直连和发现层定向测试，未接入真实 Eureka 或 Broker。

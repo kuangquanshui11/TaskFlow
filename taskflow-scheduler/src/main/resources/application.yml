@@ -5,6 +5,12 @@ spring:
     config:
       enabled: false
     openfeign:
+      client:
+        config:
+          workerAttemptEvents:
+            connect-timeout: 500
+            read-timeout: 1000
+            follow-redirects: false
       circuitbreaker:
         enabled: true
       micrometer:

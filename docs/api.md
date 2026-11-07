@@ -58,6 +58,7 @@ Gateway 保留以下 API 路径，只路由 `/api/v1/**`；`/internal/v1/**`、�
 | GET | /api/v1/runs/selectGlobal | run:read；跨任务运行列表，支持时间、状态、任务、触发来源与精确 Run ID |
 | GET | /api/v1/runs/selectById?id=UUID | run:read；运行详情、配置快照与 Attempt 历史 |
 | GET | /api/v1/runs/selectByRequestKey?requestKey=UUID | 按原提交标识确认接收结果 |
+| GET | /api/v1/runs/selectAttemptEvents?runId=UUID&attemptId=UUID | run:read；单次 Attempt 的执行事件 |
 
 成功响应：
 
@@ -291,6 +292,18 @@ Run 的 state 为 READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED。明确的 
 Worker 本地结果保存失败会有限重试保存同一份结果，不重新执行 Handler，不增加 Run / Attempt 或业务重试次数。恢复后按原租约上报；已失效租约不会被延长或绕过。持续保存失败可能最终表现为 Scheduler 租约超时，不能据此断言业务未执行。公开路径、请求参数与响应结构不变；日志诊断和完整故障边界见 [Worker 结果保存恢复](worker-result-recovery.md)。
 
 2026-10-27 状态并发修复保持上述路径、请求字段和响应结构不变。派发确认不能覆盖 SUCCEEDED/FAILED；并发收到内容相同且租约版本匹配的已接受终态时，仍幂等确认，旧租约或冲突终态仍返回 409 / STALE_ATTEMPT。重复确认不会增加 Attempt。MySQL 行锁、条件更新和回滚边界见 [状态并发修复验证](run-state-concurrency-verification.md)。
+
+## Attempt 执行时间线
+
+`GET /api/v1/runs/selectAttemptEvents?runId=UUID&attemptId=UUID` 要求 `run:read`，返回 ApiResponse。两个 UUID 必填，格式错误返回 400，Attempt 不属于指定 Run 时返回 404 / ATTEMPT_NOT_FOUND。
+
+响应的 `data` 包含 `runId`、`attemptId`、可空的 `workerId`、`scheduler`、`workerStatus` 和 `worker`。两个事件批次均包含 `events` 和布尔值 `truncated`，最多各 100 条，按各来源的本地事件 ID 倒序。事件共同字段为 `id`、`eventType`、UTC 时间 `occurredAt`、`state` 和 `resultCode`。Scheduler 事件另含 `workerId`、`leaseVersion`、`sequenceNumber`、`deadlineAt`，Worker 事件另含 `reportNumber`。
+
+- `AVAILABLE` 表示 Worker 查询成功，`worker.events` 可以为空。
+- `UNAVAILABLE` 表示 Worker 信息暂不可用，HTTP 200 仍返回已读取的 Scheduler 批次。
+- `NOT_ASSIGNED` 表示 Attempt 尚无可定位的 Worker，`worker.events` 为空。
+
+内部 GET `/internal/v1/runs/selectAttemptEvents` 使用控制密钥，返回裸 JSON。Scheduler 调用 Worker 的 GET `/internal/v1/executions/selectAttemptEvents` 时使用派发密钥和 `X-Taskflow-Worker-Id`，由 Worker 独立验证目标标识。两个内部入口均由服务之间直接调用。
 
 ## 运行统计语义
 

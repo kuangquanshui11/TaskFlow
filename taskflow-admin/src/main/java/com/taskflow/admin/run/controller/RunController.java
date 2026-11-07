@@ -23,6 +23,10 @@ public class RunController {
     }
     @GetMapping("/selectById")
     public ApiResponse<JsonNode> selectById(@RequestParam UUID id) { return ApiResponse.success(runs.selectById(id)); }
+    @GetMapping("/selectAttemptEvents")
+    public ApiResponse<JsonNode> selectAttemptEvents(@RequestParam UUID runId, @RequestParam UUID attemptId) {
+        return ApiResponse.success(runs.selectAttemptEvents(runId, attemptId));
+    }
     @GetMapping("/selectGlobal")
     public ApiResponse<JsonNode> selectGlobal(@RequestParam(required = false) String from, @RequestParam(required = false) String to,
             @RequestParam(required = false) Long jobId, @RequestParam(required = false) String state,
