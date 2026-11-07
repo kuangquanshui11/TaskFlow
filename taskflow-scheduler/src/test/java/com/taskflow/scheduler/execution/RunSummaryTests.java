@@ -107,6 +107,8 @@ class RunSummaryTests {
         for (var query : List.of("?from=" + from, "?to=" + to, "?from=bad&to=" + to,
                 "?from=" + to + "&to=" + from, "?from=" + from + "&to=" + from,
                 "?from=" + from + "&to=" + from.plus(Duration.ofDays(7)).plusMillis(1),
+                "?from=0999-12-31T23:59:59Z&to=1000-01-01T00:00:00Z",
+                "?from=9999-12-31T00:00:00Z&to=9999-12-31T23:59:59.999000001Z",
                 "?from=2026-10-30T00:00:00&to=" + to)) {
             var response = http(query, true); assertThat(response.statusCode()).as(query).isEqualTo(400);
             assertThat(json.readTree(response.body()).path("code").stringValue()).isEqualTo("INVALID_ARGUMENT");

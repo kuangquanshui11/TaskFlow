@@ -48,7 +48,8 @@ class RunSummaryApiTests {
     @Test void rejectsInvalidWindowBeforeCallingScheduler() throws Exception {
         for (String query : List.of("?from=2026-10-30T00:00:00Z", "?to=2026-10-31T00:00:00Z", "?from=bad&to=bad",
                 "?from=2026-10-31T00:00:00Z&to=2026-10-30T00:00:00Z", "?from=2026-10-31T00:00:00Z&to=2026-10-31T00:00:00Z",
-                "?from=2026-10-23T23:59:59Z&to=2026-10-31T00:00:00Z", "?from=2026-10-30T00:00:00&to=2026-10-31T00:00:00Z")) {
+                "?from=2026-10-23T23:59:59Z&to=2026-10-31T00:00:00Z", "?from=2026-10-30T00:00:00&to=2026-10-31T00:00:00Z",
+                "?from=9999-12-31T00:00:00Z&to=9999-12-31T23:59:59.999000001Z")) {
             var response = get(query, true); assertThat(response.statusCode()).as(query).isEqualTo(400);
             assertThat(json.readTree(response.body()).path("code").stringValue()).isEqualTo("INVALID_ARGUMENT");
         }

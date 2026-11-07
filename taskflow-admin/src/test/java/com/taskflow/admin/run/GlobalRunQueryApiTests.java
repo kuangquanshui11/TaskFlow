@@ -46,7 +46,8 @@ class GlobalRunQueryApiTests {
     @Test void rejectsBadArgumentsBeforeRemoteCall() throws Exception {
         for (String query : List.of("?jobId=-1", "?state=TIMED_OUT", "?triggerType=HTTP", "?runId=bad", "?page=10001", "?pageSize=101",
                 "?from=2026-11-01T00:00:00Z", "?from=bad&to=bad", "?from=2026-11-02T00:00:00Z&to=2026-11-01T00:00:00Z",
-                "?from=2026-11-01T00:00:00Z&to=2026-11-09T00:00:00Z"))
+                "?from=2026-11-01T00:00:00Z&to=2026-11-09T00:00:00Z",
+                "?from=%2B500000000-01-01T00:00:00Z&to=%2B500000000-01-02T00:00:00Z"))
             assertThat(get(query, true).statusCode()).as(query).isEqualTo(400);
         verifyNoInteractions(scheduler);
     }
@@ -60,7 +61,14 @@ class GlobalRunQueryApiTests {
                 java.time.Duration.ofSeconds(1), java.time.Duration.ofSeconds(2)), json, remote);
         when(remote.get(eq("selectGlobal"), anyMap(), anyMap())).thenReturn(PAGE);
         assertThat(client.get("/internal/v1/runs/selectGlobal?page=1&pageSize=20").path("total").longValue()).isZero();
-        for (String invalid : List.of("{}", "{\"records\":{},\"total\":0}", "{\"records\":[],\"total\":-1,\"page\":1,\"pageSize\":20}", "not json")) {
+        for (String invalid : List.of("{}", "{\"records\":{},\"total\":0}",
+                PAGE.replace("\"total\":0", "\"total\":-1"),
+                PAGE.replace("\"total\":0", "\"total\":18446744073709551616"),
+                PAGE.replace("\"page\":1", "\"page\":10001"),
+                PAGE.replace("\"page\":1", "\"page\":4294967297"),
+                PAGE.replace("\"page\":1", "\"page\":2"),
+                PAGE.replace("\"pageSize\":20", "\"pageSize\":100"),
+                "not json")) {
             when(remote.get(eq("selectGlobal"), anyMap(), anyMap())).thenReturn(invalid);
             assertThatThrownBy(() -> client.get("/internal/v1/runs/selectGlobal?page=1&pageSize=20")).isInstanceOfSatisfying(RunException.class,
                     e -> { assertThat(e.status()).isEqualTo(503); assertThat(e.code()).isEqualTo("SCHEDULER_PROTOCOL_ERROR"); });

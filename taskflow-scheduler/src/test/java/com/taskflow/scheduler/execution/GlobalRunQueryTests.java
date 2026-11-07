@@ -77,10 +77,11 @@ class GlobalRunQueryTests {
                 "?page=0", "?page=10001", "?pageSize=101", "?pageSize=0", "?from=" + from, "?to=" + to,
                 "?from=bad&to=bad", "?from=" + to + "&to=" + from,
                 "?from=" + from + "&to=" + from, "?from=" + from + "&to=" + from.plus(Duration.ofDays(7)).plusMillis(1),
-                "?from=2026-11-01T00:00:00&to=" + to))
+                "?from=2026-11-01T00:00:00&to=" + to,
+                "?from=%2B500000000-01-01T00:00:00Z&to=%2B500000000-01-02T00:00:00Z"))
             assertThat(http(query, true).statusCode()).as(query).isEqualTo(400);
         assertThat(http("", false).statusCode()).isEqualTo(401);
-        assertThat(http("?from=" + from + "&to=" + from.plus(Duration.ofDays(7)), true).statusCode()).isEqualTo(200);
+        assertThat(http("?from=" + from + "&to=" + from.plus(Duration.ofDays(7)) + "&page=10000&pageSize=100", true).statusCode()).isEqualTo(200);
     }
     @Test void httpReturnsPageWithoutExecutionSnapshotAndDoesNotMutateState() throws Exception {
         var id = seed(7, "FAILED", "CRON", from);

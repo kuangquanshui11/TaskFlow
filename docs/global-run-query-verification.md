@@ -40,3 +40,14 @@ Admin 新增 5 项真实 HTTP/客户端测试，覆盖 VIEWER 的 run:read、匿
 未执行本次全局查询的真实 MySQL 执行计划、百万级历史数据负载、多 Scheduler 实例并发翻页或 MQ 故障专项；H2 与 HTTP 进程验收不替代这些结果。不同翻页请求不承诺同一数据库快照。独立运行详情页、人工重跑、告警和审计不属于该列表能力。
 
 未重启或重新部署常驻业务实例。构建产物、测试配置、凭据、日志与截图均留在忽略目录或 target/dist，不纳入提交。
+
+## 查询边界回归
+
+2026-11-07（Asia/Shanghai），Windows、Java 21.0.12.1、Maven 3.10.0，使用隔离 H2 和本机 Maven 缓存离线验证。
+
+| 命令 | 范围与结果 | 证据 |
+| --- | --- | --- |
+| `mvn.cmd -B -o -pl taskflow-admin,taskflow-scheduler test` | 工作区模块测试，234 项通过，6 项 MySQL 或 Redis 条件测试跳过，0 失败或错误 | `.tools/run-query-boundaries-tests.log` |
+| `mvn.cmd -B -o -pl taskflow-admin,taskflow-scheduler -Dtest=GlobalRunQueryApiTests,RunSummaryApiTests,GlobalRunQueryTests,RunSummaryTests test` | 基线加本次补丁的独立快照，24 项通过，0 跳过、失败或错误 | `.tools/run-query-boundaries-snapshot-tests.log` |
+
+专项覆盖 Admin 越权和非法窗口在代理前拒绝、Scheduler 内部入口独立校验、完整 7 天与最大分页值可用，以及 Admin 拒绝页码和页大小不符或数值溢出的分页响应。本次未执行真实 MySQL 执行计划、负载测试或浏览器进程验收。

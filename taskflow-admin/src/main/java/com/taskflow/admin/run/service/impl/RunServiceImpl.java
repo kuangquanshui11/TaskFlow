@@ -1,5 +1,8 @@
 package com.taskflow.admin.run.service.impl;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.Map;
 import java.util.UUID;
 import com.taskflow.admin.job.service.IJobService;
@@ -13,6 +16,10 @@ import tools.jackson.databind.json.JsonMapper;
 
 @Service
 public class RunServiceImpl implements IRunService {
+    private static final Instant EARLIEST_QUERY_TIME = Instant.parse("1000-01-01T00:00:00Z");
+    private static final Instant LATEST_QUERY_TIME = Instant.parse("9999-12-31T23:59:59.999Z");
+    private static final Duration MAX_QUERY_WINDOW = Duration.ofDays(7);
+
     private final IJobService jobs;
     private final SchedulerClient scheduler;
     private final JsonMapper json;
@@ -62,44 +69,46 @@ public class RunServiceImpl implements IRunService {
             throw new RunException(400, "INVALID_ARGUMENT", "运行筛选或分页参数不合法");
         var params = new java.util.LinkedHashMap<String, String>();
         params.put("page", Integer.toString(query.page())); params.put("pageSize", Integer.toString(query.pageSize()));
-        if (query.from() != null || query.to() != null) {
-            try {
-                if (query.from() == null || query.to() == null || !query.from().endsWith("Z") || !query.to().endsWith("Z"))
-                    throw new IllegalArgumentException();
-                var from = java.time.Instant.parse(query.from()); var to = java.time.Instant.parse(query.to());
-                if (!from.isBefore(to) || java.time.Duration.between(from, to).compareTo(java.time.Duration.ofDays(7)) > 0)
-                    throw new IllegalArgumentException();
-                params.put("from", from.toString()); params.put("to", to.toString());
-            } catch (java.time.format.DateTimeParseException | IllegalArgumentException invalid) {
-                throw new RunException(400, "INVALID_ARGUMENT", "时间窗须同时提供以 Z 结尾的 UTC 时间、起点早于终点且不超过 7 天");
-            }
-        }
+        addQueryWindow(params, query.from(), query.to());
         if (query.jobId() != null) params.put("jobId", query.jobId().toString());
         if (query.state() != null) params.put("state", query.state());
         if (query.triggerType() != null) params.put("triggerType", query.triggerType());
         if (query.runId() != null) params.put("runId", query.runId().toString());
-        var encoded = params.entrySet().stream().map(entry -> entry.getKey() + "="
-                + java.net.URLEncoder.encode(entry.getValue(), java.nio.charset.StandardCharsets.UTF_8)).collect(java.util.stream.Collectors.joining("&"));
-        return scheduler.get("/internal/v1/runs/selectGlobal?" + encoded);
+        return scheduler.get("/internal/v1/runs/selectGlobal?" + encodeQuery(params));
     }
     @Override
     public JsonNode selectSummary(String from, String to) {
         String path = "/internal/v1/runs/selectSummary";
-        if (from != null || to != null) {
-            try {
-                if (from == null || to == null || !from.endsWith("Z") || !to.endsWith("Z")) throw new IllegalArgumentException();
-                var start = java.time.Instant.parse(from); var end = java.time.Instant.parse(to);
-                if (!start.isBefore(end) || java.time.Duration.between(start, end).compareTo(java.time.Duration.ofDays(7)) > 0)
-                    throw new IllegalArgumentException();
-                path += "?from=" + java.net.URLEncoder.encode(start.toString(), java.nio.charset.StandardCharsets.UTF_8)
-                        + "&to=" + java.net.URLEncoder.encode(end.toString(), java.nio.charset.StandardCharsets.UTF_8);
-            } catch (java.time.format.DateTimeParseException | IllegalArgumentException invalid) {
-                throw new RunException(400, "INVALID_ARGUMENT", "时间窗须同时提供以 Z 结尾的 UTC 时间、起点早于终点且不超过 7 天");
-            }
-        }
+        var params = new java.util.LinkedHashMap<String, String>();
+        addQueryWindow(params, from, to);
+        if (!params.isEmpty()) path += "?" + encodeQuery(params);
         var result = scheduler.get(path);
         SchedulerClient.validateSummary(result);
         return result;
     }
+
+    private static void addQueryWindow(Map<String, String> params, String from, String to) {
+        if (from == null && to == null) return;
+        try {
+            if (from == null || to == null || !from.endsWith("Z") || !to.endsWith("Z"))
+                throw new IllegalArgumentException();
+            var start = Instant.parse(from);
+            var end = Instant.parse(to);
+            if (start.isBefore(EARLIEST_QUERY_TIME) || end.isAfter(LATEST_QUERY_TIME)
+                    || !start.isBefore(end) || Duration.between(start, end).compareTo(MAX_QUERY_WINDOW) > 0)
+                throw new IllegalArgumentException();
+            params.put("from", start.toString());
+            params.put("to", end.toString());
+        } catch (DateTimeParseException | IllegalArgumentException invalid) {
+            throw new RunException(400, "INVALID_ARGUMENT", "时间窗须同时提供以 Z 结尾的 UTC 时间，位于公元 1000 至 9999 年，起点早于终点且不超过 7 天");
+        }
+    }
+
+    private static String encodeQuery(Map<String, String> params) {
+        return params.entrySet().stream().map(entry -> entry.getKey() + "="
+                + java.net.URLEncoder.encode(entry.getValue(), java.nio.charset.StandardCharsets.UTF_8))
+                .collect(java.util.stream.Collectors.joining("&"));
+    }
+
     @Override public JsonNode selectByRequestKey(UUID key) { return scheduler.get("/internal/v1/runs/selectByRequestKey?requestKey=" + key); }
 }

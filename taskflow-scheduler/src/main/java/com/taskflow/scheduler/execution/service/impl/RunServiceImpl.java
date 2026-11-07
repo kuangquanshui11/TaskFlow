@@ -2,6 +2,7 @@ package com.taskflow.scheduler.execution.service.impl;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
@@ -28,6 +29,10 @@ import tools.jackson.databind.json.JsonMapper;
 
 @Service
 public class RunServiceImpl implements IRunService {
+    private static final Instant EARLIEST_QUERY_TIME = Instant.parse("1000-01-01T00:00:00Z");
+    private static final Instant LATEST_QUERY_TIME = Instant.parse("9999-12-31T23:59:59.999Z");
+    private static final Duration MAX_QUERY_WINDOW = Duration.ofDays(7);
+
     private final RunDataMapper mapper;
     private final WorkerClient worker;
     private final RunProperties properties;
@@ -115,14 +120,14 @@ public class RunServiceImpl implements IRunService {
             try {
                 if (query.from() == null || query.to() == null || !query.from().endsWith("Z") || !query.to().endsWith("Z"))
                     throw new IllegalArgumentException();
-                from = Instant.parse(query.from()); to = Instant.parse(query.to());
-                if (!from.isBefore(to) || java.time.Duration.between(from, to).compareTo(java.time.Duration.ofDays(7)) > 0)
-                    throw new IllegalArgumentException();
+                from = Instant.parse(query.from());
+                to = Instant.parse(query.to());
             } catch (java.time.format.DateTimeParseException | IllegalArgumentException invalid) {
-                throw new RunException(400, "INVALID_ARGUMENT", "时间窗须同时提供以 Z 结尾的 UTC 时间、起点早于终点且不超过 7 天");
+                throw new RunException(400, "INVALID_ARGUMENT", "时间窗须同时提供以 Z 结尾的 UTC 时间");
             }
+            validateQueryWindow(from, to);
         } else if (query.runId() == null) {
-            to = Instant.now(); from = to.minus(java.time.Duration.ofHours(24));
+            to = Instant.now(); from = to.minus(Duration.ofHours(24));
         }
         // 精确 ID 查询可跨历史；显式提供的时间、任务和状态仍取交集。记录与总数使用同一只读快照。
         var filter = new com.taskflow.scheduler.execution.model.RunFilter(from, to, query.jobId(), query.state(), query.triggerType(), query.runId());
@@ -132,9 +137,8 @@ public class RunServiceImpl implements IRunService {
     @Override
     public Overview selectSummary(Instant from, Instant to) {
         var observed = Instant.now();
-        if (from == null && to == null) { to = observed; from = to.minus(java.time.Duration.ofHours(24)); }
-        if (from == null || to == null || !from.isBefore(to) || java.time.Duration.between(from, to).compareTo(java.time.Duration.ofDays(7)) > 0)
-            throw new RunException(400, "INVALID_ARGUMENT", "时间窗必须同时提供、起点早于终点且不超过 7 天");
+        if (from == null && to == null) { to = observed; from = to.minus(Duration.ofHours(24)); }
+        validateQueryWindow(from, to);
         // 四次读取不持有共同事务快照；观察时间不承诺各项统计完全同步。
         var states = mapper.summaryStates(from, to);
         var attempts = mapper.summaryAttempts(from, to);
@@ -154,6 +158,13 @@ public class RunServiceImpl implements IRunService {
         return new Overview(from, to, observed, counts.values().stream().mapToLong(Long::longValue).sum(), counts,
                 finished, succeeded, failed, rate, attempts.attemptTotal(), attempts.retriedRunCount(),
                 new Latency(average, p95, samples.size(), timed > 10000), failures);
+    }
+
+    private static void validateQueryWindow(Instant from, Instant to) {
+        // Mapper 将半开窗口向上取整至毫秒，限制端点以免超出可绑定的日期范围。
+        if (from == null || to == null || from.isBefore(EARLIEST_QUERY_TIME) || to.isAfter(LATEST_QUERY_TIME)
+                || !from.isBefore(to) || Duration.between(from, to).compareTo(MAX_QUERY_WINDOW) > 0)
+            throw new RunException(400, "INVALID_ARGUMENT", "时间窗必须同时提供，位于公元 1000 至 9999 年，起点早于终点且不超过 7 天");
     }
 
     @Override

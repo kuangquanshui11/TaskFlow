@@ -274,7 +274,9 @@ GET /api/v1/runs/selectGlobal 是独立的全局查询，不改变上述单任�
 
 响应 data 沿用 records、total、page、pageSize；记录字段与单任务列表一致，并包含 triggerType、scheduledAt。按 createdAt DESC、id DESC 稳定排序，不返回快照或 Attempt 明细。每次请求的记录与总数使用 Scheduler 本地 REPEATABLE_READ 只读事务；不同翻页请求不是同一快照，并发新增/状态变化可能改变页边界。内部 GET /internal/v1/runs/selectGlobal 使用同名参数和控制密钥，返回裸 Page；不经 Gateway 公开。Admin 事务外调用、不缓存、不跨服务联表。
 
-非法筛选、时间、UUID 或分页返回 400 / INVALID_ARGUMENT；未登录 401、无 run:read 403；远程不可用为 503 / SCHEDULER_UNAVAILABLE，损坏的分页结构为 503 / SCHEDULER_PROTOCOL_ERROR。设计与验收见 [全局运行查询](global-run-query.md)。
+全局列表和运行统计的显式时间端点均须落在 `1000-01-01T00:00:00Z` 至 `9999-12-31T23:59:59.999Z` 之间（含端点）。Admin 在代理前校验，Scheduler 在查询前独立校验。
+
+非法筛选、时间、UUID 或分页返回 400 / INVALID_ARGUMENT；未登录 401、无 run:read 403；远程不可用为 503 / SCHEDULER_UNAVAILABLE。分页结构无效、页码或页大小与请求不符、记录数超过页大小或总数时，返回 503 / SCHEDULER_PROTOCOL_ERROR。设计与验收见 [全局运行查询](global-run-query.md)。
 
 GET /api/v1/runs/selectById 与 selectByRequestKey 均要求 `run:read`，返回同一详情结构。不存在时返回 404 / RUN_NOT_FOUND。snapshot 包含原配置的名称、描述、处理器、参数、执行策略、Cron、时区和配置版本。编辑或删除 Job 后仍可按 Run ID 查询原快照。attempts 按 attemptNumber 升序排列，包含 id、runId、leaseVersion、state、dispatchCount、nextDispatchAt、expiresAt、startedAt、finishedAt、resultCode、message，以及可空的 targetWorkerId、leaseUntil、ownerWorkerId、ownerSessionId。
 

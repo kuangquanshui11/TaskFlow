@@ -24,10 +24,11 @@ public class SchedulerClient {
         if (TransactionSynchronizationManager.isActualTransactionActive()) throw new IllegalStateException("Scheduler call inside SQL transaction");
         if (properties.controlToken().isBlank())
             throw new RunException(503, "SERVICE_NOT_CONFIGURED", "手动执行服务尚未配置");
+        var params = RemoteErrors.query(path);
         String response;
         try {
             var headers=RemoteErrors.headers(properties.controlToken(),java.util.UUID.randomUUID().toString());
-            response=body==null?remote.get(RemoteErrors.action(path),RemoteErrors.query(path),headers):remote.insert(body,headers);
+            response=body==null?remote.get(RemoteErrors.action(path),params,headers):remote.insert(body,headers);
         } catch (RuntimeException failure) {
             int status=RemoteErrors.status(failure);
             if (status==404) throw new RunException(404,"RUN_NOT_FOUND","运行记录尚未找到");
@@ -41,12 +42,7 @@ public class SchedulerClient {
                 return data;
             }
             if (path.startsWith("/internal/v1/runs/selectGlobal?")) {
-                if (data == null || !data.isObject() || !data.path("records").isArray()
-                        || !data.path("total").isIntegralNumber() || data.path("total").longValue() < 0
-                        || !data.path("page").isIntegralNumber() || data.path("page").intValue() < 1
-                        || !data.path("pageSize").isIntegralNumber() || data.path("pageSize").intValue() < 1
-                        || data.path("pageSize").intValue() > 100 || data.path("records").size() > data.path("pageSize").intValue())
-                    throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "调度服务返回格式不合法");
+                validateGlobalPage(data, Integer.parseInt(params.get("page")), Integer.parseInt(params.get("pageSize")));
                 return data;
             }
             if (data==null || !data.isObject() || (path.startsWith("/internal/v1/runs/select?")
@@ -57,6 +53,21 @@ public class SchedulerClient {
             throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "调度服务返回格式不合法");
         }
     }
+
+    private static void validateGlobalPage(JsonNode data, int requestedPage, int requestedPageSize) {
+        if (data == null || !data.isObject() || !data.path("records").isArray()
+                || !data.path("total").isIntegralNumber() || !data.path("total").canConvertToLong()
+                || data.path("total").longValue() < data.path("records").size()
+                || !matchesPageParameter(data.path("page"), requestedPage)
+                || !matchesPageParameter(data.path("pageSize"), requestedPageSize)
+                || data.path("records").size() > requestedPageSize)
+            throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "调度服务返回的分页数据不合法");
+    }
+
+    private static boolean matchesPageParameter(JsonNode value, int expected) {
+        return value.isIntegralNumber() && value.canConvertToInt() && value.intValue() == expected;
+    }
+
     public static void validateSummary(JsonNode data) {
         if (data == null || !data.isObject() || !data.path("total").isIntegralNumber()
                 || !data.path("stateCounts").isObject() || !data.path("latency").isObject() || !data.path("failures").isArray())
