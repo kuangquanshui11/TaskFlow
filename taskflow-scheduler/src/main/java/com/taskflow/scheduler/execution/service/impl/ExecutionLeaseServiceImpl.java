@@ -50,6 +50,11 @@ public class ExecutionLeaseServiceImpl implements IExecutionLeaseService {
             if (!mapper.accepted(attempt, now)
                     || !mapper.runState(run, "RUNNING", attempt.attemptNumber(), null, null, now)) throw stale();
         }
+        if (attempt.ownerWorkerId() == null || !until.equals(attempt.leaseUntil())) {
+            mapper.appendAttemptEvent(run.id(), attempt.id(), request.workerId(), attempt.leaseVersion(),
+                    attempt.ownerWorkerId() == null ? "LEASE_ACQUIRED" : "LEASE_RENEWED", now,
+                    null, "RUNNING", null, until);
+        }
         return new LeaseAcknowledgement(request.attemptId(), request.runId(), request.leaseVersion(),
                 request.workerId(), request.sessionId(), now, until, executionDeadline, attempt.expiresAt());
     }

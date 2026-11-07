@@ -87,6 +87,8 @@ Worker 节点管理已实现：独立注册/心跳协议与密钥、Scheduler �
 
 运行查询边界。Scheduler 读取本服务的权威 Run 和 Attempt 数据。Admin 校验 `run:read` 和查询参数，在本地 SQL 事务外通过版本化 HTTP 代理；Scheduler 在内部入口独立校验。全局列表默认最近 24 小时，显式窗口最长 7 天，每页最多 100 条、最多第 10000 页。省略时间的历史查询须指定精确 Run ID。统计沿用相同时间窗约束，单任务历史沿用按 Job ID 分页的契约。见 [全局运行查询与详情](global-run-query.md)。
 
+Attempt 执行事件已落库。Scheduler 保存派发、租约及权威终态事件，Worker 保存 Handler 调用与上报事件；两端用 Run、Attempt 和 Worker 标识关联。查询代理及控制台时间线属于下一交付单元。见 [Attempt 执行事件](attempt-events.md)。
+
 全局运行列表已实现：Scheduler 独立查询、Admin run:read 代理、控制台 `/runs` 提供时间/状态/任务 ID/触发来源交集筛选及精确 Run ID 定位。独立运行详情 `/runs/:runId` 从全局列表与单任务运行结果进入，展示配置快照、Attempt 历史、结果码、目标 Worker 和派发起止时间。范围见 [全局运行查询与详情](global-run-query.md)，验证见 [全局列表验证](global-run-query-verification.md) 和 [运行详情验证](run-detail-verification.md)。
 
 平台治理包含：Nginx → Gateway → Admin，内部服务名发现与 Feign 调用、熔断及同步 HTTP 链路追踪；注册/配置中心独立认证、非秘密策略仓库及可选 Jaeger Compose 已提供。默认配置变更重启生效，不提供完整热刷新；Eureka/Config 单实例，HA 和真实 Jaeger 容器验收仍未完成。

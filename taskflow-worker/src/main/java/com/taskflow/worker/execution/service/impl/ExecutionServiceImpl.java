@@ -8,6 +8,7 @@ import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import com.taskflow.worker.execution.client.SchedulerReportClient;
+import com.taskflow.worker.execution.client.SchedulerReportClient.Outcome;
 import com.taskflow.worker.execution.config.ExecutionProperties;
 import com.taskflow.worker.execution.dto.ExecutionProtocol.*;
 import com.taskflow.worker.execution.exception.ExecutionException;
@@ -88,7 +89,7 @@ public class ExecutionServiceImpl implements IExecutionService {
     }
     @Override
     public void recover() {
-        mapper.recoverRunning(Instant.now());
+        transactions.executeWithoutResult(status -> mapper.recoverRunning(Instant.now()));
         recovered.set(true);
     }
     @Override
@@ -110,7 +111,7 @@ public class ExecutionServiceImpl implements IExecutionService {
                     boolean rejected = failure instanceof RejectedExecutionException;
                     results.save(new ExecutionCompletion(row.attemptId(), row.runId(), "FAILED",
                             rejected ? "EXECUTOR_REJECTED" : "EXECUTION_PREPARATION_FAILED",
-                            "Worker 未能启动 Handler，未执行业务", false, Instant.now()));
+                            "Worker 未能启动 Handler，未执行业务", false, false, Instant.now()));
                 } finally { slots.release(); }
             }
         }
@@ -142,13 +143,20 @@ public class ExecutionServiceImpl implements IExecutionService {
                         }
                     }, 0, leases.watchdogIntervalMillis(), TimeUnit.MILLISECONDS);
                     context.checkActive();
+                    recordHandlerStart(dispatch.attemptId());
+                    context.checkActive();
                     handlerStarted = true;
                     message = handlers.execute(dispatch.snapshot(), context);
                     context.checkActive();
                 } catch (ExecutionCancelledException cancelled) {
                     state = "FAILED"; code = cancelled.code(); message = "执行资格已失效";
                 } catch (ExecutionException rejected) {
-                    state = "FAILED"; code = "LEASE_LOST"; message = "未能领取执行租约，未执行 Handler";
+                    state = "FAILED";
+                    if ("HANDLER_START_UNRECORDED".equals(rejected.code())) {
+                        code = rejected.code(); message = rejected.getMessage();
+                    } else {
+                        code = "LEASE_LOST"; message = "未能领取执行租约，未执行 Handler";
+                    }
                 } catch (InterruptedException interrupted) {
                     state = "FAILED"; code = "HANDLER_INTERRUPTED"; message = "执行线程被中断";
                 } catch (IllegalArgumentException invalid) {
@@ -178,9 +186,9 @@ public class ExecutionServiceImpl implements IExecutionService {
                     Thread.interrupted();
                 }
             }
-            // 终态与待上报信息在同一条本地 SQL 中持久化；HTTP 上报由独立扫描完成。
+            // 终态、待上报信息与事件一起提交；HTTP 上报由独立扫描完成。
             results.save(new ExecutionCompletion(dispatch.attemptId(), dispatch.runId(), state, code, message,
-                    retryable, Instant.now()));
+                    retryable, handlerStarted, Instant.now()));
         } catch (RuntimeException failure) {
             org.slf4j.LoggerFactory.getLogger(getClass()).error("Execution persistence failed. attemptId={}, type={}",
                     dispatch.attemptId(), failure.getClass().getSimpleName());
@@ -192,6 +200,15 @@ public class ExecutionServiceImpl implements IExecutionService {
             slots.release();
         }
     }
+    private void recordHandlerStart(UUID attemptId) {
+        try {
+            if (mapper.startHandler(attemptId, Instant.now())) return;
+        } catch (org.springframework.dao.DataAccessException failure) {
+            // 入口记录未获本地确认时，业务执行保持未开始。
+        }
+        throw new ExecutionException(503, "HANDLER_START_UNRECORDED", "未能保存 Handler 入口事件，未执行 Handler");
+    }
+
     @Override
     public void reportPending() {
         var deadline = Instant.now().plus(properties.reportBudget());
@@ -201,15 +218,25 @@ public class ExecutionServiceImpl implements IExecutionService {
                 org.slf4j.LoggerFactory.getLogger(getClass()).debug("Report budget exhausted; remaining rows deferred. budget={}", properties.reportBudget());
                 return;
             }
-            if (!mapper.reportClaim(row.attemptId(), row.reportCount(), Instant.now().plus(properties.reportRetryDelay()))) continue;
+            if (!Boolean.TRUE.equals(transactions.execute(status -> mapper.reportClaim(row.attemptId(),
+                    row.reportCount(), Instant.now().plus(properties.reportRetryDelay()))))) continue;
             var dispatch = json.readValue(row.dispatchJson(), Dispatch.class);
             var result = new Result(row.attemptId(), row.runId(), dispatch.leaseVersion(), row.state(),
                     row.resultCode(), row.message(), row.retryable(), row.reportWorkerId(), row.reportSessionId());
-            boolean confirmed = false;
-            try { confirmed = reports.report(result); }
-            catch (RuntimeException ignored) { }
-            if (confirmed) mapper.reported(row.attemptId());
-            else if (row.reportCount() + 1 >= properties.maxReportAttempts())
+            Outcome outcome;
+            try { outcome = reports.report(result); }
+            catch (RuntimeException ignored) { outcome = Outcome.UNCONFIRMED; }
+            int number = row.reportCount() + 1;
+            boolean exhausted = outcome == Outcome.UNCONFIRMED && number >= properties.maxReportAttempts();
+            String eventType = switch (outcome) {
+                case ACKNOWLEDGED -> "REPORT_ACKNOWLEDGED";
+                case STALE -> "REPORT_STALE";
+                case UNCONFIRMED -> exhausted ? "REPORT_EXHAUSTED" : "REPORT_UNCONFIRMED";
+            };
+            boolean settled = outcome != Outcome.UNCONFIRMED;
+            transactions.executeWithoutResult(status ->
+                    mapper.recordReportOutcome(row.attemptId(), number, eventType, settled, Instant.now()));
+            if (exhausted)
                 org.slf4j.LoggerFactory.getLogger(getClass()).error("Result reporting exhausted. attemptId={}", row.attemptId());
         }
     }

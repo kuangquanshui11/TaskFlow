@@ -56,6 +56,7 @@ class DispatchOutboxTests {
         assertThatThrownBy(runs::dispatchPending).isInstanceOf(IllegalStateException.class);
         assertThat(runs.selectById(run.id()).attempts().getFirst().expiresAt()).isNull();
         assertThat(outbox.find(run.attempts().getFirst().id(), false).orElseThrow().state()).isEqualTo("WAITING");
+        assertThat(eventTypes(run.id())).isEmpty();
         doCallRealMethod().when(outbox).prepare(any(), anyString(), any(), any(), any());
         runs.dispatchPending(); relay.relay();
         assertThat(event(run).state()).isEqualTo("PUBLISHED");
@@ -73,6 +74,7 @@ class DispatchOutboxTests {
         assertThat(event(run).state()).isEqualTo("PUBLISHED");
         assertThat(runs.selectById(run.id()).state()).isEqualTo("RUNNING");
         verify(publisher, times(1)).publish(any());
+        assertThat(eventTypes(run.id())).containsExactly("MQ_DISPATCH_PREPARED", "MQ_PUBLISH_CLAIMED", "MQ_PUBLISHED");
     }
     @Test void crashBeforePublishRecoversExpiredClaimAndFencesOldRelay() {
         var run = runs.insert(request()); runs.dispatchPending();
@@ -97,6 +99,7 @@ class DispatchOutboxTests {
         assertThat(event(run).expiresAt()).isEqualTo(prepared.expiresAt());
         assertThat(runs.selectById(run.id()).attempts()).hasSize(1);
         verify(publisher, times(2)).publish(any());
+        assertThat(eventTypes(run.id())).containsExactly("MQ_DISPATCH_PREPARED", "MQ_PUBLISH_CLAIMED", "MQ_PUBLISH_CLAIMED", "MQ_PUBLISHED");
     }
     @Test void concurrentRelaysPublishOnlyClaimedEvent() throws Exception {
         var run = runs.insert(request()); runs.dispatchPending();
@@ -124,6 +127,11 @@ class DispatchOutboxTests {
         assertThat(failed.resultCode()).isEqualTo("MQ_PUBLISH_UNCONFIRMED");
         assertThat(failed.attempts()).hasSize(1);
         verify(publisher, times(3)).publish(any());
+        assertThat(eventTypes(run.id())).endsWith("MQ_PUBLISH_UNCONFIRMED", "ATTEMPT_FINISHED", "RUN_FINISHED");
+    }
+    private java.util.List<String> eventTypes(UUID runId) {
+        return jdbc.queryForList("SELECT event_type FROM scheduler_attempt_event WHERE run_id=? ORDER BY id",
+                String.class, runId.toString());
     }
     @Test void expiredLeaseCancelsUnpublishedEventAndRejectsLateResult() {
         var run = runs.insert(request()); runs.dispatchPending();

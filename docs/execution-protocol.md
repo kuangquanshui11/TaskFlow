@@ -1,6 +1,6 @@
 # 手动执行协议 v1
 
-本协议记录手动触发、执行快照和结果上报的 HTTP 契约。默认派发已切换为 [RabbitMQ v1 事件与事务 Outbox](reliable-dispatch.md)，本文的 Worker HTTP 派发作为显式兼容通道。Admin 拥有 Job 配置，Scheduler 拥有 Run/Attempt，Worker 的独立数据库只保存执行去重与待上报结果。所有服务按业务能力分包，不引用其他服务的 Java 模块或数据表。
+本协议记录手动触发、执行快照和结果上报的 HTTP 契约。默认派发已切换为 [RabbitMQ v1 事件与事务 Outbox](reliable-dispatch.md)，本文的 Worker HTTP 派发作为显式兼容通道。Admin 拥有 Job 配置，Scheduler 拥有 Run/Attempt，Worker 的独立数据库保存执行去重与待上报结果。两个执行服务也各自持久化 [Attempt 执行事件](attempt-events.md)。所有服务按业务能力分包，不引用其他服务的 Java 模块或数据表。
 
 ## 接口
 

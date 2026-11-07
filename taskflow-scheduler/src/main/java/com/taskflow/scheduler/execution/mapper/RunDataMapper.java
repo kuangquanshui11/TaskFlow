@@ -120,6 +120,15 @@ public class RunDataMapper {
                 state, code, message, ts(now), expected.id().toString(), expected.runId().toString(), expected.attemptNumber(),
                 expected.leaseVersion(), expected.state()) == 1;
     }
+    public void appendAttemptEvent(UUID runId, UUID attemptId, String workerId, long leaseVersion,
+            String type, Instant now, Integer sequence, String state, String code, Instant deadline) {
+        jdbc.update("""
+                INSERT INTO scheduler_attempt_event
+                    (run_id,attempt_id,worker_id,lease_version,event_type,occurred_at,sequence_number,state,result_code,deadline_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, runId.toString(), attemptId.toString(), workerId, leaseVersion,
+                type, ts(now), sequence, state, code, ts(deadline));
+    }
     public boolean runState(RunRow expected, String state, int attempt, String code, String message, Instant now) {
         return jdbc.update("UPDATE run_execution SET state=?,current_attempt=?,result_code=?,message=?,updated_at=?,started_at=COALESCE(started_at,?),finished_at=COALESCE(finished_at,?) WHERE id=? AND current_attempt=? AND state=? AND state IN ('READY','RUNNING','RETRY_WAIT')",
                 state, attempt, code, message, ts(now), ts("RUNNING".equals(state) ? now : null),

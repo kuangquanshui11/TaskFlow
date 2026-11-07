@@ -33,11 +33,30 @@ public class ExecutionMapper {
         return jdbc.update("UPDATE worker_execution SET state='RUNNING',report_worker_id=?,report_session_id=? WHERE attempt_id=? AND state='ACCEPTED'",
                 identity.workerId(), identity.sessionId().toString(), id.toString()) == 1;
     }
-    public boolean finish(UUID id, String state, String code, String message, boolean retryable, Instant now) {
-        return jdbc.update("UPDATE worker_execution SET state=?,result_code=?,message=?,retryable=?,finished_at=?,next_report_at=? WHERE attempt_id=? AND state='RUNNING'",
+    public boolean startHandler(UUID id, Instant now) {
+        return jdbc.update("""
+                INSERT INTO worker_attempt_event (run_id,attempt_id,worker_id,event_type,occurred_at,state)
+                SELECT run_id,attempt_id,report_worker_id,'HANDLER_STARTED',?,state
+                FROM worker_execution WHERE attempt_id=? AND state='RUNNING'
+                """, ts(now), id.toString()) == 1;
+    }
+    public boolean finish(UUID id, String state, String code, String message, boolean retryable, boolean handlerInvoked, Instant now) {
+        boolean updated = jdbc.update("UPDATE worker_execution SET state=?,result_code=?,message=?,retryable=?,finished_at=?,next_report_at=? WHERE attempt_id=? AND state='RUNNING'",
                 state, code, message, retryable, ts(now), ts(now), id.toString()) == 1;
+        if (!updated) return false;
+        jdbc.update("""
+                INSERT INTO worker_attempt_event (run_id,attempt_id,worker_id,event_type,occurred_at,state,result_code)
+                SELECT run_id,attempt_id,report_worker_id,?,?,state,result_code
+                FROM worker_execution WHERE attempt_id=?
+                """, handlerInvoked ? "HANDLER_FINISHED" : "EXECUTION_FINISHED", ts(now), id.toString());
+        return true;
     }
     public void recoverRunning(Instant now) {
+        jdbc.update("""
+                INSERT INTO worker_attempt_event (run_id,attempt_id,worker_id,event_type,occurred_at,state,result_code)
+                SELECT run_id,attempt_id,report_worker_id,'EXECUTION_RECOVERED',?,'FAILED','WORKER_RESTARTED'
+                FROM worker_execution WHERE state='RUNNING'
+                """, ts(now));
         jdbc.update("UPDATE worker_execution SET state='FAILED',result_code='WORKER_RESTARTED',message='Worker 重启，之前执行的外部副作用未知',retryable=FALSE,finished_at=?,next_report_at=? WHERE state='RUNNING'", ts(now), ts(now));
     }
     public List<ExecutionRow> reports(Instant now, int maxAttempts) {
@@ -45,11 +64,22 @@ public class ExecutionMapper {
                 this::read, maxAttempts, ts(now));
     }
     public boolean reportClaim(UUID id, int previousCount, Instant next) {
-        return jdbc.update("UPDATE worker_execution SET report_count=report_count+1,next_report_at=? WHERE attempt_id=? AND report_count=? AND reported=FALSE",
+        boolean claimed = jdbc.update("UPDATE worker_execution SET report_count=report_count+1,next_report_at=? WHERE attempt_id=? AND report_count=? AND reported=FALSE",
                 ts(next), id.toString(), previousCount) == 1;
+        if (claimed) appendReportEvent(id, previousCount + 1, "REPORT_CLAIMED", Instant.now());
+        return claimed;
     }
-    public void reported(UUID id) {
-        jdbc.update("UPDATE worker_execution SET reported=TRUE WHERE attempt_id=?", id.toString());
+    public void recordReportOutcome(UUID id, int number, String type, boolean settled, Instant now) {
+        if (settled) jdbc.update("UPDATE worker_execution SET reported=TRUE WHERE attempt_id=?", id.toString());
+        appendReportEvent(id, number, type, now);
+    }
+    private void appendReportEvent(UUID id, int number, String type, Instant now) {
+        jdbc.update("""
+                INSERT INTO worker_attempt_event
+                    (run_id,attempt_id,worker_id,event_type,occurred_at,report_number,state,result_code)
+                SELECT run_id,attempt_id,report_worker_id,?,?,?,state,result_code
+                FROM worker_execution WHERE attempt_id=?
+                """, type, ts(now), number, id.toString());
     }
     private ExecutionRow read(ResultSet rs, int index) throws SQLException {
         return new ExecutionRow(UUID.fromString(rs.getString("attempt_id")), UUID.fromString(rs.getString("run_id")),

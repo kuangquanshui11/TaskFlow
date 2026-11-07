@@ -159,7 +159,7 @@ class ExecutionLeaseTests {
             saving.countDown();
             assertThat(release.await(3, TimeUnit.SECONDS)).isTrue();
             return call.callRealMethod();
-        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), any());
+        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
         try {
             executions.insert(command); executions.executePending();
             assertThat(saving.await(2, TimeUnit.SECONDS)).isTrue();

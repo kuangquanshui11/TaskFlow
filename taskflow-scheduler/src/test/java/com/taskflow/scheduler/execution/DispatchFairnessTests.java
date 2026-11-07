@@ -267,7 +267,7 @@ class DispatchFairnessTests {
     }
 
     private IDispatchRelayService relay() {
-        return new DispatchRelayServiceImpl(outbox, publisher, properties("rabbitmq"), manager, nodes, json);
+        return new DispatchRelayServiceImpl(outbox, publisher, properties("rabbitmq"), manager, mapper, nodes, json);
     }
 
     private DispatchProperties properties(String transport) {

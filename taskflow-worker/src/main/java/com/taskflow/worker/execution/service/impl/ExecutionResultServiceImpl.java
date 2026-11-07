@@ -12,12 +12,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionException;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class ExecutionResultServiceImpl implements IExecutionResultService {
     private static final Logger log = LoggerFactory.getLogger(ExecutionResultServiceImpl.class);
     private final ExecutionMapper mapper;
     private final ResultPersistenceProperties properties;
+    private final TransactionTemplate transactions;
     private final AtomicInteger saving = new AtomicInteger();
     private final Counter saved;
     private final Counter recovered;
@@ -25,9 +29,11 @@ public class ExecutionResultServiceImpl implements IExecutionResultService {
     private final Counter conflicts;
     private final Counter interrupted;
 
-    public ExecutionResultServiceImpl(ExecutionMapper mapper, ResultPersistenceProperties properties, MeterRegistry metrics) {
+    public ExecutionResultServiceImpl(ExecutionMapper mapper, ResultPersistenceProperties properties, MeterRegistry metrics,
+            PlatformTransactionManager manager) {
         this.mapper = mapper;
         this.properties = properties;
+        transactions = new TransactionTemplate(manager);
         metrics.gauge("taskflow.worker.result.persistence.active", saving);
         saved = metrics.counter("taskflow.worker.result.persistence", "outcome", "saved");
         recovered = metrics.counter("taskflow.worker.result.persistence", "outcome", "recovered");
@@ -42,8 +48,10 @@ public class ExecutionResultServiceImpl implements IExecutionResultService {
         try {
             for (int attempt = 1; attempt <= properties.maxAttempts(); attempt++) {
                 try {
-                    if (mapper.finish(completion.attemptId(), completion.state(), completion.resultCode(),
-                            completion.message(), completion.retryable(), completion.finishedAt()) || alreadySaved(completion)) {
+                    if (Boolean.TRUE.equals(transactions.execute(status -> mapper.finish(completion.attemptId(),
+                            completion.state(), completion.resultCode(), completion.message(), completion.retryable(),
+                            completion.handlerInvoked(), completion.finishedAt())))
+                            || alreadySaved(completion)) {
                         saved.increment();
                         if (attempt > 1) {
                             recovered.increment();
@@ -56,7 +64,7 @@ public class ExecutionResultServiceImpl implements IExecutionResultService {
                     conflicts.increment();
                     diagnostic("RESULT_SAVE_CONFLICT", completion, attempt, "STATE_CONFLICT");
                     return false;
-                } catch (DataAccessException failure) {
+                } catch (DataAccessException | TransactionException failure) {
                     if (attempt == properties.maxAttempts()) {
                         exhausted.increment();
                         diagnostic("RESULT_SAVE_EXHAUSTED", completion, attempt, failure.getClass().getSimpleName());

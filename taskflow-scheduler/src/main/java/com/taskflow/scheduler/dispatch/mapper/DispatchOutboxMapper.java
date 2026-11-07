@@ -52,9 +52,9 @@ public class DispatchOutboxMapper {
         return jdbc.update("UPDATE dispatch_outbox SET state='PUBLISHED',published_at=?,claim_until=NULL,last_error_code=NULL WHERE event_id=? AND state='SENDING' AND claim_version=? AND claim_until>?",
                 ts(now), event.eventId().toString(), event.claimVersion(), ts(now)) == 1;
     }
-    public void failed(OutboxEvent event, boolean exhausted, String code, Instant next, Instant now) {
-        jdbc.update("UPDATE dispatch_outbox SET state=?,last_error_code=?,next_publish_at=?,claim_until=NULL WHERE event_id=? AND state='SENDING' AND claim_version=? AND claim_until>?",
-                exhausted ? "FAILED" : "READY", code, ts(next), event.eventId().toString(), event.claimVersion(), ts(now));
+    public boolean failed(OutboxEvent event, boolean exhausted, String code, Instant next, Instant now) {
+        return jdbc.update("UPDATE dispatch_outbox SET state=?,last_error_code=?,next_publish_at=?,claim_until=NULL WHERE event_id=? AND state='SENDING' AND claim_version=? AND claim_until>?",
+                exhausted ? "FAILED" : "READY", code, ts(next), event.eventId().toString(), event.claimVersion(), ts(now)) == 1;
     }
     public void cancel(UUID attemptId) {
         jdbc.update("UPDATE dispatch_outbox SET state='CANCELLED',claim_until=NULL WHERE attempt_id=? AND state IN ('WAITING','READY','SENDING')", attemptId.toString());

@@ -215,6 +215,10 @@ public class RunServiceImpl implements IRunService {
                         && remote.status() < 500 && remote.status() != 429;
                 transactions.executeWithoutResult(status -> {
                     var pair = locked(id);
+                    var now = Instant.now();
+                    mapper.appendAttemptEvent(command.runId(), id, prepared.target().workerId(), command.leaseVersion(),
+                            permanent ? "HTTP_DISPATCH_REJECTED" : "HTTP_DISPATCH_UNCONFIRMED", now,
+                            prepared.dispatchNumber(), null, null, null);
                     // Worker 已领取执行资格比派发响应更强；响应丢失不能终结正在执行的工作。
                     if (pair.attempt().terminal() || pair.attempt().ownerWorkerId() != null) return;
                     if (permanent || pair.attempt().dispatchCount() >= properties.maxDispatchAttempts()) {
@@ -227,7 +231,11 @@ public class RunServiceImpl implements IRunService {
                 continue;
             }
             // 本地确认事务失败保留原 Attempt 等待恢复，不能归类为 Worker 拒绝。
-            transactions.executeWithoutResult(status -> confirmAccepted(locked(id), command.leaseVersion()));
+            transactions.executeWithoutResult(status -> {
+                confirmAccepted(locked(id), command.leaseVersion());
+                mapper.appendAttemptEvent(command.runId(), id, prepared.target().workerId(), command.leaseVersion(),
+                        "HTTP_DISPATCH_ACCEPTED", Instant.now(), prepared.dispatchNumber(), null, null, null);
+            });
         }
     }
 
@@ -258,7 +266,7 @@ public class RunServiceImpl implements IRunService {
         }
     }
 
-    private record Prepared(Dispatch command, DispatchTarget target) { }
+    private record Prepared(Dispatch command, DispatchTarget target, int dispatchNumber) { }
     private Prepared claim(UUID id) {
         var pair = locked(id); var run = pair.run(); var attempt = pair.attempt(); var now = Instant.now();
         if (attempt.terminal() || terminal(run) || !java.util.Set.of("READY", "DISPATCHING").contains(attempt.state())
@@ -286,7 +294,12 @@ public class RunServiceImpl implements IRunService {
         var expires = attempt.expiresAt() == null
                 ? now.plusSeconds(snapshot.timeoutSeconds()).plus(properties.leaseGrace()).truncatedTo(java.time.temporal.ChronoUnit.MILLIS) : attempt.expiresAt();
         mapper.dispatching(id, expires, now.plus(properties.requestTimeout()).plus(properties.dispatchRetryDelay()), now);
-        return new Prepared(new Dispatch(id, run.id(), attempt.attemptNumber(), attempt.leaseVersion(), expires, snapshot), target);
+        int dispatchNumber = attempt.dispatchCount() + 1;
+        mapper.appendAttemptEvent(run.id(), id, target.workerId(), attempt.leaseVersion(),
+                dispatch.rabbitmq() ? "MQ_DISPATCH_PREPARED" : "HTTP_DISPATCH_CLAIMED", now,
+                dispatchNumber, "DISPATCHING", null, expires);
+        return new Prepared(new Dispatch(id, run.id(), attempt.attemptNumber(), attempt.leaseVersion(), expires, snapshot),
+                target, dispatchNumber);
     }
 
     private void confirmAccepted(Pair pair, long leaseVersion) {
@@ -306,13 +319,18 @@ public class RunServiceImpl implements IRunService {
         var now = Instant.now();
         if (!mapper.finish(attempt, state, code, message, now)) throw stale();
         outbox.cancel(attempt.id());
+        mapper.appendAttemptEvent(run.id(), attempt.id(), attempt.targetWorkerId(), attempt.leaseVersion(),
+                "ATTEMPT_FINISHED", now, null, state, code, null);
         var snapshot = json.readValue(run.snapshotJson(), Snapshot.class);
         if (!state.equals("SUCCEEDED") && retryable && attempt.attemptNumber() < snapshot.maxAttempts()) {
             int next = attempt.attemptNumber() + 1;
             insertAttempt(run.id(), next, now.plusSeconds(snapshot.retryIntervalSeconds()));
             if (!mapper.runState(run, "RETRY_WAIT", next, code, message, now)) throw stale();
         } else {
-            if (!mapper.runState(run, state.equals("SUCCEEDED") ? "SUCCEEDED" : "FAILED", attempt.attemptNumber(), code, message, now)) throw stale();
+            var finalState = state.equals("SUCCEEDED") ? "SUCCEEDED" : "FAILED";
+            if (!mapper.runState(run, finalState, attempt.attemptNumber(), code, message, now)) throw stale();
+            mapper.appendAttemptEvent(run.id(), attempt.id(), attempt.targetWorkerId(), attempt.leaseVersion(),
+                    "RUN_FINISHED", now, null, finalState, code, null);
         }
     }
     private Attempt freshAttempt(UUID runId, int number, Instant when) {

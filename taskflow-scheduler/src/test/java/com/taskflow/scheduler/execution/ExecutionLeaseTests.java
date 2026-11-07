@@ -50,6 +50,8 @@ class ExecutionLeaseTests {
         var run = dispatched(120);
         var request = request(run);
         var first = leases.updateLease(request);
+        jdbc.update("UPDATE run_attempt SET lease_until=? WHERE id=?",
+                Timestamp.from(first.leaseUntil().minusSeconds(1)), request.attemptId().toString());
         var second = leases.updateLease(request);
         var after = runs.selectById(run.id()).attempts().getFirst();
         assertThat(after.ownerWorkerId()).isEqualTo(workerId);
@@ -59,6 +61,11 @@ class ExecutionLeaseTests {
         assertThat(after.leaseVersion()).isEqualTo(command.getFirst().leaseVersion());
         assertThat(after.expiresAt()).isEqualTo(command.getFirst().expiresAt());
         assertThat(runs.selectById(run.id()).attempts()).hasSize(1);
+        assertThat(jdbc.queryForList("""
+                SELECT event_type FROM scheduler_attempt_event
+                WHERE run_id=? AND attempt_id=? AND worker_id=? AND lease_version=? AND deadline_at IS NOT NULL ORDER BY id
+                """, String.class, run.id().toString(), request.attemptId().toString(), workerId, request.leaseVersion()))
+                .containsExactly("HTTP_DISPATCH_CLAIMED", "LEASE_ACQUIRED", "LEASE_RENEWED");
     }
     @Test void wrongWorkerSessionRunAndVersionCannotRenew() {
         var run = dispatched(120); var request = request(run); leases.updateLease(request);

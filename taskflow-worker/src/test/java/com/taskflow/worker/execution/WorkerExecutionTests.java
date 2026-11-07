@@ -6,6 +6,7 @@ import java.util.UUID;
 import java.net.URI;
 import java.net.http.*;
 import com.taskflow.worker.execution.client.SchedulerReportClient;
+import com.taskflow.worker.execution.client.SchedulerReportClient.Outcome;
 import com.taskflow.worker.execution.client.SchedulerLeaseClient;
 import com.taskflow.worker.execution.config.ExecutionProperties;
 import com.taskflow.worker.execution.config.ResultPersistenceProperties;
@@ -26,7 +27,10 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -56,6 +60,7 @@ class WorkerExecutionTests {
         try (var connection = jdbc.getDataSource().getConnection()) {
             assertThat(connection.getMetaData().getURL()).startsWith("jdbc:h2:mem:taskflow-worker-");
         }
+        jdbc.update("DELETE FROM worker_attempt_event");
         jdbc.update("DELETE FROM worker_execution");
         when(leaseClient.updateLease(any())).thenAnswer(call -> {
             LeaseRequest request = call.getArgument(0);
@@ -90,10 +95,11 @@ class WorkerExecutionTests {
         var command = command("demoSuccess", 1, 30, "{}");
         var saves = new java.util.concurrent.atomic.AtomicInteger();
         doAnswer(call -> {
+            var answer = call.callRealMethod();
             if (saves.incrementAndGet() == 1)
-                throw new org.springframework.dao.DataAccessResourceFailureException("temporary database failure");
-            return call.callRealMethod();
-        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), any());
+                throw new org.springframework.dao.DataAccessResourceFailureException("temporary failure after local writes");
+            return answer;
+        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
         executions.insert(command); executions.executePending(); finished(command);
         executions.insert(command); executions.executePending();
         assertThat(saves.get()).isEqualTo(2);
@@ -101,11 +107,12 @@ class WorkerExecutionTests {
         assertThat(row.state()).isEqualTo("SUCCEEDED");
         assertThat(row.message()).isEqualTo("执行成功");
         verify(handlers, times(1)).execute(any(), any());
-        when(reports.report(any())).thenReturn(true);
+        when(reports.report(any())).thenReturn(Outcome.ACKNOWLEDGED);
         executions.reportPending();
         assertThat(mapper.find(command.attemptId()).orElseThrow().reported()).isTrue();
         verify(reports).report(argThat(result -> result.attemptId().equals(command.attemptId())
                 && result.status().equals("SUCCEEDED") && result.message().equals("执行成功")));
+        assertThat(eventTypes(command)).containsExactly("HANDLER_STARTED", "HANDLER_FINISHED", "REPORT_CLAIMED", "REPORT_ACKNOWLEDGED");
     }
     @Test void rejectedExecutorSettlesClaimWithoutCallingHandler() throws Exception {
         var command = command("demoSuccess", 1, 30, "{}");
@@ -114,7 +121,7 @@ class WorkerExecutionTests {
             if (saves.incrementAndGet() == 1)
                 throw new org.springframework.dao.DataAccessResourceFailureException("temporary save failure");
             return call.callRealMethod();
-        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), any());
+        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
         var stopped = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, properties, json, transactions, results, leases);
         try {
             stopped.recover(); stopped.insert(command); stopped.shutdown();
@@ -126,7 +133,19 @@ class WorkerExecutionTests {
             assertThat(mapper.pendingCount()).isZero();
             assertThat(saves.get()).isEqualTo(2);
             verify(handlers, never()).execute(any(), any());
+            assertThat(eventTypes(command)).containsExactly("EXECUTION_FINISHED");
         } finally { stopped.shutdown(); }
+    }
+    @Test void handlerIsNotInvokedWhenItsEntryEventCannotBeStored() throws Exception {
+        var command = command("demoSuccess", 1, 30, "{}");
+        doThrow(new org.springframework.dao.DataAccessResourceFailureException("event store unavailable"))
+                .when(mapper).startHandler(eq(command.attemptId()), any());
+        executions.insert(command);
+        executions.executePending();
+        finished(command);
+        verify(handlers, never()).execute(any(), any());
+        assertThat(mapper.find(command.attemptId()).orElseThrow().resultCode()).isEqualTo("HANDLER_START_UNRECORDED");
+        assertThat(eventTypes(command)).containsExactly("EXECUTION_FINISHED");
     }
     @Test void handlerFailureRetainsOriginalResultAndRetryPolicyAfterSaveRecovery() throws Exception {
         var command = command("demoFail", 1, 30, "{}");
@@ -135,7 +154,7 @@ class WorkerExecutionTests {
             if (saves.incrementAndGet() == 1)
                 throw new org.springframework.dao.DataAccessResourceFailureException("temporary failure");
             return call.callRealMethod();
-        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), any());
+        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
         executions.insert(command); executions.executePending(); finished(command);
         var row = mapper.find(command.attemptId()).orElseThrow();
         assertThat(row.state()).isEqualTo("FAILED");
@@ -149,7 +168,7 @@ class WorkerExecutionTests {
             assertThat(result.status()).isEqualTo("FAILED");
             assertThat(result.resultCode()).isEqualTo("HANDLER_FAILED");
             assertThat(result.retryable()).isTrue();
-            return true;
+            return Outcome.ACKNOWLEDGED;
         });
         executions.reportPending();
         assertThat(mapper.find(command.attemptId()).orElseThrow().reported()).isTrue();
@@ -163,12 +182,20 @@ class WorkerExecutionTests {
             var answer = call.callRealMethod();
             if (saves.incrementAndGet() == 1) {
                 originalFinish.set(mapper.find(command.attemptId()).orElseThrow().finishedAt());
-                mapper.reportClaim(command.attemptId(), 0, Instant.now().plusSeconds(60));
-                mapper.reported(command.attemptId());
-                throw new org.springframework.dao.DataAccessResourceFailureException("commit confirmation lost");
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override public void afterCommit() {
+                        var independent = new TransactionTemplate(transactions);
+                        independent.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                        independent.executeWithoutResult(status -> {
+                            mapper.reportClaim(command.attemptId(), 0, Instant.now().plusSeconds(60));
+                            mapper.recordReportOutcome(command.attemptId(), 1, "REPORT_ACKNOWLEDGED", true, Instant.now());
+                        });
+                        throw new org.springframework.dao.DataAccessResourceFailureException("commit confirmation lost");
+                    }
+                });
             }
             return answer;
-        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), any());
+        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
         var recoveredBefore = outcome("recovered");
         executions.insert(command); executions.executePending();
         await().atMost(Duration.ofSeconds(4)).until(() -> outcome("recovered") == recoveredBefore + 1);
@@ -181,6 +208,7 @@ class WorkerExecutionTests {
         assertThat(saves.get()).isEqualTo(2);
         verify(handlers, times(1)).execute(any(), any());
         verifyNoInteractions(reports);
+        assertThat(eventTypes(command)).containsExactly("HANDLER_STARTED", "HANDLER_FINISHED", "REPORT_CLAIMED", "REPORT_ACKNOWLEDGED");
     }
     @Test void exhaustedSavingIsFiniteTraceableAndDoesNotRepeatUnknownBusiness(CapturedOutput output) throws Exception {
         var command = command("demoSuccess", 1, 30, "{}");
@@ -189,7 +217,7 @@ class WorkerExecutionTests {
         doAnswer(call -> {
             attempts.incrementAndGet();
             throw new org.springframework.dao.DataAccessResourceFailureException("sensitive-db-error-do-not-log");
-        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), any());
+        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
         executions.insert(command); executions.executePending();
         await().atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
             assertThat(outcome("exhausted")).isEqualTo(exhaustedBefore + 1);
@@ -216,17 +244,17 @@ class WorkerExecutionTests {
     @Test void conflictingOrMissingTerminalRecordIsNotReportedAsSaved(CapturedOutput output) {
         var command = command("demoSuccess", 1, 30, "{}");
         executions.insert(command); mapper.claim(command.attemptId(), leases.owner());
-        mapper.finish(command.attemptId(), "FAILED", "WORKER_RESTARTED", "unknown", false, Instant.now());
+        mapper.finish(command.attemptId(), "FAILED", "WORKER_RESTARTED", "unknown", false, false, Instant.now());
         var conflictsBefore = outcome("conflict");
-        var completion = new ExecutionCompletion(command.attemptId(), command.runId(), "SUCCEEDED", "SUCCEEDED", "done", false, Instant.now());
+        var completion = new ExecutionCompletion(command.attemptId(), command.runId(), "SUCCEEDED", "SUCCEEDED", "done", false, true, Instant.now());
         assertThat(results.save(completion)).isFalse();
         assertThat(mapper.find(command.attemptId()).orElseThrow().resultCode()).isEqualTo("WORKER_RESTARTED");
-        var missing = new ExecutionCompletion(UUID.randomUUID(), command.runId(), "SUCCEEDED", "SUCCEEDED", "done", false, Instant.now());
+        var missing = new ExecutionCompletion(UUID.randomUUID(), command.runId(), "SUCCEEDED", "SUCCEEDED", "done", false, true, Instant.now());
         assertThat(results.save(missing)).isFalse();
         assertThat(outcome("conflict")).isEqualTo(conflictsBefore + 2);
         assertThat(output.getOut()).contains("code=RESULT_SAVE_CONFLICT");
-        verify(mapper, times(2)).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), any());
-        verify(mapper, times(1)).finish(eq(missing.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), any());
+        verify(mapper, times(2)).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
+        verify(mapper, times(1)).finish(eq(missing.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
     }
     @Test void resultSavingKeepsOriginalSlotsAndBoundsAdmissionDuringDatabaseFailure() throws Exception {
         var first = command("demoSuccess", 1, 30, "{}");
@@ -245,7 +273,7 @@ class WorkerExecutionTests {
                 throw new org.springframework.dao.DataAccessResourceFailureException("temporary failure");
             }
             return call.callRealMethod();
-        }).when(mapper).finish(any(), anyString(), anyString(), anyString(), anyBoolean(), any());
+        }).when(mapper).finish(any(), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
         try {
             executions.insert(first); executions.insert(second); executions.executePending();
             assertThat(entered.await(3, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
@@ -284,13 +312,17 @@ class WorkerExecutionTests {
         var command = command("demoSuccess", 1, 30, "{}");
         executions.insert(command); executions.executePending(); finished(command);
         when(reports.report(any())).thenAnswer(call -> {
-            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse(); return false;
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse(); return Outcome.UNCONFIRMED;
         });
         executions.reportPending();
         assertThat(mapper.find(command.attemptId()).orElseThrow().reported()).isFalse();
-        when(reports.report(any())).thenReturn(true); reportDue(); executions.reportPending();
+        when(reports.report(any())).thenReturn(Outcome.ACKNOWLEDGED); reportDue(); executions.reportPending();
         assertThat(mapper.find(command.attemptId()).orElseThrow().reported()).isTrue();
         executions.reportPending(); verify(reports, times(2)).report(any());
+        assertThat(eventTypes(command)).containsExactly("HANDLER_STARTED", "HANDLER_FINISHED",
+                "REPORT_CLAIMED", "REPORT_UNCONFIRMED", "REPORT_CLAIMED", "REPORT_ACKNOWLEDGED");
+        assertThat(jdbc.queryForList("SELECT report_number FROM worker_attempt_event WHERE attempt_id=? AND report_number IS NOT NULL ORDER BY id",
+                Integer.class, command.attemptId().toString())).containsExactly(1, 1, 2, 2);
     }
     @Test void failOnceUsesAttemptNumberAndProducesRetryableFailure() {
         var first = command("demoFailOnce", 1, 30, "{}");
@@ -323,12 +355,16 @@ class WorkerExecutionTests {
         var oldOwner = new com.taskflow.worker.execution.model.ExecutionOwner("worker-default", UUID.randomUUID());
         executions.insert(command); mapper.claim(command.attemptId(), oldOwner);
         executions.recover();
-        when(reports.report(any())).thenReturn(true);
+        when(reports.report(any())).thenReturn(Outcome.STALE);
         reportDue(); executions.reportPending();
         verify(reports).report(argThat(result -> result.workerId().equals(oldOwner.workerId())
                 && result.sessionId().equals(oldOwner.sessionId()) && result.resultCode().equals("WORKER_RESTARTED")));
         assertThat(mapper.find(command.attemptId()).orElseThrow().reportSessionId()).isEqualTo(oldOwner.sessionId());
         assertThat(leases.owner().sessionId()).isNotEqualTo(oldOwner.sessionId());
+        assertThat(mapper.find(command.attemptId()).orElseThrow().reported()).isTrue();
+        assertThat(eventTypes(command)).containsExactly("EXECUTION_RECOVERED", "REPORT_CLAIMED", "REPORT_STALE");
+        assertThat(jdbc.queryForList("SELECT DISTINCT worker_id FROM worker_attempt_event WHERE attempt_id=?",
+                String.class, command.attemptId().toString())).containsExactly(oldOwner.workerId());
     }
     @Test void unsupportedExpiredOrOverCapacityRequestsAreRejected() {
         assertThatThrownBy(() -> executions.insert(command("notAllowed", 1, 30, "{}"))).isInstanceOf(ExecutionException.class);
@@ -342,10 +378,16 @@ class WorkerExecutionTests {
     @Test void resultReportingHasAFiniteAttemptBudget() {
         var command = command("demoSuccess", 1, 30, "{}");
         executions.insert(command); executions.executePending(); finished(command);
-        when(reports.report(any())).thenReturn(false);
+        when(reports.report(any())).thenReturn(Outcome.UNCONFIRMED);
         for (int i = 0; i < 5; i++) { reportDue(); executions.reportPending(); }
         assertThat(mapper.find(command.attemptId()).orElseThrow().reportCount()).isEqualTo(3);
         verify(reports, times(3)).report(any());
+        assertThat(eventTypes(command)).endsWith("REPORT_CLAIMED", "REPORT_EXHAUSTED");
+    }
+
+    private java.util.List<String> eventTypes(Dispatch command) {
+        return jdbc.queryForList("SELECT event_type FROM worker_attempt_event WHERE run_id=? AND attempt_id=? ORDER BY id",
+                String.class, command.runId().toString(), command.attemptId().toString());
     }
     @Test void slowReportingDefersRemainingResultsWithoutClaimingAfterBudget() {
         var commands = java.util.List.of(command("demoSuccess", 1, 30, "{}"),
@@ -353,7 +395,7 @@ class WorkerExecutionTests {
         for (var command : commands) {
             executions.insert(command); mapper.claim(command.attemptId(), leases.owner());
             var state = command.snapshot().handlerKey().equals("demoFail") ? "FAILED" : "SUCCEEDED";
-            mapper.finish(command.attemptId(), state, state, "", false, Instant.now().minusSeconds(1));
+            mapper.finish(command.attemptId(), state, state, "", false, false, Instant.now().minusSeconds(1));
         }
         var rows = mapper.reports(Instant.now(), properties.maxReportAttempts());
         assertThat(rows).hasSize(3).allSatisfy(row -> assertThat(row.reported()).isFalse());
@@ -362,7 +404,7 @@ class WorkerExecutionTests {
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
             Result result = call.getArgument(0);
             assertThat(mapper.find(result.attemptId()).orElseThrow().reportCount()).isEqualTo(1);
-            sent.add(result); Thread.sleep(200); return true;
+            sent.add(result); Thread.sleep(200); return Outcome.ACKNOWLEDGED;
         });
         var limited = new ExecutionProperties(properties.schedulerUrl(), properties.dispatchToken(), properties.reportToken(),
                 properties.connectTimeout(), properties.requestTimeout(), properties.scanInterval(), properties.parallelism(),

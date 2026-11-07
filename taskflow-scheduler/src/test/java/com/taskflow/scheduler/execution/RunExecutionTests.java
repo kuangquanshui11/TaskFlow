@@ -78,6 +78,8 @@ class RunExecutionTests {
         runs.dispatchPending();
         assertThat(runs.selectById(run.id()).state()).isEqualTo("SUCCEEDED");
         assertThat(runs.selectById(run.id()).attempts()).hasSize(1);
+        assertThat(eventTypes(run.id(), run.attempts().getFirst().id())).containsExactly(
+                "HTTP_DISPATCH_CLAIMED", "ATTEMPT_FINISHED", "RUN_FINISHED", "HTTP_DISPATCH_ACCEPTED");
     }
     @Test void transportRetryReusesAttemptAndExactlyTheSameLeaseDeadline() {
         var captured = new java.util.ArrayList<Dispatch>();
@@ -103,6 +105,8 @@ class RunExecutionTests {
         assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion(), "FAILED", "HANDLER_FAILED", "bad", true, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001"))))
                 .isInstanceOf(RunException.class);
         assertThat(runs.selectById(run.id()).state()).isEqualTo("SUCCEEDED");
+        assertThat(eventTypes(run.id(), attempt.id())).containsExactly(
+                "HTTP_DISPATCH_CLAIMED", "HTTP_DISPATCH_ACCEPTED", "ATTEMPT_FINISHED", "RUN_FINISHED");
     }
     @Test void businessRetryCreatesNewAttemptWithinTheSameRunAndHonorsDelay() {
         doAnswer(call -> {
@@ -122,6 +126,10 @@ class RunExecutionTests {
         makeDue(); runs.dispatchPending();
         assertThat(runs.selectById(run.id()).state()).isEqualTo("SUCCEEDED");
         assertThat(runs.selectById(run.id()).attempts().get(1).id()).isNotEqualTo(waiting.attempts().getFirst().id());
+        var firstAttempt = waiting.attempts().getFirst().id();
+        var secondAttempt = waiting.attempts().get(1).id();
+        assertThat(eventTypes(run.id(), firstAttempt)).contains("ATTEMPT_FINISHED").doesNotContain("RUN_FINISHED");
+        assertThat(eventTypes(run.id(), secondAttempt)).contains("ATTEMPT_FINISHED", "RUN_FINISHED");
     }
     @Test void uncertainDispatchExhaustionNeverCreatesBusinessRetry() {
         doThrow(new RunException(503, "OFFLINE", "injected")).when(worker).dispatch(any());
@@ -140,8 +148,14 @@ class RunExecutionTests {
         jdbc.update("UPDATE run_attempt SET expires_at=? WHERE id=?", Timestamp.from(Instant.now().minusSeconds(1)), attempt.id().toString());
         runs.dispatchPending();
         assertThat(runs.selectById(run.id()).attempts().getFirst().state()).isEqualTo("TIMED_OUT");
+        assertThat(jdbc.queryForObject("SELECT result_code FROM scheduler_attempt_event WHERE attempt_id=? AND event_type='ATTEMPT_FINISHED'",
+                String.class, attempt.id().toString())).isEqualTo("LEASE_EXPIRED");
         assertThatThrownBy(() -> runs.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion(), "SUCCEEDED", "SUCCEEDED", "late", false, "worker-default", UUID.fromString("00000000-0000-0000-0000-000000000001"))))
                 .isInstanceOf(RunException.class);
+    }
+    private java.util.List<String> eventTypes(UUID runId, UUID attemptId) {
+        return jdbc.queryForList("SELECT event_type FROM scheduler_attempt_event WHERE run_id=? AND attempt_id=? ORDER BY id",
+                String.class, runId.toString(), attemptId.toString());
     }
     private void makeDue() { jdbc.update("UPDATE run_attempt SET next_dispatch_at=?", Timestamp.from(Instant.now().minusSeconds(1))); }
     private Create create(UUID key, String name, int maxAttempts) {
