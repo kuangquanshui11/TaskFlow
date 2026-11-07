@@ -61,5 +61,6 @@ cloud 使用 Eureka 的 `worker-id` 元数据定位该节点，local/test 使用
 | --- | --- | --- |
 | 在独立变更快照执行 `mvn.cmd -o -pl taskflow-admin,taskflow-scheduler,taskflow-worker -Dtest=RunApiTests,RunExecutionTests,WorkerDiscoveryTests,WorkerExecutionTests test` | 36 项通过，覆盖权限、归属校验、查询上限、Worker 定向和部分响应 | `.tools/attempt-timeline-snapshot-tests.log` |
 | 在根目录执行 `.\tools\test-execution.ps1 -SkipBuild -IncludeAttemptTimeline` | Worker 强制退出与恢复检查通过，两项时间线浏览器测试通过。全量浏览器随后在全局运行列表用例超时 | `.tools/attempt-timeline-process.log` |
+| 在 `513975e` 代码快照执行 `.\tools\test-execution.ps1 -SkipBuild -IncludeAttemptTimeline` | 56 项进程验收检查、26 项前端单元测试、22 项控制台及 3 项登录浏览器测试全部通过，前端构建成功 | `.tools/attempt-timeline-final-process.log` |
 
-进程验收在 Handler 开始后停止 Worker，确认 Scheduler 在 Worker 离线期间返回首个 Attempt 的 `LEASE_EXPIRED`。Worker 重启后，迟到上报被拒绝，同一 Run 的第二次 Attempt 成功。浏览器用离线期间保存的真实响应复现提示，再查询重启后的事件，覆盖 375 px 窗口。验收截图位于 `.tools/execution-e2e/20261107-101031-326/`。本次读取验证覆盖本机直连和发现层定向测试，未接入真实 Eureka 或 Broker。
+进程验收在 Handler 开始后停止 Worker，确认 Scheduler 在 Worker 离线期间返回首个 Attempt 的 `LEASE_EXPIRED`。同一标识的 Worker 重启后，迟到上报被拒绝，原 Run 的第二次 Attempt 成功。浏览器用离线期间保存的真实响应复现提示，再查询重启后的事件，覆盖 375 px 窗口。最终报告和截图位于 `.tools/attempt-timeline-snapshot/.tools/execution-e2e/20261107-101914-830/`。首轮工作区的全局运行列表回归因独立筛选改动的默认状态校验超时，代码快照的同一用例通过。本次读取验证覆盖本机直连和发现层定向测试，未接入真实 Eureka 或 Broker。
