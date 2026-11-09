@@ -5,14 +5,19 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Map;
 import java.util.UUID;
+import com.taskflow.admin.job.model.JobDefinition;
 import com.taskflow.admin.job.service.IJobService;
 import com.taskflow.admin.run.client.SchedulerClient;
 import com.taskflow.admin.run.dto.RunRequests.Insert;
+import com.taskflow.admin.run.dto.RunRequests.Rerun;
+import com.taskflow.admin.run.dto.RunRequests.RerunConfiguration;
 import com.taskflow.admin.run.exception.RunException;
 import com.taskflow.admin.run.service.IRunService;
 import org.springframework.stereotype.Service;
+import org.springframework.security.core.context.SecurityContextHolder;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 @Service
 public class RunServiceImpl implements IRunService {
@@ -28,18 +33,64 @@ public class RunServiceImpl implements IRunService {
     }
     @Override
     public JsonNode insert(Insert request) {
-        try {
-            var previous = selectByRequestKey(request.requestKey());
-            if (previous.path("jobId").longValue() != request.jobId()
-                    || previous.path("configVersion").longValue() != request.configVersion())
-                throw new RunException(409, "IDEMPOTENCY_CONFLICT", "该请求标识已用于其他任务或配置版本");
+        var previous = priorSubmission(request.requestKey());
+        if (previous != null) {
+            if (previous.hasNonNull("sourceRunId") || previous.path("jobId").longValue() != request.jobId()
+                    || previous.path("configVersion").longValue() != request.configVersion()) throw idempotencyConflict();
             return previous;
+        }
+        var snapshot = snapshot(jobs.selectById(request.jobId()), request.configVersion());
+        return scheduler.post("/internal/v1/runs/insert", Map.of("requestKey", request.requestKey(), "snapshot", snapshot));
+    }
+
+    @Override
+    public RerunConfiguration selectRerunConfiguration(UUID sourceRunId) {
+        var job = rerunJob(sourceRunId);
+        var config = job.configuration();
+        return new RerunConfiguration(config.name(), config.handlerKey(), Long.toString(job.configVersion()), config.enabled());
+    }
+
+    @Override
+    public JsonNode insertRerun(Rerun request) {
+        String actor = SecurityContextHolder.getContext().getAuthentication().getName();
+        var previous = priorSubmission(request.requestKey());
+        if (previous != null) {
+            if (!request.sourceRunId().toString().equals(previous.path("sourceRunId").asString())
+                    || !actor.equals(previous.path("rerunActor").asString())
+                    || previous.path("configVersion").longValue() != request.configVersion()) throw idempotencyConflict();
+            return previous;
+        }
+        var snapshot = snapshot(rerunJob(request.sourceRunId()), request.configVersion());
+        return scheduler.post("/internal/v1/runs/insertRerun", Map.of("requestKey", request.requestKey(),
+                "sourceRunId", request.sourceRunId(), "actor", actor, "snapshot", snapshot));
+    }
+
+    private JsonNode priorSubmission(UUID requestKey) {
+        try {
+            return selectByRequestKey(requestKey);
         } catch (RunException missing) {
             if (missing.status() != 404) throw missing;
+            return null;
         }
-        // 权威配置由数据库读取。这个本地只读事务在调用 Scheduler 前已结束。
-        var job = jobs.selectById(request.jobId());
-        if (job.configVersion() != request.configVersion())
+    }
+
+    private JobDefinition rerunJob(UUID sourceRunId) {
+        var source = selectById(sourceRunId);
+        if (!source.path("rerunEligible").isBoolean() || !source.path("rerunEligible").booleanValue())
+            throw new RunException(422, "RUN_RERUN_UNSAFE", "无法确认原运行的所有 Attempt 均未启动 Handler");
+        var jobId = source.path("jobId");
+        if (!jobId.isIntegralNumber() || !jobId.canConvertToLong() || jobId.longValue() < 1)
+            throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "原运行的任务 ID 不合法");
+        return jobs.selectById(jobId.longValue());
+    }
+
+    private static RunException idempotencyConflict() {
+        return new RunException(409, "IDEMPOTENCY_CONFLICT", "该请求标识已用于其他运行、操作者或配置版本");
+    }
+
+    private ObjectNode snapshot(JobDefinition job, long configVersion) {
+        // 权威配置由数据库读取。本地只读事务在调用 Scheduler 前已结束。
+        if (job.configVersion() != configVersion)
             throw new RunException(409, "JOB_VERSION_CONFLICT", "任务配置已变更，请刷新任务后再执行");
         var configuration = job.configuration();
         var snapshot = json.createObjectNode();
@@ -51,7 +102,7 @@ public class RunServiceImpl implements IRunService {
         snapshot.put("cronExpression", configuration.cronExpression()); snapshot.put("timeZone", configuration.timeZone());
         snapshot.put("misfirePolicy", configuration.misfirePolicy().name()); snapshot.put("enabled", configuration.enabled());
         snapshot.put("description", configuration.description());
-        return scheduler.post("/internal/v1/runs/insert", Map.of("requestKey", request.requestKey(), "snapshot", snapshot));
+        return snapshot;
     }
     @Override
     public JsonNode select(long jobId, int page, int pageSize) {

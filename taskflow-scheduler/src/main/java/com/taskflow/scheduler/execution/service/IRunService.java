@@ -6,6 +6,7 @@ import com.taskflow.scheduler.execution.model.RunRecords.*;
 
 public interface IRunService {
     RunView insert(Create request);
+    RunView insertRerun(Rerun request);
     UUID insertScheduled(Snapshot snapshot, java.time.Instant scheduledAt, java.time.Instant createdAt);
     RunView selectById(UUID id);
     RunView selectByRequestKey(UUID key);

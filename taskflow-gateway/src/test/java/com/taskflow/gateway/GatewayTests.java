@@ -98,10 +98,14 @@ class GatewayTests {
     @Test void rateLimitReturns429WithoutInvokingBusinessOrRetryingPost() throws Exception {
         org.mockito.Mockito.doReturn(reactor.core.publisher.Mono.just(new org.springframework.cloud.gateway.filter.ratelimit.RateLimiter.Response(false,Map.of())))
                 .when(limiter).isAllowed(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString());
-        var response=call("POST","/api/v1/runs/insert","{}",Map.of());
-        assertThat(response.statusCode()).as(response.body()).isEqualTo(429);
-        assertThat(response.body()).contains("RATE_LIMIT_EXCEEDED");
-        assertThat(response.headers().firstValue("Retry-After")).contains("1");
+        for (String path : List.of("/api/v1/runs/insert", "/api/v1/runs/insertRerun")) {
+            var response = call("POST", path, "{}", Map.of());
+            assertThat(response.statusCode()).as(response.body()).isEqualTo(429);
+            assertThat(response.body()).contains("RATE_LIMIT_EXCEEDED");
+            assertThat(response.headers().firstValue("Retry-After")).contains("1");
+        }
+        org.mockito.Mockito.verify(limiter, org.mockito.Mockito.times(2))
+                .isAllowed(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.startsWith("execute:"));
         assertThat(received).isEmpty();
     }
     private HttpResponse<String> call(String method,String path,String body,Map<String,String> headers) throws Exception {

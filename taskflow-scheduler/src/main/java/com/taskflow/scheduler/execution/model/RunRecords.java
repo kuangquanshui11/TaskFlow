@@ -10,7 +10,8 @@ public final class RunRecords {
     private RunRecords() { }
     public record RunRow(UUID id, long jobId, long configVersion, UUID requestKey, String fingerprint,
             String state, String snapshotJson, int currentAttempt, String resultCode, String message,
-            Instant createdAt, Instant updatedAt, String triggerType, Instant scheduledAt) { }
+            Instant createdAt, Instant updatedAt, String triggerType, Instant scheduledAt,
+            UUID sourceRunId, String rerunActor) { }
     public record Attempt(UUID id, UUID runId, int attemptNumber, long leaseVersion, String state,
             int dispatchCount, Instant nextDispatchAt, Instant expiresAt, Instant startedAt,
             Instant finishedAt, String resultCode, String message,
@@ -34,7 +35,8 @@ public final class RunRecords {
     }
     public record RunView(UUID id, long jobId, long configVersion, UUID requestKey, String state,
             Snapshot snapshot, List<Attempt> attempts, String resultCode, String message,
-            Instant createdAt, Instant updatedAt, String triggerType, Instant scheduledAt) { }
+            Instant createdAt, Instant updatedAt, String triggerType, Instant scheduledAt,
+            UUID sourceRunId, String rerunActor, boolean rerunEligible) { }
     public record Summary(UUID id, long jobId, long configVersion, String state, int attemptCount,
             String resultCode, String message, Instant createdAt, Instant updatedAt, String triggerType, Instant scheduledAt) { }
     public record Page(List<Summary> records, long total, int page, int pageSize) { }

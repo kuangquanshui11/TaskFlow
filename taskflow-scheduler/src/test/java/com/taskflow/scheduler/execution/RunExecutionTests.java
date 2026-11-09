@@ -69,6 +69,74 @@ class RunExecutionTests {
         assertThatThrownBy(() -> runs.insert(create(UUID.randomUUID(), "rollback", 1))).isInstanceOf(IllegalStateException.class);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM run_execution", Long.class)).isZero();
     }
+    @Test void concurrentRerunKeepsItsOriginAndActorAndReusesTheAcceptedRun() throws Exception {
+        var source = failedBeforeHandler();
+        assertThat(runs.selectById(source).rerunEligible()).isTrue();
+        var snapshot = create(UUID.randomUUID(), "current configuration", 1).snapshot();
+        var input = new Rerun(UUID.randomUUID(), source, "operator-1", snapshot);
+        assertThat(http("POST", "/internal/v1/runs/insertRerun", input, null).statusCode()).isEqualTo(401);
+        UUID rerunId;
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var first = executor.submit(() -> runs.insertRerun(input));
+            var second = executor.submit(() -> runs.insertRerun(input));
+            var accepted = first.get(5, TimeUnit.SECONDS);
+            rerunId = accepted.id();
+            assertThat(rerunId).isNotEqualTo(source).isEqualTo(second.get(5, TimeUnit.SECONDS).id());
+            assertThat(accepted.sourceRunId()).isEqualTo(source);
+            assertThat(accepted.rerunActor()).isEqualTo("operator-1");
+            assertThat(accepted.attempts()).hasSize(1);
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM run_attempt", Long.class)).isEqualTo(2);
+        assertThat(runs.selectById(source).state()).isEqualTo("FAILED");
+        assertThat(runs.selectByRequestKey(input.requestKey()).sourceRunId()).isEqualTo(source);
+        assertThat(http("POST", "/internal/v1/runs/insertRerun",
+                new Rerun(input.requestKey(), source, "operator-2", snapshot), "test-control-token").statusCode()).isEqualTo(409);
+        assertThat(http("POST", "/internal/v1/runs/insertRerun",
+                new Rerun(input.requestKey(), UUID.randomUUID(), "operator-1", snapshot), "test-control-token").statusCode()).isEqualTo(409);
+        assertThat(http("POST", "/internal/v1/runs/insert",
+                new Create(input.requestKey(), snapshot), "test-control-token").statusCode()).isEqualTo(409);
+    }
+    @Test void rerunRejectsAnEarlierHandlerFailureEvenIfTheLastAttemptNeverStarted() throws Exception {
+        doAnswer(call -> {
+            Dispatch dispatch = call.getArgument(0);
+            boolean first = dispatch.attemptNumber() == 1;
+            reportFailure(dispatch, first ? "HANDLER_FAILED" : "EXECUTOR_REJECTED", first);
+            return null;
+        }).when(worker).dispatch(any());
+        var source = runs.insert(create(UUID.randomUUID(), "mixed", 2));
+        runs.dispatchPending();
+        makeDue();
+        runs.dispatchPending();
+        var failed = runs.selectById(source.id());
+        assertThat(failed.state()).isEqualTo("FAILED");
+        assertThat(failed.resultCode()).isEqualTo("EXECUTOR_REJECTED");
+        assertThat(failed.rerunEligible()).isFalse();
+        var input = new Rerun(UUID.randomUUID(), source.id(), "operator-1", source.snapshot());
+        assertThat(http("POST", "/internal/v1/runs/insertRerun", input, "test-control-token").statusCode()).isEqualTo(422);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM run_execution", Long.class)).isEqualTo(1);
+    }
+    @Test void rerunAuditRollsBackWithItsFirstAttempt() {
+        var source = failedBeforeHandler();
+        doThrow(new IllegalStateException("injected")).when(mapper).insertAttempt(any());
+        var input = new Rerun(UUID.randomUUID(), source, "operator-1", runs.selectById(source).snapshot());
+        assertThatThrownBy(() -> runs.insertRerun(input)).isInstanceOf(IllegalStateException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM run_execution WHERE source_run_id IS NOT NULL", Long.class)).isZero();
+        assertThat(mapper.byKey(input.requestKey())).isEmpty();
+    }
+    private UUID failedBeforeHandler() {
+        doAnswer(call -> {
+            reportFailure(call.getArgument(0), "EXECUTION_PREPARATION_FAILED", false);
+            return null;
+        }).when(worker).dispatch(any());
+        var source = runs.insert(create(UUID.randomUUID(), "failed preparation", 1));
+        runs.dispatchPending();
+        return source.id();
+    }
+    private void reportFailure(Dispatch dispatch, String code, boolean retryable) {
+        runs.updateResult(new Result(dispatch.attemptId(), dispatch.runId(), dispatch.leaseVersion(),
+                "FAILED", code, "injected", retryable, "worker-default",
+                UUID.fromString("00000000-0000-0000-0000-000000000001")));
+    }
     @Test void callbackBeforeDispatchResponseCannotRegressTerminalState() {
         doAnswer(call -> {
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();

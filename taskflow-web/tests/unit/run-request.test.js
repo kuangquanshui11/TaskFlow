@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { beginRunRequest, clearPendingRun, readPendingRun } from '../../src/lib/run-request.js';
+import { beginRerunRequest, beginRunRequest, clearPendingRun, readPendingRun, setRunRequestOwner } from '../../src/lib/run-request.js';
 const storage = () => { const data = new Map(); return { getItem: (key) => data.get(key) || null, setItem: (key, value) => data.set(key, value), removeItem: (key) => data.delete(key) }; };
 const uuid1 = '11111111-1111-4111-8111-111111111111';
 const uuid2 = '22222222-2222-4222-8222-222222222222';
@@ -27,4 +27,20 @@ test('storage failures retain in-memory idempotency', () => {
   const first = beginRunRequest({ id: 80003, configVersion: 1 }, store, () => uuid1);
   assert.deepEqual(beginRunRequest({ id: 80003, configVersion: 1 }, store, () => uuid2), first);
   clearPendingRun(80003, uuid1, store);
+});
+test('rerun reload retains the original source, exact version and key for the same user', () => {
+  const source = '33333333-3333-4333-8333-333333333333';
+  const store = storage();
+  setRunRequestOwner('rerun-operator');
+  try {
+    const first = beginRerunRequest(source, '9007199254740993', store, () => uuid1);
+    setRunRequestOwner('another-operator');
+    assert.equal(readPendingRun(source, store), null);
+    setRunRequestOwner('rerun-operator');
+    assert.deepEqual(beginRerunRequest(source, '9007199254740994', store, () => uuid2), first);
+    assert.deepEqual(first, { sourceRunId: source, configVersion: '9007199254740993', requestKey: uuid1 });
+    clearPendingRun(source, uuid1, store);
+  } finally {
+    setRunRequestOwner('');
+  }
 });

@@ -5,6 +5,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import com.taskflow.scheduler.execution.dto.ExecutionProtocol.Create;
+import com.taskflow.scheduler.execution.dto.ExecutionProtocol.Rerun;
 import com.taskflow.scheduler.execution.model.RunRecords.*;
 import com.taskflow.scheduler.execution.dto.AttemptEvents;
 import com.taskflow.scheduler.execution.service.IAttemptEventService;
@@ -21,6 +22,8 @@ public class RunController {
     }
     @PostMapping("/insert") @ResponseStatus(HttpStatus.ACCEPTED)
     public RunView insert(@Valid @RequestBody Create request) { return runs.insert(request); }
+    @PostMapping("/insertRerun") @ResponseStatus(HttpStatus.ACCEPTED)
+    public RunView insertRerun(@Valid @RequestBody Rerun request) { return runs.insertRerun(request); }
     @GetMapping("/selectById")
     public RunView selectById(@RequestParam UUID id) { return runs.selectById(id); }
     @GetMapping("/selectAttemptEvents")

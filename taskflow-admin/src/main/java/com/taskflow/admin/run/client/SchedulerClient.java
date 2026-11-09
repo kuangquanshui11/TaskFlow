@@ -18,23 +18,28 @@ public class SchedulerClient {
         this.properties = properties; this.json = json;
         this.remote=remote;
     }
-    public JsonNode get(String path) { return call("GET", path, null); }
-    public JsonNode post(String path, Object body) { return call("POST", path, body); }
-    private JsonNode call(String method, String path, Object body) {
+    public JsonNode get(String path) { return call(path, null); }
+    public JsonNode post(String path, Object body) { return call(path, body); }
+    private JsonNode call(String path, Object body) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) throw new IllegalStateException("Scheduler call inside SQL transaction");
         if (properties.controlToken().isBlank())
             throw new RunException(503, "SERVICE_NOT_CONFIGURED", "手动执行服务尚未配置");
         var params = RemoteErrors.query(path);
+        boolean rerun = path.equals("/internal/v1/runs/insertRerun");
         String response;
         try {
             var headers=RemoteErrors.headers(properties.controlToken(),java.util.UUID.randomUUID().toString());
-            response=body==null?remote.get(RemoteErrors.action(path),params,headers):remote.insert(body,headers);
+            if (body == null) response = remote.get(RemoteErrors.action(path), params, headers);
+            else if (rerun) response = remote.insertRerun(body, headers);
+            else response = remote.insert(body, headers);
         } catch (RuntimeException failure) {
             int status=RemoteErrors.status(failure);
             if (status == 404 && path.startsWith("/internal/v1/runs/selectAttemptEvents?"))
                 throw new RunException(404, "ATTEMPT_NOT_FOUND", "该运行中未找到此 Attempt");
             if (status==404) throw new RunException(404,"RUN_NOT_FOUND","运行记录尚未找到");
-            if (status==409) throw new RunException(409,"IDEMPOTENCY_CONFLICT","原请求标识对应不同配置，请确认运行历史");
+            if (rerun && status == 422)
+                throw new RunException(422, "RUN_RERUN_UNSAFE", "无法确认原运行的所有 Attempt 均未启动 Handler");
+            if (status==409) throw new RunException(409,"IDEMPOTENCY_CONFLICT","原请求标识对应不同运行或配置，请确认运行历史");
             throw new RunException(503,"SCHEDULER_UNAVAILABLE","调度服务暂时不可用，请使用相同请求标识确认状态");
         }
         try {

@@ -26,7 +26,7 @@ Scheduler / Worker 保持原有独立服务间密钥。Admin 发往 Scheduler �
 | run:read | 是 | 是 | 是 | runs/select、selectById、selectByRequestKey |
 | worker:read | 是 | 是 | 是 | workers/select、selectById |
 | job:operate | 否 | 是 | 是 | jobs/enable、disable |
-| run:trigger | 否 | 是 | 是 | runs/insert |
+| run:trigger | 否 | 是 | 是 | runs/insert、runs/selectRerunConfiguration、runs/insertRerun |
 | job-sync:retry | 否 | 是 | 是 | job-sync/updateRetry |
 | job-sync:reconcile | 否 | 是 | 是 | config-reconciliation/insert |
 | job-sync:repair | 否 | 是 | 是 | config-reconciliation/updateRepair |
@@ -74,7 +74,7 @@ Gateway 使用 Reactive Redis + RequestRateLimiter，按可信 iss + sub 的 SHA
 | --- | --- | --- | --- |
 | read | GET；POST jobs/preview | 20 | 40 |
 | write | 其他 POST | 5 | 10 |
-| execute | POST runs/insert 或 job-sync/updateRetry | 1 | 3 |
+| execute | POST runs/insert、runs/insertRerun 或 job-sync/updateRetry | 1 | 3 |
 
 分组内接口共享额度，防止切换路径绕过。每个请求消耗一个令牌；这是允许短时突发的令牌桶，并非固定秒窗口。参数位于 Gateway application.yml 的 taskflow.rate-limit，默认重启生效。Redis Lua 原子扣减，键由内置脚本设置 TTL 回收。公开登录配置使用独立匿名 IP 桶；Gateway 只依据实际连接地址，不接受任意 X-Forwarded-For 充当限流身份。经过同一 Nginx 的匿名配置请求可能共享该桶。
 

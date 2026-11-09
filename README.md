@@ -14,6 +14,8 @@ Scheduler/Worker 已支持积压与延迟指标独立采样、失败保值及本
 
 工作台已提供最近 24 小时 / 7 天的运行总数、成功率、失败数、P95 耗时、状态分布和失败 Top 5，由 Admin 在 run:read 权限下查询 Scheduler，不缓存统计。
 
+具备 `run:trigger` 的操作员可在运行详情重跑已确认各次 Attempt 均未启动 Handler 的失败 Run。新 Run 保存原 Run ID 和操作者，提交超时后可用同一请求键重试。升级时先升级 Scheduler 并完成 V11 迁移，再发布 Admin、Gateway 和控制台。 [重跑设计与操作边界](docs/global-run-query.md#失败-run-的受控重跑)
+
 控制台已接入独立 Keycloak 登录、前端登录/退出和权限按钮、Gateway/Admin 双重 JWT 校验与角色权限。Admin 在 Redis 缓存 JWT 会话，每次有效请求续期 30 分钟，闲置过期后要求重新登录；Gateway 使用自有 Redis 分组限流，Nginx 做 IP 粗限流。启动 Admin/Gateway 前需配置 issuer、Keycloak 用户及各自 Redis；缺失配置或 Redis 故障不会放开访问。首次部署及验证边界见 [登录与入口安全](docs/access-security.md)。
 
 我们将任务配置、调度和 Handler 执行分别放在 Admin、Scheduler、Worker 中，各服务独立运行、持有数据并管理迁移。Admin 使用 MyBatis-Plus / MySQL / Flyway，提供任务新增、分页查询、详情、修改、启停、软删除、统计、Cron 预览与配置处理器查询。

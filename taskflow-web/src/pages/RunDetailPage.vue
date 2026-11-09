@@ -1,16 +1,18 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { runsApi } from '../api/runs.js';
 import { can } from '../auth/access.js';
 import AppIcon from '../components/AppIcon.vue';
 import RunAttemptTimeline from '../components/RunAttemptTimeline.vue';
+import RunRerunAction from '../components/RunRerunAction.vue';
 import RunStatusBadge from '../components/RunStatusBadge.vue';
 import { fullDate } from '../lib/format.js';
 import { isRunId, TRIGGER_TYPES } from '../lib/run-query.js';
 import { formatLatency } from '../lib/run-summary.js';
 
 const route = useRoute();
+const router = useRouter();
 const runId = computed(() => route.params.runId);
 const validId = computed(() => isRunId(runId.value));
 const authorized = computed(() => can('run:read'));
@@ -45,6 +47,11 @@ function elapsed({ startedAt, finishedAt }) {
   return formatLatency(startedAt && finishedAt ? Date.parse(finishedAt) - Date.parse(startedAt) : null);
 }
 
+async function openRun(id) {
+  await router.push({ name: 'run-detail', params: { runId: id }, query: route.query });
+  title.value?.focus();
+}
+
 watch([runId, authorized], load, { immediate: true });
 onMounted(() => title.value?.focus());
 onBeforeUnmount(() => controller?.abort());
@@ -58,7 +65,10 @@ onBeforeUnmount(() => controller?.abort());
         <h1 ref="title" tabindex="-1">运行详情</h1>
         <p>查看触发时保存的配置和每次尝试的结果。时间显示为 {{ timezone }}。</p>
       </div>
-      <button v-if="run" class="button secondary" @click="load"><AppIcon name="refresh" :size="16" />刷新详情</button>
+      <div v-if="run" class="detail-actions">
+        <button class="button secondary" @click="load"><AppIcon name="refresh" :size="16" />刷新详情</button>
+        <RunRerunAction v-if="can('run:trigger') && run.rerunEligible === true" :key="run.id" :source-run-id="run.id" @accepted="openRun" />
+      </div>
     </div>
 
     <div v-if="!authorized" class="error-banner" role="alert">当前账号没有运行查询权限。</div>
@@ -81,11 +91,18 @@ onBeforeUnmount(() => controller?.abort());
           <div class="wide"><dt>Run ID</dt><dd><code>{{ run.id }}</code></dd></div>
           <div><dt>任务 ID</dt><dd>{{ run.jobId }}</dd></div>
           <div><dt>触发来源</dt><dd>{{ TRIGGER_TYPES[run.triggerType] || run.triggerType || '—' }}</dd></div>
+          <template v-if="run.sourceRunId">
+            <div class="wide"><dt>原失败 Run</dt><dd><RouterLink class="source-run-link" :to="{ name: 'run-detail', params: { runId: run.sourceRunId }, query: route.query }"><code>{{ run.sourceRunId }}</code></RouterLink></dd></div>
+            <div><dt>重跑操作者</dt><dd>{{ run.rerunActor }}</dd></div>
+          </template>
           <div><dt>创建时间</dt><dd>{{ fullDate(run.createdAt, timezone) }}</dd></div>
           <div><dt>最后更新时间</dt><dd>{{ fullDate(run.updatedAt, timezone) }}</dd></div>
           <div v-if="run.scheduledAt"><dt>计划触发时间</dt><dd>{{ fullDate(run.scheduledAt, timezone) }}</dd></div>
           <div><dt>结果码 / 错误码</dt><dd><code>{{ run.resultCode || '—' }}</code></dd></div>
           <div v-if="run.message" class="wide"><dt>结果说明</dt><dd class="result-message">{{ run.message }}</dd></div>
+          <div v-if="can('run:trigger') && run.state === 'FAILED' && run.rerunEligible !== true" class="wide">
+            <dt>人工重跑</dt><dd>仅可重跑已确认各次 Attempt 均未启动 Handler 的运行。请先核对下游业务结果。</dd>
+          </div>
         </dl>
       </section>
 
@@ -138,6 +155,8 @@ onBeforeUnmount(() => controller?.abort());
 <style scoped>
 .run-detail-page > .panel + .panel { margin-top: 24px; }
 .run-detail-page .button { min-height: 44px; }
+.detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.source-run-link { color: var(--primary-hover); text-decoration: underline; }
 .back-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; color: var(--primary-hover); font-size: 13px; }
 .back-link:hover { text-decoration: underline; }
 .panel-heading p { font-size: 12px; line-height: 1.6; }

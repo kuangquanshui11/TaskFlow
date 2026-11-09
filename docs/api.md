@@ -294,6 +294,16 @@ Worker 本地结果保存失败会有限重试保存同一份结果，不重新�
 
 2026-10-27 状态并发修复保持上述路径、请求字段和响应结构不变。派发确认不能覆盖 SUCCEEDED/FAILED；并发收到内容相同且租约版本匹配的已接受终态时，仍幂等确认，旧租约或冲突终态仍返回 409 / STALE_ATTEMPT。重复确认不会增加 Attempt。MySQL 行锁、条件更新和回滚边界见 [状态并发修复验证](run-state-concurrency-verification.md)。
 
+## 失败 Run 的人工重跑
+
+GET `/api/v1/runs/selectRerunConfiguration?sourceRunId=<UUID>` 读取当前任务用于确认的 `name`、`handlerKey`、`enabled` 和 `configVersion`。配置版本使用十进制字符串返回，浏览器可原样提交以保留长整数精度。
+
+POST `/api/v1/runs/insertRerun` 接收 `sourceRunId`、`configVersion` 和 UUID `requestKey`。两个接口都要求 `run:trigger`。重跑提交与普通手动触发共享 Gateway 的执行限流。提交成功返回 HTTP 202 和新 Run 的详情。Scheduler 在本地事务保存新 Run、首次 Attempt、来源和操作者，并使用既有派发流程。新 Run 的 `triggerType` 为 `MANUAL`，`createdAt` 同时记录受理时间。
+
+详情响应增加 `rerunEligible`、可空的 `sourceRunId` 和 `rerunActor`。资格要求原 Run 已失败，且所有 Attempt 都明确在 Handler 启动前失败。操作者由 Admin 从已认证身份取得。内部 `POST /internal/v1/runs/insertRerun` 使用控制密钥，另接收由 Admin 读取的当前配置快照和操作者。
+
+原 Run 不符合资格时返回 422 / `RUN_RERUN_UNSAFE`，缺少操作权限返回 403，原 Run 或当前 Job 不存在时返回 404。配置更新后首次提交旧版本返回 409 / `JOB_VERSION_CONFLICT`。同一请求键、来源、操作者和配置版本的重试返回同一个已受理 Run，包括 Job 后续修改或删除的情况。将键用于另一来源、另一操作者、另一版本或普通触发时返回 409 / `IDEMPOTENCY_CONFLICT`。传输超时后使用原请求键手动重试。
+
 ## Attempt 执行时间线
 
 `GET /api/v1/runs/selectAttemptEvents?runId=UUID&attemptId=UUID` 要求 `run:read`，返回 ApiResponse。两个 UUID 必填，格式错误返回 400，Attempt 不属于指定 Run 时返回 404 / ATTEMPT_NOT_FOUND。

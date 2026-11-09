@@ -93,10 +93,12 @@ Worker 节点管理已实现：独立注册/心跳协议与密钥、Scheduler �
 
 工作台的失败总数和失败 Top 5 可跳转到全局运行列表。总数入口保留统计时间窗与失败状态，分组入口再带入任务 ID 与结果码。可打开单条运行详情并带着筛选条件返回。见 [运行统计设计](run-reporting.md)。
 
+运行详情支持对各次 Attempt 均确定未启动 Handler 的失败 Run 进行受控重跑。Admin 校验操作权限和当前 Job 版本，Scheduler 创建新 Run 并在同一事务记录原 Run、操作者及受理时间。控制台可用原请求键重试未确认的提交。见 [失败 Run 的受控重跑](global-run-query.md#失败-run-的受控重跑)。
+
 平台治理包含：Nginx → Gateway → Admin，内部服务名发现与 Feign 调用、熔断及同步 HTTP 链路追踪；注册/配置中心独立认证、非秘密策略仓库及可选 Jaeger Compose 已提供。默认配置变更重启生效，不提供完整热刷新；Eureka/Config 单实例，HA 和真实 Jaeger 容器验收仍未完成。
 
 - S1 提供 Scheduler 时间窗统计、Admin `run:read` 代理、工作台运行概览和失败 Top 5，见 [统计设计](run-reporting.md) 与 [统计验证](run-reporting-verification.md)。S2 提供待发布积压、Attempt 派发逾期与租约到期、心跳年龄、Worker 待上报与执行积压的瞬时采样，见 [指标字典](observability-metrics.md) 与 [采样验证](observability-metrics-verification.md)。
-- S3 首版为指定 Scheduler 提供派发持续逾期和采样中断告警，监控端通过 webhook 发送触发和恢复通知。部署、数据新鲜度与验收范围见 [Scheduler 告警](scheduler-alerts.md)。持久化操作审计、端到端耗时分解与结构化日志仍待实施。
+- S3 首版为指定 Scheduler 提供派发持续逾期和采样中断告警，监控端通过 webhook 发送触发和恢复通知。部署、数据新鲜度与验收范围见 [Scheduler 告警](scheduler-alerts.md)。操作审计已覆盖受理的人工重跑，其他操作审计、端到端耗时分解与结构化日志仍待实施。
 - Keycloak 用户登录、JWT 验证、管理权限、Redis 30 分钟滑动会话及入口限流已实现，见 [登录与入口安全](access-security.md)。2026-10-28 安全验证时 Redis 不可达，真实 Redis 会话与限流的后续实测见 [带登录的链路验证](authenticated-regression-verification.md)。
 - 各服务镜像和 Compose、一键启动说明、API 示例。
 - 在明确拓扑和负载下测量吞吐与延迟，不提前填写性能结论。

@@ -82,6 +82,51 @@ class RunApiTests {
         assertThat(json.readTree(response.body()).get("code").stringValue()).isEqualTo("SCHEDULER_UNAVAILABLE");
         assertThat(jobs.selectById(job.id()).configVersion()).isEqualTo(1);
     }
+    @Test void rerunRequiresPermissionAndUsesTheAuthenticatedActorAndCurrentJobVersion() throws Exception {
+        var job = job("current-rerun");
+        var source = UUID.randomUUID();
+        var key = UUID.randomUUID();
+        var viewer = com.taskflow.admin.support.TestTokens.token(Map.of("resource_access",
+                Map.of("taskflow-api", Map.of("roles", java.util.List.of("VIEWER")))));
+        com.taskflow.admin.support.TestSessionConfiguration.register(viewer);
+        var body = Map.of("sourceRunId", source, "configVersion", "1", "requestKey", key, "actor", "forged");
+        String action = "/insertRerun";
+        assertThat(post(action, body, viewer).statusCode()).isEqualTo(403);
+        assertThat(get("/selectRerunConfiguration?sourceRunId=" + source, viewer).statusCode()).isEqualTo(403);
+        verifyNoInteractions(scheduler);
+        String admin = com.taskflow.admin.support.TestTokens.admin();
+        when(scheduler.get("/internal/v1/runs/selectById?id=" + source)).thenReturn(json.createObjectNode()
+                .put("id", source.toString()).put("jobId", job.id()).put("state", "FAILED").put("rerunEligible", true));
+        when(scheduler.get("/internal/v1/runs/selectByRequestKey?requestKey=" + key))
+                .thenThrow(new RunException(404, "RUN_NOT_FOUND", "missing"));
+        var preview = get("/selectRerunConfiguration?sourceRunId=" + source, admin);
+        assertThat(preview.statusCode()).isEqualTo(200);
+        assertThat(json.readTree(preview.body()).path("data").path("configVersion").asString()).isEqualTo("1");
+        var stale = Map.of("sourceRunId", source, "configVersion", 2, "requestKey", key);
+        assertThat(post(action, stale, admin).statusCode()).isEqualTo(409);
+        verify(scheduler, never()).post(anyString(), any());
+        var accepted = json.createObjectNode().put("id", UUID.randomUUID().toString()).put("state", "READY")
+                .put("jobId", job.id()).put("sourceRunId", source.toString()).put("rerunActor", "test-admin").put("configVersion", 1);
+        when(scheduler.post(eq("/internal/v1/runs/insertRerun"), any())).thenAnswer(call -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            Map<?, ?> sent = call.getArgument(1);
+            assertThat(sent.get("actor")).isEqualTo("test-admin");
+            assertThat(sent.get("sourceRunId")).isEqualTo(source);
+            assertThat(json.valueToTree(sent.get("snapshot")).path("configVersion").longValue()).isEqualTo(1);
+            return accepted;
+        });
+        assertThat(post(action, body, admin).statusCode()).isEqualTo(202);
+        jobs.delete(job.id(), 1);
+        doReturn(accepted).when(scheduler).get("/internal/v1/runs/selectByRequestKey?requestKey=" + key);
+        var retry = post(action, body, admin);
+        assertThat(retry.statusCode()).isEqualTo(202);
+        assertThat(json.readTree(retry.body()).path("data").path("id")).isEqualTo(accepted.path("id"));
+        verify(scheduler, times(1)).post(eq("/internal/v1/runs/insertRerun"), any());
+        assertThat(post(Map.of("jobId", job.id(), "configVersion", 1, "requestKey", key)).statusCode()).isEqualTo(409);
+        var otherAdmin = com.taskflow.admin.support.TestTokens.token(Map.of("sub", "different-admin"));
+        com.taskflow.admin.support.TestSessionConfiguration.register(otherAdmin);
+        assertThat(post(action, body, otherAdmin).statusCode()).isEqualTo(409);
+    }
     @Test void attemptTimelineRequiresRunReadAndProxiesOutsideTheLocalTransaction() throws Exception {
         var runId = UUID.randomUUID();
         var attemptId = UUID.randomUUID();
@@ -114,8 +159,16 @@ class RunApiTests {
                 JobDefinition.ScheduleType.MANUAL, null, "Asia/Shanghai", false, 30, 3, 1, JobDefinition.MisfirePolicy.SKIP));
     }
     private HttpResponse<String> post(Object body) throws Exception {
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/runs/insert")).header("Authorization", "Bearer " + com.taskflow.admin.support.TestTokens.admin())
+        return post("/insert", body, com.taskflow.admin.support.TestTokens.admin());
+    }
+    private HttpResponse<String> post(String action, Object body, String token) throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/runs" + action)).header("Authorization", "Bearer " + token)
                 .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build();
+        try (var client = HttpClient.newHttpClient()) { return client.send(request, HttpResponse.BodyHandlers.ofString()); }
+    }
+    private HttpResponse<String> get(String action, String token) throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/runs" + action))
+                .header("Authorization", "Bearer " + token).GET().build();
         try (var client = HttpClient.newHttpClient()) { return client.send(request, HttpResponse.BodyHandlers.ofString()); }
     }
 }

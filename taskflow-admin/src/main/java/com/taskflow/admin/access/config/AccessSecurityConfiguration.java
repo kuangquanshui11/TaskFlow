@@ -68,7 +68,8 @@ public class AccessSecurityConfiguration {
                         .requestMatchers(HttpMethod.POST, "/api/v1/jobs/enable", "/api/v1/jobs/disable").hasAuthority("job:operate")
                         .requestMatchers(HttpMethod.GET, "/api/v1/sales-reports/select", "/api/v1/sales-reports/selectById",
                                 "/api/v1/sales-reports/selectExport").hasAuthority("run:read")
-                        .requestMatchers(HttpMethod.POST, "/api/v1/runs/insert").hasAuthority("run:trigger")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/runs/insert", "/api/v1/runs/insertRerun").hasAuthority("run:trigger")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/runs/selectRerunConfiguration").hasAuthority("run:trigger")
                         .requestMatchers(HttpMethod.GET, "/api/v1/runs/select", "/api/v1/runs/selectById",
                                 "/api/v1/runs/selectByRequestKey", "/api/v1/runs/selectSummary", "/api/v1/runs/selectGlobal",
                                 "/api/v1/runs/selectAttemptEvents").hasAuthority("run:read")

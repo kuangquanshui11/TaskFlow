@@ -1,4 +1,4 @@
-param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster, [switch]$IncludeConfigReconciliation, [switch]$IncludeAttemptTimeline,
+param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster, [switch]$IncludeConfigReconciliation, [switch]$IncludeAttemptTimeline, [switch]$IncludeRunRerun,
     [ValidateSet('http','rabbitmq')][string]$Transport = 'http', [string]$MqSettingsPath,[string]$PlatformSettingsPath,
     [ValidateRange(1024,65535)][int]$IdentityPort = 19190)
 $ErrorActionPreference = 'Stop'
@@ -7,6 +7,9 @@ if ($IncludeWorkerCluster -and ($Transport -ne 'rabbitmq' -or $PlatformSettingsP
 }
 if ($IncludeAttemptTimeline -and ($Transport -ne 'http' -or $PlatformSettingsPath)) {
     throw 'Attempt timeline crash acceptance requires isolated standalone HTTP mode.'
+}
+if ($IncludeRunRerun -and ($Transport -ne 'http' -or $PlatformSettingsPath -or $SkipBrowser)) {
+    throw 'Run rerun acceptance requires standalone HTTP mode and browser tests.'
 }
 $repoPath = Split-Path -Parent $PSScriptRoot
 Set-Location $repoPath
@@ -154,6 +157,33 @@ function Wait-TestRun([string]$Id) {
         Start-Sleep -Milliseconds 250
     }
     throw 'Run did not reach a terminal state.'
+}
+function New-RerunFixture {
+    $rerunJob = New-TestJob 'demoSuccess'
+    $templateRun = New-TestRun $rerunJob
+    Assert-Check ((Wait-TestRun $templateRun.run.id).state -eq 'SUCCEEDED') 'Rerun fixture uses a working Job and snapshot'
+    $sourceId = [Guid]::NewGuid().ToString()
+    $sourceAttemptId = [Guid]::NewGuid().ToString()
+    $sourceRequestKey = [Guid]::NewGuid().ToString()
+    $templateId = ([Guid]$templateRun.run.id).ToString()
+    $dbPath = (Join-Path $runRoot 'scheduler-db').Replace('\','/')
+    if (!(Test-Path -LiteralPath "$dbPath.mv.db" -PathType Leaf)) { throw 'Isolated Scheduler database is missing.' }
+    # 构造一条历史 Worker 启动前失败记录，保留模板 Run 的真实执行历史。
+    Stop-TestService 'scheduler'
+    $sql = @"
+INSERT INTO run_execution (id,job_id,config_version,request_key,fingerprint,state,snapshot_json,current_attempt,
+    result_code,message,created_at,updated_at,finished_at,trigger_type)
+SELECT '$sourceId',job_id,config_version,'$sourceRequestKey',fingerprint,'FAILED',snapshot_json,1,
+    'EXECUTOR_REJECTED','Isolated pre-handler fixture',created_at,updated_at,finished_at,'MANUAL'
+FROM run_execution WHERE id='$templateId';
+INSERT INTO run_attempt (id,run_id,attempt_number,lease_version,state,dispatch_count,next_dispatch_at,finished_at,result_code)
+VALUES ('$sourceAttemptId','$sourceId',1,1,'FAILED',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'EXECUTOR_REJECTED');
+"@
+    & $javaExe -cp $h2Jar.FullName org.h2.tools.Shell -url "jdbc:h2:file:$dbPath;IFEXISTS=TRUE;MODE=MySQL;DATABASE_TO_LOWER=TRUE" -user sa -password '' -sql $sql
+    if ($LASTEXITCODE -ne 0) { throw 'Run rerun fixture could not be stored.' }
+    Start-TestService 'scheduler'
+    Assert-Check ((Wait-TestRun $sourceId).rerunEligible -eq $true) 'Scheduler recognizes the isolated pre-handler failure'
+    Set-AcceptanceEnvironment 'TASKFLOW_RERUN_SOURCE_ID' $sourceId
 }
 function Wait-TestAttemptEvents([string]$RunId, [string]$AttemptId, [scriptblock]$Ready) {
     $uri = "http://127.0.0.1:19080/api/v1/runs/selectAttemptEvents?runId=$RunId&attemptId=$AttemptId"
@@ -747,15 +777,23 @@ info:
         Start-Sleep -Milliseconds 500
         $env:TASKFLOW_EXECUTION_E2E = 'true'
         $env:TASKFLOW_EXECUTION_EVIDENCE_DIR = $runRoot
+        Set-AcceptanceEnvironment 'TASKFLOW_RERUN_SOURCE_ID' ''
+        if ($IncludeRunRerun) { New-RerunFixture }
         Push-Location (Join-Path $repoPath 'taskflow-web')
         try {
-            & npm.cmd run test:e2e
-            if ($LASTEXITCODE -ne 0) { throw 'Browser execution verification failed.' }
-            & npx.cmd playwright test --config playwright.access.config.js
-            if ($LASTEXITCODE -ne 0) { throw 'Browser login and session verification failed.' }
+            if ($IncludeRunRerun) {
+                & npx.cmd playwright test global-runs.spec.js run-detail.spec.js --reporter=list
+                if ($LASTEXITCODE -ne 0) { throw 'Run rerun browser verification failed.' }
+                Assert-Check $true 'Browser rerun uses current configuration and recovers a lost response without a duplicate'
+            } else {
+                & npm.cmd run test:e2e
+                if ($LASTEXITCODE -ne 0) { throw 'Browser execution verification failed.' }
+                & npx.cmd playwright test --config playwright.access.config.js
+                if ($LASTEXITCODE -ne 0) { throw 'Browser login and session verification failed.' }
+                Assert-Check $true 'Existing console and new execution browser tests pass'
+            }
         }
         finally { Pop-Location }
-        Assert-Check $true 'Existing console and new execution browser tests pass'
     }
     $evidence | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $runRoot 'report.json') -Encoding utf8
     Write-Output ("Execution evidence: " + $runRoot)

@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import com.taskflow.scheduler.execution.client.WorkerClient;
 import com.taskflow.scheduler.execution.config.RunProperties;
@@ -52,24 +53,39 @@ public class RunServiceImpl implements IRunService {
 
     @Override
     public RunView insert(Create request) {
-        validate(request.snapshot());
-        String encoded = json.writeValueAsString(request.snapshot());
+        return insertManual(request.requestKey(), request.snapshot(), null, null);
+    }
+
+    @Override
+    public RunView insertRerun(Rerun request) {
+        return insertManual(request.requestKey(), request.snapshot(), request.sourceRunId(), request.actor());
+    }
+
+    private RunView insertManual(UUID requestKey, Snapshot snapshot, UUID sourceRunId, String actor) {
+        validate(snapshot);
+        String encoded = json.writeValueAsString(snapshot);
         String fingerprint = fingerprint(encoded);
-        var existing = mapper.byKey(request.requestKey());
-        if (existing.isPresent()) return requireSame(existing.get(), fingerprint);
+        var existing = mapper.byKey(requestKey);
+        if (existing.isPresent()) return requireSame(existing.get(), fingerprint, sourceRunId, actor);
         try {
             UUID id = transactions.execute(status -> {
+                if (sourceRunId != null) {
+                    var source = mapper.lock(sourceRunId)
+                            .orElseThrow(() -> new RunException(404, "RUN_NOT_FOUND", "原运行记录不存在"));
+                    if (source.jobId() != snapshot.jobId() || !canRerun(source, mapper.attempts(sourceRunId)))
+                        throw new RunException(422, "RUN_RERUN_UNSAFE", "无法确认原运行的所有 Attempt 均未启动 Handler");
+                }
                 var now = Instant.now();
-                var run = new RunRow(UUID.randomUUID(), request.snapshot().jobId(), request.snapshot().configVersion(),
-                        request.requestKey(), fingerprint, "READY", encoded, 1, null, null, now, now, "MANUAL", null);
+                var run = new RunRow(UUID.randomUUID(), snapshot.jobId(), snapshot.configVersion(),
+                        requestKey, fingerprint, "READY", encoded, 1, null, null, now, now, "MANUAL", null, sourceRunId, actor);
                 mapper.insert(run);
                 insertAttempt(run.id(), 1, now);
                 return run.id();
             });
             return selectById(id);
         } catch (DuplicateKeyException concurrentInsert) {
-            var winner = mapper.byKey(request.requestKey()).orElseThrow(() -> concurrentInsert);
-            return requireSame(winner, fingerprint);
+            var winner = mapper.byKey(requestKey).orElseThrow(() -> concurrentInsert);
+            return requireSame(winner, fingerprint, sourceRunId, actor);
         }
     }
 
@@ -84,7 +100,7 @@ public class RunServiceImpl implements IRunService {
         validate(snapshot);
         var encoded = json.writeValueAsString(snapshot);
         var run = new RunRow(UUID.randomUUID(), snapshot.jobId(), snapshot.configVersion(), UUID.randomUUID(),
-                fingerprint(encoded), "READY", encoded, 1, null, null, createdAt, createdAt, "CRON", scheduledAt);
+                fingerprint(encoded), "READY", encoded, 1, null, null, createdAt, createdAt, "CRON", scheduledAt, null, null);
         mapper.insert(run);
         insertAttempt(run.id(), 1, createdAt);
         return run.id();
@@ -351,13 +367,22 @@ public class RunServiceImpl implements IRunService {
         return new Pair(run, mapper.lockAttempt(id).orElseThrow(() -> new RunException(404, "ATTEMPT_NOT_FOUND", "执行尝试不存在")));
     }
     private RunView view(RunRow row) {
+        var attempts = mapper.attempts(row.id());
         return new RunView(row.id(), row.jobId(), row.configVersion(), row.requestKey(), row.state(),
-                json.readValue(row.snapshotJson(), Snapshot.class), mapper.attempts(row.id()), row.resultCode(),
-                row.message(), row.createdAt(), row.updatedAt(), row.triggerType(), row.scheduledAt());
+                json.readValue(row.snapshotJson(), Snapshot.class), attempts, row.resultCode(),
+                row.message(), row.createdAt(), row.updatedAt(), row.triggerType(), row.scheduledAt(),
+                row.sourceRunId(), row.rerunActor(), canRerun(row, attempts));
     }
-    private RunView requireSame(RunRow row, String fingerprint) {
-        if (!row.fingerprint().equals(fingerprint))
-            throw new RunException(409, "IDEMPOTENCY_CONFLICT", "相同请求标识对应不同配置");
+    private static boolean canRerun(RunRow row, List<Attempt> attempts) {
+        // Worker 只在领取执行租约之前使用这两个结果码。旧记录缺少确定证据时按不可重跑处理。
+        return "FAILED".equals(row.state()) && row.currentAttempt() > 0 && attempts.size() == row.currentAttempt()
+                && attempts.stream().allMatch(attempt -> "FAILED".equals(attempt.state()) && attempt.ownerWorkerId() == null
+                    && ("EXECUTOR_REJECTED".equals(attempt.resultCode()) || "EXECUTION_PREPARATION_FAILED".equals(attempt.resultCode())));
+    }
+    private RunView requireSame(RunRow row, String fingerprint, UUID sourceRunId, String actor) {
+        if (!row.fingerprint().equals(fingerprint) || !Objects.equals(row.sourceRunId(), sourceRunId)
+                || !Objects.equals(row.rerunActor(), actor))
+            throw new RunException(409, "IDEMPOTENCY_CONFLICT", "相同请求标识对应不同配置或运行来源");
         return view(row);
     }
     private void validate(Snapshot snapshot) {

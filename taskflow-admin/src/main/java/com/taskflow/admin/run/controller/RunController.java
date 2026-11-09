@@ -5,6 +5,8 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import com.taskflow.admin.run.dto.RunRequests.Insert;
+import com.taskflow.admin.run.dto.RunRequests.Rerun;
+import com.taskflow.admin.run.dto.RunRequests.RerunConfiguration;
 import com.taskflow.admin.run.service.IRunService;
 import com.taskflow.admin.system.dto.ApiResponse;
 import tools.jackson.databind.JsonNode;
@@ -16,6 +18,14 @@ public class RunController {
     public RunController(IRunService runs) { this.runs = runs; }
     @PostMapping("/insert") @ResponseStatus(HttpStatus.ACCEPTED)
     public ApiResponse<JsonNode> insert(@Valid @RequestBody Insert request) { return ApiResponse.success(runs.insert(request)); }
+    @PostMapping("/insertRerun") @ResponseStatus(HttpStatus.ACCEPTED)
+    public ApiResponse<JsonNode> insertRerun(@Valid @RequestBody Rerun request) {
+        return ApiResponse.success(runs.insertRerun(request));
+    }
+    @GetMapping("/selectRerunConfiguration")
+    public ApiResponse<RerunConfiguration> selectRerunConfiguration(@RequestParam UUID sourceRunId) {
+        return ApiResponse.success(runs.selectRerunConfiguration(sourceRunId));
+    }
     @GetMapping("/select")
     public ApiResponse<JsonNode> select(@RequestParam long jobId, @RequestParam(defaultValue="1") int page,
                                        @RequestParam(defaultValue="10") int pageSize) {
