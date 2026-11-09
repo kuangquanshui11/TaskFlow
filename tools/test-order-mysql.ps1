@@ -1,4 +1,4 @@
-param([ValidateRange(1024,65535)][int]$Port = 13389, [switch]$IncludeFlow, [switch]$IncludeSales, [switch]$IncludeInventorySync)
+param([ValidateRange(1024,65535)][int]$Port = 13389, [switch]$IncludeFlow, [switch]$IncludeSales, [switch]$IncludeInventorySync, [switch]$IncludeCleanup)
 $ErrorActionPreference = 'Stop'
 $repoPath = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoPath
@@ -43,6 +43,7 @@ try {
     $testClasses = @('OrderMysqlTests')
     if ($IncludeSales) { $testClasses += 'SalesReportMysqlTests' }
     if ($IncludeInventorySync) { $testClasses += 'InventorySyncMysqlTests' }
+    if ($IncludeCleanup) { $testClasses += 'CleanupMysqlTests' }
     & (Join-Path $repoPath 'mvnw.cmd') -B -l (Join-Path $runPath 'tests.log') -pl examples/taskflow-order-service ("-Dtest=" + ($testClasses -join ',')) test
     if ($LASTEXITCODE -ne 0) { throw ('Order MySQL tests failed. Evidence: ' + $runPath) }
     Write-Output ('Order MySQL tests passed. Evidence: ' + $runPath)

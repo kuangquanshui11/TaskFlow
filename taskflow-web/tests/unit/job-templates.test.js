@@ -31,3 +31,11 @@ test('自定义和未知模板回到原有空表单', () => {
   assert.deepEqual(createTemplateForm(''), emptyJob());
   assert.deepEqual(createTemplateForm('unknown'), emptyJob());
 });
+
+test('过期数据清理模板默认预览且停用', () => {
+  const form = createTemplateForm('cleanup');
+  assert.equal(form.enabled, false);
+  assert.deepEqual(JSON.parse(form.payloadText), {
+    retentionDays: 90, batchSize: 500, maxBatches: 10, dryRun: true,
+  });
+});

@@ -9,6 +9,7 @@ import com.taskflow.orders.inventory.service.IInventoryService;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.*;
 import org.springframework.transaction.support.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -18,8 +19,12 @@ public class InventoryServiceImpl implements IInventoryService {
     private final InventoryMapper mapper;
     private final StockCache cache;
     private final OrderProperties properties;
-    public InventoryServiceImpl(InventoryMapper mapper, StockCache cache, OrderProperties properties) {
+    private final TransactionTemplate transactions;
+
+    public InventoryServiceImpl(InventoryMapper mapper, StockCache cache, OrderProperties properties,
+                                PlatformTransactionManager manager) {
         this.mapper=mapper; this.cache=cache; this.properties=properties;
+        this.transactions = new TransactionTemplate(manager);
     }
     @Override @Transactional public Stock insert(long skuId, long available) {
         if (skuId<=0 || available<0 || available>1000000000L) throw new IllegalArgumentException("Invalid stock");
@@ -65,7 +70,12 @@ public class InventoryServiceImpl implements IInventoryService {
         for(var row:mapper.pending(Instant.now(),properties.outboxMaxAttempts())) {
             try {
                 cache.put(mapper.find(row.skuId()),properties.cacheTtl());
-                mapper.published(row.id());
+                transactions.executeWithoutResult(status -> {
+                    // 两个投递者可能都已刷新缓存。只归档仍持有待投递行的那次成功。
+                    if (mapper.lockOutbox(row.id()) == null) return;
+                    mapper.recordPublished(row.id(), row.skuId(), Instant.now());
+                    mapper.published(row.id());
+                });
             } catch(RuntimeException unavailable) {
                 mapper.defer(row.id(),row.attempts(),Instant.now().plus(properties.outboxRetryDelay()));
                 // Redis 故障时一次只尝试一条，限制阻塞。耗尽行保留供对账；查询回填和 TTL 仍可恢复缓存。

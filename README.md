@@ -10,6 +10,8 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 定期同步库存模板已接入可选的 Worker inventorySync。订单示例从指定仓库的样例快照更新独立镜像，支持按 Run 去重和版本比较。启用和验证见 [仓库库存快照同步](docs/inventory-sync.md)。
 
+清理过期数据模板通过 Worker `expiredDataCleanup` 预览或删除订单服务的库存缓存投递成功历史，默认预览并保留至少 90 天。 [过期数据清理](docs/expired-data-cleanup.md)
+
 Scheduler/Worker 已支持积压与延迟指标独立采样、失败保值及本机 Actuator 查询，OTLP 指标导出默认关闭，见 [指标字典](docs/observability-metrics.md)。
 
 可选 Scheduler 告警通过 Prometheus 接收 OTLP 指标，并由 Alertmanager 对持续派发逾期和采样中断发送触发及恢复通知。 [告警部署与验收](docs/scheduler-alerts.md)

@@ -28,12 +28,12 @@ export const jobTemplates = [
   },
   {
     id: 'cleanup', icon: 'trash', title: '清理过期数据', category: '日常维护',
-    problem: '历史数据持续累积，人工清理容易忘记执行。', schedule: '每天凌晨 03:00',
-    action: '调用业务服务，按保留最近 90 天的规则清理过期数据。',
-    benefit: '让例行维护按计划执行，保留清理任务的执行记录。', cron: '0 0 3 * * *', handler: 'expiredDataCleanup',
-    payload: { retentionDays: 90, batchSize: 500 },
-    parameters: 'retentionDays 是保留天数；batchSize 是每批最多处理的记录数。请先与业务维护者确认允许清理的数据范围。',
-    integration: '业务服务确定清理范围、保留规则和删除权限；处理器不直接访问其他服务的数据表。',
+    problem: '库存缓存投递成功的历史记录会持续累积。', schedule: '每天凌晨 03:00',
+    action: '预览或删除订单服务中过期的库存缓存投递成功记录。',
+    benefit: '保留近期记录供排查，在运行详情查看处理结果。', cron: '0 0 3 * * *', handler: 'expiredDataCleanup',
+    payload: { retentionDays: 90, batchSize: 500, maxBatches: 10, dryRun: true },
+    parameters: '至少保留 90 天，每批最多 500 条，每轮最多 10 批。先用 dryRun: true 手动预览，核对运行详情后再改为 false 执行删除。',
+    integration: '订单服务与 Worker 需启用过期数据清理并配置专用凭据。清理对象仅限库存缓存投递成功历史。',
   },
 ];
 

@@ -1,0 +1,5 @@
+order:
+  cache-enabled: true
+  cleanup:
+    enabled: true
+    token: test-order-cleanup

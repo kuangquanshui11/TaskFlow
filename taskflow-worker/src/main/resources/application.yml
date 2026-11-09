@@ -43,6 +43,7 @@ spring:
       - optional:file:./config/taskflow-mq-cluster-local.yml
       - optional:file:./config/taskflow-sales-local.yml
       - optional:file:./config/taskflow-inventory-sync-local.yml
+      - optional:file:./config/taskflow-worker-cleanup-local.yml
   datasource:
     url: "${TASKFLOW_WORKER_DB_URL:jdbc:mysql://localhost:3306/taskflow_worker?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=3000&socketTimeout=5000}"
     username: "${TASKFLOW_WORKER_DB_USERNAME:taskflow_worker}"
@@ -98,6 +99,9 @@ taskflow:
     enabled: "${TASKFLOW_SALES_HANDLER_ENABLED:false}"
   inventory-sync:
     enabled: "${TASKFLOW_INVENTORY_SYNC_HANDLER_ENABLED:false}"
+  expired-data-cleanup:
+    enabled: "${TASKFLOW_EXPIRED_DATA_CLEANUP_HANDLER_ENABLED:false}"
+    token: "${TASKFLOW_EXPIRED_DATA_CLEANUP_TOKEN:}"
   order:
     enabled: "${TASKFLOW_ORDER_HANDLER_ENABLED:false}"
     url: "${TASKFLOW_ORDER_URL:http://localhost:8083}"

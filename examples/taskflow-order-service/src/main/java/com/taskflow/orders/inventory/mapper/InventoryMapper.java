@@ -21,6 +21,9 @@ public interface InventoryMapper {
     record Pending(String id, long skuId, int attempts) { }
     @Select("SELECT id,sku_id,attempts FROM stock_outbox WHERE next_attempt_at<=#{now} AND attempts<#{max} ORDER BY next_attempt_at,created_at LIMIT 100")
     List<Pending> pending(Instant now, int max);
+    @Select("SELECT id FROM stock_outbox WHERE id=#{id} FOR UPDATE") String lockOutbox(String id);
+    @Insert("INSERT INTO stock_outbox_history(id,sku_id,published_at) VALUES(#{id},#{skuId},#{publishedAt})")
+    void recordPublished(String id, long skuId, Instant publishedAt);
     @Delete("DELETE FROM stock_outbox WHERE id=#{id}") void published(String id);
     @Update("UPDATE stock_outbox SET attempts=attempts+1,next_attempt_at=#{next} WHERE id=#{id} AND attempts=#{attempts}") void defer(String id, int attempts, Instant next);
 }

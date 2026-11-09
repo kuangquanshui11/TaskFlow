@@ -480,3 +480,16 @@ Report 字段：id、shopId、businessDate、timeZone、orderCount、totalQuanti
 同键同仓库返回原结果，同键换仓库返回 409 `IDEMPOTENCY_CONFLICT`。未知仓库、未同步的 SKU 和关闭入口返回 404，源暂不可读或快照不合法返回 503，参数或令牌错误分别返回 400、401。结果含义和部署方式见 [仓库库存快照同步](inventory-sync.md)。
 
 Worker salesReport 参数示例为 `{"shopId":8}`，回补示例为 `{"shopId":8,"businessDate":"2026-11-01"}`；默认关闭，开启 taskflow.sales.enabled 并配置订单 worker-token 后注册实际能力。HTTP POST 不自动重放，有限业务重试复用 Run 操作键。
+
+## 过期库存缓存投递历史清理 API（v1）
+
+订单服务开启 `order.cleanup.enabled` 后提供以下内部入口，使用 `X-Taskflow-Token` 携带专用清理令牌。
+
+| 入口 | 参数 | 成功返回 |
+| --- | --- | --- |
+| GET `/internal/v1/expired-data/select` | query `retentionDays`（90–3650）、`batchSize`（1–500） | UTC `cutoff`、当前批 `eligibleCount`、`hasMore` |
+| POST `/internal/v1/expired-data/delete` | JSON `requestKey`（1–100 个小写 ASCII 字母、数字或 `._:-`，首字符为字母或数字）、`retentionDays`（90–3650）、`batchSize`（1–500）、`batchNumber`（1–10） | UTC `cutoff`、`batchNumber`、`deletedCount`、`hasMore` |
+
+同键同批返回已提交的原结果；同键改变保留天数或批大小返回 409 `IDEMPOTENCY_CONFLICT`。首批编号为 1，后续批次要求前一批已提交且报告 `hasMore=true`，否则返回 409 `CLEANUP_BATCH_OUT_OF_SEQUENCE`。参数非法返回 400，令牌错误返回 401。
+
+Worker 参数示例为 `{"retentionDays":90,"batchSize":500,"maxBatches":10,"dryRun":true}`。`dryRun` 缺省为 `true`，只有布尔值 `false` 才发起删除。 [执行与保留规则](expired-data-cleanup.md)
