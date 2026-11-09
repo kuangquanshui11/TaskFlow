@@ -1,0 +1,8 @@
+{
+  "warehouseId": 12,
+  "sourceVersion": 1,
+  "items": [
+    { "skuId": 12001, "quantity": 80 },
+    { "skuId": 12002, "quantity": 35 }
+  ]
+}

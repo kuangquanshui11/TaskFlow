@@ -26,6 +26,7 @@ spring:
       - optional:file:./config/taskflow-platform-local.yml
       - optional:file:./config/taskflow-access-local.yml
       - optional:file:./config/taskflow-sales-local.yml
+      - optional:file:./config/taskflow-inventory-sync-local.yml
   datasource:
     url: "${TASKFLOW_ADMIN_DB_URL:jdbc:mysql://localhost:3306/taskflow_admin?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=5000&socketTimeout=10000}"
     username: "${TASKFLOW_ADMIN_DB_USERNAME:root}"

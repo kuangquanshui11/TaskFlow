@@ -1,8 +1,8 @@
-param([ValidateRange(1024,65530)][int]$BasePort=19380)
+param([ValidateRange(1024,65530)][int]$BasePort=19380, [switch]$IncludeInventorySync)
 $ErrorActionPreference='Stop'
 $repoPath=Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoPath
-if($env:TASKFLOW_ORDER_TEST_DB_SCHEMA -notmatch '^taskflow_it_order_[a-zA-Z0-9]+$') { throw 'Run through test-order-mysql.ps1 -IncludeFlow to use an isolated database.' }
+if($env:TASKFLOW_ORDER_TEST_DB_SCHEMA -notmatch '^taskflow_it_order_[a-zA-Z0-9]+$') { throw 'Run through test-order-mysql.ps1 with the relevant option to use an isolated database.' }
 $runPath=Join-Path $repoPath ('.tools/order-flow/'+(Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
 New-Item -ItemType Directory -Path $runPath -Force | Out-Null
 $java=(Get-Command java -CommandType Application | Select-Object -First 1).Source
@@ -22,7 +22,7 @@ $control=Secret;$dispatch=Secret;$report=Secret;$nodeToken=Secret;$api=Secret;$o
 $http=[Net.Http.HttpClient]::new();$http.Timeout=[TimeSpan]::FromSeconds(5)
 $evidence=[Collections.Generic.List[object]]::new()
 function Api([string]$Service,[string]$Method,[string]$Path,$Body=$null) {
-    $token=if($Service -eq 'order'){$api}else{$control}
+    $token=if($Service -ne 'order'){$control}elseif($Path.StartsWith('internal/v1/inventory-sync/')){$orderToken}else{$api}
     $request=[Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new($Method),"http://127.0.0.1:$($ports[$Service])/$Path")
     $null=$request.Headers.TryAddWithoutValidation('X-Taskflow-Token',$token)
     if($null -ne $Body){$request.Content=[Net.Http.StringContent]::new(($Body|ConvertTo-Json -Depth 25 -Compress),[Text.Encoding]::UTF8,'application/json')}
@@ -57,7 +57,7 @@ function Start-Service([string]$Name) {
     if(!(Test-Path -LiteralPath $jar)){Copy-Item -LiteralPath $jarSource -Destination $jar}
     $stamp=Get-Date -Format 'HHmmssfff'
     $arguments=@('-Xms64m','-Xmx256m',('"-Dloader.path='+$h2.FullName+'"'),('"-Dspring.config.additional-location=file:'+$yaml+'"'),'-cp',('"'+$jar+'"'),'org.springframework.boot.loader.launch.PropertiesLauncher')
-    $processes[$Name]=Start-Process -FilePath $java -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runPath "$Name-$stamp.out.log") -RedirectStandardError (Join-Path $runPath "$Name-$stamp.err.log")
+    $processes[$Name]=Start-Process -FilePath $java -ArgumentList $arguments -WorkingDirectory $runPath -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runPath "$Name-$stamp.out.log") -RedirectStandardError (Join-Path $runPath "$Name-$stamp.err.log")
     Wait-For {
         if($processes[$Name].HasExited){throw "$Name exited during startup. Evidence: $runPath"}
         try{(Invoke-WebRequest "http://127.0.0.1:$($ports[$Name])/actuator/health" -TimeoutSec 2).StatusCode -eq 200}catch{return $false}
@@ -76,8 +76,8 @@ function New-Orders([long]$Sku,[int]$Count) {
     Start-Sleep -Seconds 3
     return $ids
 }
-function New-Run {
-    return Api scheduler POST 'internal/v1/runs/insert' @{requestKey=[Guid]::NewGuid().ToString();snapshot=@{jobId=999;configVersion=1;name='Order acceptance';handlerKey='orderTimeoutCheck';payload=@{batchSize=2;maxBatches=10};timeoutSeconds=20;maxAttempts=3;retryIntervalSeconds=10;scheduleType='MANUAL';timeZone='UTC';misfirePolicy='SKIP';enabled=$false}}
+function New-Run([string]$Handler='orderTimeoutCheck',$Payload=@{batchSize=2;maxBatches=10}) {
+    return Api scheduler POST 'internal/v1/runs/insert' @{requestKey=[Guid]::NewGuid().ToString();snapshot=@{jobId=999;configVersion=1;name='Order acceptance';handlerKey=$Handler;payload=$Payload;timeoutSeconds=20;maxAttempts=3;retryIntervalSeconds=10;scheduleType='MANUAL';timeZone='UTC';misfirePolicy='SKIP';enabled=$false}}
 }
 function Await-Run($Run) {
     Wait-For {$script:latestRun=Api scheduler GET "internal/v1/runs/selectById?id=$($Run.id)";return $script:latestRun.state -in @('SUCCEEDED','FAILED')} 'run terminal' 100
@@ -90,6 +90,39 @@ function Assert-Stock([long]$Sku,[int]$Expected,$Ids,[string]$Name) {
     $evidence.Add(@{name=$Name;result='PASS';orders=$Ids;stock=$stock;run=$script:latestRun})
     Write-Output "PASS $Name"
 }
+function Write-InventorySnapshot([long]$Version,[long]$Quantity) {
+    $snapshot=@{warehouseId=$inventoryWarehouse;sourceVersion=$Version;items=@(@{skuId=12001;quantity=$Quantity})} | ConvertTo-Json -Depth 4
+    [IO.File]::WriteAllText($inventorySource,$snapshot)
+}
+function Test-InventorySync {
+    Wait-For {
+        $nodes=Api scheduler GET 'internal/v1/workers/select'
+        return @($nodes.records | Where-Object {$_.handlerKeys -contains 'inventorySync'}).Count -gt 0
+    } 'inventory handler registration'
+    Start-Proxy drop
+    $run=New-Run inventorySync @{warehouseId=$inventoryWarehouse}
+    Await-Run $run
+    $applied=$script:latestRun
+    $dropped=Get-Content -LiteralPath (Join-Path $runPath 'drop.json') -Raw | ConvertFrom-Json
+    if($dropped.result.outcome -ne 'APPLIED' -or @($applied.attempts).Count -ne 2 -or
+            $applied.attempts[0].state -ne 'FAILED' -or $applied.message -notlike "batchId=$($dropped.result.id),*") {
+        throw 'Inventory retry did not return the first committed batch through a second Attempt.'
+    }
+    Write-InventorySnapshot 3 17
+    $replayed=Api order POST 'internal/v1/inventory-sync/insert' @{warehouseId=$inventoryWarehouse;requestKey="$($run.id):inventory-sync"}
+    if($replayed.id -ne $dropped.result.id -or $replayed.sourceVersion -ne 1){throw 'Inventory request key did not preserve the original batch.'}
+    Await-Run (New-Run inventorySync @{warehouseId=$inventoryWarehouse})
+    if($script:latestRun.message -notlike '*sourceVersion=3, outcome=APPLIED, updatedCount=1'){throw 'Inventory version 3 was not applied.'}
+    Write-InventorySnapshot 2 99
+    Await-Run (New-Run inventorySync @{warehouseId=$inventoryWarehouse})
+    $stale=$script:latestRun
+    $stock=Api order GET "internal/v1/inventory-sync/select?warehouseId=$inventoryWarehouse&skuId=12001"
+    if($stale.message -notlike '*sourceVersion=2, outcome=STALE, updatedCount=0' -or $stock.sourceVersion -ne 3 -or $stock.quantity -ne 17){
+        throw 'Late snapshot modified the newer inventory.'
+    }
+    $evidence.Add(@{name='inventory sync committed response lost and late source';result='PASS';applied=$applied;replayed=$replayed;stale=$stale;stock=$stock})
+    Write-Output 'PASS inventory sync committed response lost and late source'
+}
 try {
     # 覆盖常见全局启动变量，避免复用本机业务数据和配置。
     foreach($name in @('SPRING_DATASOURCE_URL','SPRING_DATASOURCE_USERNAME','SPRING_DATASOURCE_PASSWORD','SPRING_DATASOURCE_DRIVER_CLASS_NAME','SPRING_CONFIG_IMPORT','SPRING_PROFILES_ACTIVE','SPRING_CONFIG_ADDITIONAL_LOCATION')){Set-TestEnvironment $name $null}
@@ -99,7 +132,19 @@ try {
     Set-TestEnvironment 'TASKFLOW_SCHEDULER_URL' "http://127.0.0.1:$($ports.scheduler)"
     Set-TestEnvironment 'TASKFLOW_WORKER_URL' "http://127.0.0.1:$($ports.worker)"
     Set-TestEnvironment 'TASKFLOW_ORDER_URL' "http://127.0.0.1:$($ports.proxy)"
+    Set-TestEnvironment 'TASKFLOW_INVENTORY_SYNC_SOURCE_ENABLED' ($IncludeInventorySync.ToString().ToLowerInvariant())
+    Set-TestEnvironment 'TASKFLOW_INVENTORY_SYNC_HANDLER_ENABLED' ($IncludeInventorySync.ToString().ToLowerInvariant())
+    if($IncludeInventorySync) {
+        $inventoryWarehouse=120
+        $inventorySource=Join-Path $runPath 'inventory-source.json'
+        Write-InventorySnapshot 1 80
+        Set-TestEnvironment 'TASKFLOW_INVENTORY_SYNC_SAMPLE_SOURCE' ([Uri]$inventorySource).AbsoluteUri
+    }
     Start-Proxy pass;Start-Service scheduler;Start-Service worker;Start-Service order
+    if($IncludeInventorySync) {
+        Test-InventorySync
+        return
+    }
     Wait-For {$nodes=Api scheduler GET 'internal/v1/workers/select';return @($nodes.records|Where-Object {$_.handlerKeys -contains 'orderTimeoutCheck'}).Count -gt 0} 'order handler registration'
     $ids=New-Orders 810001 7;$run=New-Run;Await-Run $run;Assert-Stock 810001 7 $ids 'multiple batches'
     $rerun=New-Run;Await-Run $rerun;Assert-Stock 810001 7 $ids 'manual rerun idempotency'

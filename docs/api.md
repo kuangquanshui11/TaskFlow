@@ -468,4 +468,15 @@ Report 字段：id、shopId、businessDate、timeZone、orderCount、totalQuanti
 
 生成只允许已结束的业务日，未指定日期取首次成功绑定时任务时区的前一天；同 requestKey 改店铺/原始日期/时区返回409；未知店铺404；同范围不同 Run 返回同一份报表。每日快照不自动包含生成后的后补/迟到数据，未建成交快照的旧订单不计入。样例同 dataset 同参数不重复导入，不同参数409，关闭样例入口时404。详细事务、时区、幂等及故障边界见 [销售日报](sales-reports.md)。
 
+## 仓库库存同步 API（v1）
+
+订单服务开启 `order.inventory-sync.enabled` 后提供以下内部入口。两端均使用 `X-Taskflow-Token` 携带订单 worker-token。
+
+| 方法与路径 | 参数 | HTTP 200 响应 |
+| --- | --- | --- |
+| POST `/internal/v1/inventory-sync/insert` | JSON `warehouseId`（正整数）、`requestKey`（1–100 个小写 ASCII 字母、数字或 `._:-`，首字符须为字母或数字） | `id`、`warehouseId`、`sourceVersion`、`outcome`、`updatedCount` |
+| GET `/internal/v1/inventory-sync/select` | query `warehouseId`、`skuId`（正整数） | `warehouseId`、`skuId`、`quantity`、该 SKU 的 `sourceVersion` |
+
+同键同仓库返回原结果，同键换仓库返回 409 `IDEMPOTENCY_CONFLICT`。未知仓库、未同步的 SKU 和关闭入口返回 404，源暂不可读或快照不合法返回 503，参数或令牌错误分别返回 400、401。结果含义和部署方式见 [仓库库存快照同步](inventory-sync.md)。
+
 Worker salesReport 参数示例为 `{"shopId":8}`，回补示例为 `{"shopId":8,"businessDate":"2026-11-01"}`；默认关闭，开启 taskflow.sales.enabled 并配置订单 worker-token 后注册实际能力。HTTP POST 不自动重放，有限业务重试复用 Run 操作键。

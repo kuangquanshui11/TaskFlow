@@ -2,7 +2,9 @@ spring:
   application:
     name: taskflow-order-service
   config:
-    import: optional:file:./config/taskflow-order-local.yml
+    import:
+      - optional:file:./config/taskflow-order-local.yml
+      - optional:file:./config/taskflow-inventory-sync-local.yml
   datasource:
     url: "${TASKFLOW_ORDER_DB_URL:jdbc:mysql://localhost:3306/taskflow_order?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=3000&socketTimeout=5000}"
     username: "${TASKFLOW_ORDER_DB_USERNAME:taskflow_order}"
@@ -37,6 +39,9 @@ management:
     redis:
       enabled: false
 order:
+  inventory-sync:
+    enabled: "${TASKFLOW_INVENTORY_SYNC_SOURCE_ENABLED:false}"
+    sample-source: "${TASKFLOW_INVENTORY_SYNC_SAMPLE_SOURCE:classpath:samples/inventory-snapshot.json}"
   samples-enabled: "${TASKFLOW_ORDER_SAMPLES_ENABLED:false}"
   api-token: "${TASKFLOW_ORDER_API_TOKEN:}"
   worker-token: "${TASKFLOW_ORDER_WORKER_TOKEN:}"
