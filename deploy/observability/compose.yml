@@ -1,0 +1,35 @@
+name: taskflow-observability
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.13.5
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-otlp-receiver
+    ports: ["127.0.0.1:9090:9090"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./scheduler-alerts.yml:/etc/prometheus/scheduler-alerts.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+  alertmanager:
+    image: prom/alertmanager:v0.34.2
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=
+    ports: ["127.0.0.1:9093:9093"]
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    secrets: [alert-webhook-url]
+    restart: unless-stopped
+
+secrets:
+  alert-webhook-url:
+    file: "${TASKFLOW_ALERT_WEBHOOK_FILE:?Set TASKFLOW_ALERT_WEBHOOK_FILE to the local webhook URL file}"
+
+volumes:
+  prometheus-data:
+  alertmanager-data:

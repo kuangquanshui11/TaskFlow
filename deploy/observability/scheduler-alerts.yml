@@ -1,0 +1,34 @@
+groups:
+  - name: taskflow-scheduler
+    rules:
+      # 样本中的年龄只算到导出时刻。停止推送后仍要把流逝时间计入。
+      - record: taskflow:scheduler_metrics:fresh
+        expr: |
+          group by (job, instance) (
+            (taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"} >= 0)
+            and on (job, instance)
+            (taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}
+              + time() - timestamp(taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}) <= 90)
+            and on (job, instance)
+            (taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"} >= 0)
+            and on (job, instance)
+            (time() - timestamp(taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}) <= 90)
+          )
+      - alert: TaskFlowSchedulerDispatchOverdue
+        expr: |
+          (taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"} > 0)
+          and on (job, instance) taskflow:scheduler_metrics:fresh{job="taskflow-scheduler",instance="scheduler-1"}
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduler dispatch is overdue"
+          description: "{{ $value }} attempts are overdue for dispatch. Check Worker eligibility, dispatch Outbox and Broker connectivity."
+      - alert: TaskFlowSchedulerMetricsUnavailable
+        expr: absent(taskflow:scheduler_metrics:fresh{job="taskflow-scheduler",instance="scheduler-1"})
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduler metrics are unavailable"
+          description: "Dispatch metrics are missing, unknown or stale. Check Scheduler sampling and OTLP export."

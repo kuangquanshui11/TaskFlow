@@ -10,6 +10,8 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 Scheduler/Worker 已支持积压与延迟指标独立采样、失败保值及本机 Actuator 查询，OTLP 指标导出默认关闭，见 [指标字典](docs/observability-metrics.md)。
 
+可选 Scheduler 告警通过 Prometheus 接收 OTLP 指标，并由 Alertmanager 对持续派发逾期和采样中断发送触发及恢复通知。 [告警部署与验收](docs/scheduler-alerts.md)
+
 工作台已提供最近 24 小时 / 7 天的运行总数、成功率、失败数、P95 耗时、状态分布和失败 Top 5，由 Admin 在 run:read 权限下查询 Scheduler，不缓存统计。
 
 控制台已接入独立 Keycloak 登录、前端登录/退出和权限按钮、Gateway/Admin 双重 JWT 校验与角色权限。Admin 在 Redis 缓存 JWT 会话，每次有效请求续期 30 分钟，闲置过期后要求重新登录；Gateway 使用自有 Redis 分组限流，Nginx 做 IP 粗限流。启动 Admin/Gateway 前需配置 issuer、Keycloak 用户及各自 Redis；缺失配置或 Redis 故障不会放开访问。首次部署及验证边界见 [登录与入口安全](docs/access-security.md)。
@@ -268,7 +270,7 @@ TaskFlow/
 
 带登录的完整任务回归入口、隔离身份与 Redis、MQ 前置条件和故障场景见 [带登录的任务链路回归](docs/authenticated-regression.md)。
 
-Relay 发布后未标记时退出、Worker 执行中退出、迟到上报与发布连接恢复的专项入口见 [进程故障窗口验证](docs/dispatch-fault-verification.md)。同一脚本提供 `-InFlightFailover` 模式，验证 Broker 单节点停机时原进程重连并处理尚未 ACK 的消息。后续工作包括积压告警、发布确认期间的节点故障、可靠死信、多数派丢失、失联恢复、Jaeger 容器实测及全量配置对账。现有能力和故障保障的验证范围见 [微服务技术栈](docs/microservice-platform.md)。
+Relay 发布后未标记时退出、Worker 执行中退出、迟到上报与发布连接恢复的专项入口见 [进程故障窗口验证](docs/dispatch-fault-verification.md)。同一脚本提供 `-InFlightFailover` 模式，验证 Broker 单节点停机时原进程重连并处理尚未 ACK 的消息。后续工作包括发布确认期间的节点故障、可靠死信、多数派丢失、失联恢复、Jaeger 容器实测及全量配置对账。现有能力和故障保障的验证范围见 [微服务技术栈](docs/microservice-platform.md)。
 
 ## 独立订单业务示例
 

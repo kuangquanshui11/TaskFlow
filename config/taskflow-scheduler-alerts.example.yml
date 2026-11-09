@@ -1,0 +1,12 @@
+# Merge into config/taskflow-scheduler-local.yml when enabling S3 for the designated Scheduler.
+management:
+  opentelemetry:
+    resource-attributes:
+      "[service.name]": taskflow-scheduler
+      "[service.instance.id]": scheduler-1
+  otlp:
+    metrics:
+      export:
+        enabled: true
+        step: 15s
+        url: "${TASKFLOW_SCHEDULER_ALERTS_OTLP_URL:http://127.0.0.1:9090/api/v1/otlp/v1/metrics}"

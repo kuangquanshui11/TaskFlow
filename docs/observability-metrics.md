@@ -44,7 +44,7 @@ Attempt lease 指标严格使用 expires_at，短执行租约 lease_until 的业
 | management.otlp.metrics.export.step | 60s | 标准 Spring 属性覆盖；导出频率独立于采样 |
 | management.otlp.metrics.export.url | 从 traces 推导 | TASKFLOW_OTLP_ENDPOINT 默认 http://localhost:4318/v1/traces，替换 /v1/traces 为 /v1/metrics；显式标准 url 配置优先 |
 
-采样周期决定数据库观察频率，导出周期决定发送频率；未来告警评估周期属于 S3，当前未实现，不能由前两者推断告警时效。配置更新默认重启生效，独立线程不代表 SQL 无成本或故障查询不会延长一轮时间。
+采样周期决定数据库观察频率，导出周期决定发送频率。S3 告警的评估及通知周期由监控部署独立配置，见 [Scheduler 告警](scheduler-alerts.md)。配置更新默认重启生效，故障查询可能延长一轮采样。
 
 我以本机 spring-boot-micrometer-metrics-4.1.1.jar 的 META-INF/spring-configuration-metadata.json 核实 enabled/url/step，sourceType 为 OtlpMetricsProperties，step 缺省 1m。starter-opentelemetry 已传递引入 micrometer-registry-otlp，无新增依赖。各服务的 EnvironmentPostProcessor 在 ConfigData 后提供低优先级缺省 url，避免在 YAML 中使用不能执行的字符串替换表达式；绑定测试验证 Boot 的实际属性对象。自定义 traces 路径不含 /v1/traces 时应显式指定指标 url。
 
@@ -67,10 +67,10 @@ curl.exe http://127.0.0.1:8082/actuator/metrics/taskflow.metrics.sample.age
 - `taskflow.metrics.sample{outcome="failed"}` → `taskflow_metrics_sample_total{outcome="failed"}`
 - 秒单位的 age 可能由接收端添加 `_seconds` 后缀。
 
-实际接收端可以有自己的归一化策略。这些示例不代表新增 Prometheus 端点；当前没有 /actuator/prometheus、看板或 Prometheus/Grafana 部署。
+实际接收端可以有自己的归一化策略。S3 的独立 Prometheus 部署通过 OTLP 接收指标，应用仍通过 `/actuator/metrics` 提供本机查询。 [Scheduler 告警](scheduler-alerts.md)
 
 ## 数据口径
 
 我只观察当前进程连接的数据库。多实例 Scheduler 各自采样，共享数据库时通常观察相同积压，相加会重复计算；不能把一个实例的数字当作集群总量。Worker 自有 Inbox 也不是 Scheduler 的权威状态。
 
-指标不是审计，不持久化、不历史回放，不保证与导出时刻一致。当前无告警、通知或阈值判定，持续积压只作排查线索。证据及未验证范围见 [本次验证](observability-metrics-verification.md)。
+采样值只保存在应用内存中，监控端负责存储和告警。采样观察时间可能早于导出时间。S2 的历史验证及适用范围见 [采样验证记录](observability-metrics-verification.md)。

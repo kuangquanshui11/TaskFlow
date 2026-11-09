@@ -1,0 +1,13 @@
+global:
+  evaluation_interval: 15s
+
+rule_files:
+  - scheduler-alerts.yml
+
+otlp:
+  translation_strategy: UnderscoreEscapingWithSuffixes
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]

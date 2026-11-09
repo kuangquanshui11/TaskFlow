@@ -1,0 +1,13 @@
+route:
+  receiver: scheduler-webhook
+  group_by: [alertname, job, instance]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 4h
+
+receivers:
+  - name: scheduler-webhook
+    webhook_configs:
+      - url_file: /run/secrets/alert-webhook-url
+        send_resolved: true
+        timeout: 5s

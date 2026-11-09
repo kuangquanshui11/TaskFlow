@@ -1,0 +1,105 @@
+rule_files: [scheduler-alerts.yml]
+evaluation_interval: 15s
+
+tests:
+  - name: A short spike is ignored and sustained dispatch delay fires then resolves
+    interval: 15s
+    input_series:
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '5+0x17'
+      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0 1 0 2+0x8 0+0x4'
+    alert_rule_test:
+      - {eval_time: 30s, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
+      - {eval_time: 2m30s, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
+      - eval_time: 2m45s
+        alertname: TaskFlowSchedulerDispatchOverdue
+        exp_alerts:
+          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
+            exp_annotations:
+              summary: Scheduler dispatch is overdue
+              description: 2 attempts are overdue for dispatch. Check Worker eligibility, dispatch Outbox and Broker connectivity.
+      - {eval_time: 3m, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
+      - {eval_time: 3m, alertname: TaskFlowSchedulerMetricsUnavailable, exp_alerts: []}
+
+  - name: Stale sampling stops the delay alert even while the retained count is positive
+    interval: 15s
+    input_series:
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '5+0x8 100+0x9 5+0x6'
+      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '1+0x18 0+0x6'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: TaskFlowSchedulerDispatchOverdue
+        exp_alerts:
+          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
+            exp_annotations:
+              summary: Scheduler dispatch is overdue
+              description: 1 attempts are overdue for dispatch. Check Worker eligibility, dispatch Outbox and Broker connectivity.
+      - {eval_time: 2m15s, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
+      - {eval_time: 4m, alertname: TaskFlowSchedulerMetricsUnavailable, exp_alerts: []}
+      - eval_time: 4m15s
+        alertname: TaskFlowSchedulerMetricsUnavailable
+        exp_alerts:
+          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
+            exp_annotations:
+              summary: Scheduler metrics are unavailable
+              description: Dispatch metrics are missing, unknown or stale. Check Scheduler sampling and OTLP export.
+      - {eval_time: 4m45s, alertname: TaskFlowSchedulerMetricsUnavailable, exp_alerts: []}
+      - {eval_time: 4m45s, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
+
+  - name: Another instance cannot hide a missing dispatch series for the expected Scheduler
+    interval: 15s
+    input_series:
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '5+0x12'
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="other"}'
+        values: '5+0x12'
+      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="other"}'
+        values: '9+0x12'
+    alert_rule_test:
+      - {eval_time: 2m, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
+      - eval_time: 2m
+        alertname: TaskFlowSchedulerMetricsUnavailable
+        exp_alerts:
+          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
+            exp_annotations:
+              summary: Scheduler metrics are unavailable
+              description: Dispatch metrics are missing, unknown or stale. Check Scheduler sampling and OTLP export.
+
+  - name: Stopped OTLP pushes age out before the normal Prometheus lookback expires
+    interval: 15s
+    input_series:
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '5'
+      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '1'
+    alert_rule_test:
+      - {eval_time: 2m, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
+      - {eval_time: 3m15s, alertname: TaskFlowSchedulerMetricsUnavailable, exp_alerts: []}
+      - eval_time: 3m30s
+        alertname: TaskFlowSchedulerMetricsUnavailable
+        exp_alerts:
+          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
+            exp_annotations:
+              summary: Scheduler metrics are unavailable
+              description: Dispatch metrics are missing, unknown or stale. Check Scheduler sampling and OTLP export.
+
+  - name: Initial negative gauges remain unknown until both metrics have valid samples
+    interval: 15s
+    input_series:
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '-1+0x8 5+0x4'
+      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '-1+0x9 0+0x3'
+    alert_rule_test:
+      - {eval_time: 2m, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
+      - eval_time: 2m15s
+        alertname: TaskFlowSchedulerMetricsUnavailable
+        exp_alerts:
+          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
+            exp_annotations:
+              summary: Scheduler metrics are unavailable
+              description: Dispatch metrics are missing, unknown or stale. Check Scheduler sampling and OTLP export.
+      - {eval_time: 2m30s, alertname: TaskFlowSchedulerMetricsUnavailable, exp_alerts: []}
