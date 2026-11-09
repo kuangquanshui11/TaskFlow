@@ -1,6 +1,8 @@
 # Cron 复测与可靠派发验证记录
 
-2026-10-30 补充：真实 confirm 后强杀 Relay、执行中强杀 Worker、旧 Inbox 重启后真实上报旧失败/成功结果，以及发布连接中断/恢复的状态核验见 [派发进程故障窗口验证](dispatch-fault-verification.md)。该专项区分 Run、Attempt、Outbox、Inbox 的最终状态和两类重试预算；Broker 节点停机中的在途恢复与可靠死信转移仍单独安排。以下 2026-10-27 / 28 结果保留为历史记录。
+2026-11-09 的实测覆盖 Broker 单节点停机时已确认发布且尚未 ACK 的投递。同一 Worker 进程重连后完成重投消息的确认，见 [在途恢复专项](dispatch-fault-verification.md#broker-单节点停机时的在途恢复)。发布确认期间的节点故障与可靠死信转移仍单独安排。
+
+2026-10-30 补充：真实 confirm 后强杀 Relay、执行中强杀 Worker、旧 Inbox 重启后真实上报旧失败/成功结果，以及发布连接中断/恢复的状态核验见 [派发进程故障窗口验证](dispatch-fault-verification.md)。该专项区分 Run、Attempt、Outbox、Inbox 的最终状态和两类重试预算。以下 2026-10-27 / 28 结果保留为历史记录。
 
 2026-10-28 补充：Worker 满载改为保留原 delivery 等待容量，满载与过期投递不再转死信；Scheduler 按心跳负载推迟满载节点派发。两个服务完整回归 125 项通过，真实 Broker 背压专项 1 项及三服务 MQ 闭环 43 项通过。背压专项未注入 Broker 停机故障，未修改业务资源，完整结果与边界见 [容量背压验证](dispatch-backpressure-verification.md)。
 

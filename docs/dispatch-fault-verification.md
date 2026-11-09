@@ -50,16 +50,31 @@ finally 只停止验收器自己持有句柄的 Java / Node 进程。通过后�
 
 模块回归在 2026-10-30 执行：Scheduler 104 项通过；Worker 66 项中 65 项通过、1 项条件跳过，0 失败、0 错误。跳过项为 `DispatchBackpressureBrokerTests`，本次 Maven 命令未设置它所需的 Broker 环境变量，不计入通过项；历史背压真实 Broker 结果仍见 [背压验证](dispatch-backpressure-verification.md)。本次未修改服务业务行为，未重跑浏览器、Admin/Gateway 登录链路或真实 MySQL 网络故障。
 
-## 后续 Broker 节点故障恢复演练
+## Broker 单节点停机时的在途恢复
 
-我把连接中断与 Broker 节点故障分开验收。本次代理只切断测试 Publisher 到第一个 Broker 的连接，Worker 仍直连集群全部地址；没有停止 Broker 节点、制造 quorum 丢多数派或网络分区。[2026-10-28 节点停机记录](mq-verification.md) 是历史验证，不能替代同一批在途工作及同一应用进程的节点故障恢复。
+我把 Broker 停机作为独立模式。此前的代理场景只切断测试 Publisher 的连接。2026-10-28 的节点停机记录是在停机后启动另一轮任务。这个模式保留同一组消息、Scheduler 和 Worker 进程，两端直接使用全部 AMQP 地址。
 
-下一轮按以下顺序在有维护窗口的测试集群执行：
+使用有维护窗口的三节点测试集群。三个管理入口须分别直连三个节点，且四个测试 quorum 队列均有三个在线副本。脚本只创建随机 vhost、隔离 H2 文件库和临时应用进程。有其他 vhost 的 AMQP 连接时，脚本在停机检查点之前终止。操作员需要具备停止和恢复指定 Broker 的权限。
 
-1. 确认三个节点及四个测试 quorum 队列均为三成员、三副本在线，无分区和磁盘/内存告警；保存版本、leader、连接所在节点和管理快照。沿用随机 vhost 与独立数据，不改业务资源。
-2. Scheduler / Worker 配置原始全部 AMQP 地址，不走单入口代理。保持应用进程、数据库和同一组测试消息不变，在已存在 SENDING 或未完成 Attempt 时停止当前连接节点；保存实际连接断开、leader 切换和 3→2 在线副本证据。
-3. 等待剩余多数派处理原在途工作，核对原事件/Attempt 的幂等收敛、消息未因连接重建丢失、发布次数不超过预算。另在已验证的耗尽场景确认原事件不因节点恢复自动重放。
-4. 恢复故障节点，等待所有测试队列恢复三个在线副本并无告警，再对原 Run、Attempt、Outbox、Inbox 和旧结果拒绝情况取证。失败时先恢复节点及健康，再保留隔离证据；不能用全新应用实例重跑成功代替原在途工作的恢复。
-5. 多数派丢失、宿主机故障和网络分区放在独立测试集群的另一轮演练，不在共享集群中追加执行。
+```powershell
+.\mvnw.cmd -B -o verify
+.\tools\test-dispatch-faults.ps1 -ClusterSettingsPath .tools/mq-cluster-settings.json -InFlightFailover -AllowLegacyBroker -SkipBuild
+```
+
+现代 Broker 可省略 `-AllowLegacyBroker`。`-SkipBuild` 使用已有 JAR，首次运行前须完成构建。脚本根据实际消费连接选择停机目标。收到 `STOP NODE NOW` 后，在服务器停止消息指定的节点并保持另两个节点运行。脚本轮询管理接口，等待指定节点下线和每个队列保留两个在线副本，最长 180 秒。收到 `RESTORE NODE NOW` 后启动同一节点，等待三个副本恢复，最长 180 秒。停机检查点发出后，流程失败也会提示恢复。若终端被中断或恢复超时，操作员先恢复该节点，再从健康拓扑重跑。
+
+我在测试专用 H2 触发器中暂停 `worker_execution` 的插入。此时 Outbox 已确认发布，Broker 上有一条未 ACK 的消息，Worker Inbox 为空。指定节点离线且原连接消失后释放屏障，等待同一 Worker 在剩余节点重连，核对 Broker 重投和 ACK 计数、单条 Inbox、原 Run 和 Attempt 的终态以及执行时间线。停机前、停机期间和恢复后的拓扑分别写入 `failover-quorum-*.json`。`failover-delivery-*.json` 保存连接、消息计数和进程 PID，`failover-run-*.json` 保存本地状态，`failover-attempt-timeline.json` 保存两个事件来源。成功清理本轮 vhost，失败保留隔离资源和报告。
+
+### 2026-11-09 验证结果
+
+环境为 Windows、Java 21.0.12.1、Maven Wrapper、两个独立可执行 JAR 与 H2 文件库，以及同一远程主机上的 RabbitMQ 3.8.34 三节点集群。使用上述命令执行，根 `verify` 构建成功，376 项中 352 项通过、24 项环境条件跳过，0 项失败或错误。Broker 专项于 09:44:47（Asia/Shanghai）完成，**11 项通过**。
+
+停机前消费连接与目标队列 leader 都在 `rabbit@mq1`，队列有一条未 ACK 消息，Inbox 为空。停止 `mq1` 后，四个队列均有两个在线副本，目标队列 leader 和 Worker 消费连接切换到 `rabbit@mq2`。队列统计记录一次重投和一次 ACK。原 Run 从 `RUNNING` 进入 `SUCCEEDED`，只有一个 Attempt、一条 Outbox 和一条已上报 Inbox，发布计数为 1，leaseVersion 和消息内容保持一致。两份应用进程 PID 保持一致，时间线记录一次 Handler 进入、一次结果确认和一次 Run 终结。恢复 `mq1` 后，四个队列均回到三个在线副本，待消费、未 ACK 和死信数量均为 0。
+
+专项报告与快照位于 `.tools/dispatch-faults/taskflow_it_24f4f416326a40ebba61571f8e8a7fd3/`。该轮成功后清理了随机测试 vhost。
+
+在同一环境使用上面的脚本命令，省略 `-InFlightFailover`，复跑原有进程和发布连接故障矩阵。09:48:34（Asia/Shanghai）完成，16 项通过。报告位于 `.tools/dispatch-faults/taskflow_it_fd857f91e77a41dfa48d240629000650/report.json`。
+
+这项验收针对已确认发布、尚未 ACK 的投递。发布确认期间的节点退出、多数派丢失、网络分区、跨主机故障和真实 MySQL 另行验证。
 
 可靠死信转移单独安排：现有 RabbitMQ 3.8.34 使用显式旧版兼容策略，不能通过本轮空 DLQ 或 reject 成功声称已具备至少一次死信转移。升级或准备支持该策略的独立 Broker 环境后，再验证死信目标不可用期间的保留、恢复后的最终转移、重复去重、容量/告警及副本故障恢复；升级前先验证消息/定义备份、版本兼容与回退条件，不能以 definitions 导出代替消息备份。版本边界与既有依据见 [可靠派发](reliable-dispatch.md)。

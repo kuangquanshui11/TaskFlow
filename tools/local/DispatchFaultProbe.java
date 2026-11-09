@@ -26,23 +26,31 @@ public final class DispatchFaultProbe implements Trigger {
     @Override public void fire(Connection connection, Object[] oldRow, Object[] newRow) throws SQLException {
         String gate = null;
         if (table.equals("dispatch_outbox") && "SENDING".equals(oldRow[columns.get("state")])
-                && "PUBLISHED".equals(newRow[columns.get("state")])) gate = "published";
-        if (table.equals("worker_execution") && ((Number)newRow[columns.get("report_count")]).intValue()
-                > ((Number)oldRow[columns.get("report_count")]).intValue()) gate = "report";
+                && "PUBLISHED".equals(newRow[columns.get("state")])) {
+            gate = "published";
+        }
+        if (table.equals("worker_execution")) {
+            if (oldRow == null) gate = "accept";
+            else if (((Number)newRow[columns.get("report_count")]).intValue()
+                    > ((Number)oldRow[columns.get("report_count")]).intValue()) gate = "report";
+        }
         if (gate == null) return;
+        var row = oldRow == null ? newRow : oldRow;
         var arm = root.resolve(table + "-" + gate + ".arm");
         try {
             if (!Files.exists(arm)) return;
             String expected = Files.readString(arm).trim();
-            String id = String.valueOf(oldRow[columns.get(table.equals("dispatch_outbox") ? "event_id" : "attempt_id")]);
+            String id = String.valueOf(row[columns.get(table.equals("dispatch_outbox") ? "event_id" : "attempt_id")]);
             if (!expected.equals("*") && !expected.equals(id)) return;
             // Atomic rename ensures a single barrier even when multiple SQL threads race.
             var hit = root.resolve(table + "-" + gate + ".hit");
             Files.move(arm, hit);
             var marker = new LinkedHashMap<String, Object>();
-            columns.forEach((key, index) -> marker.put(key, oldRow[index]));
-            Files.writeString(root.resolve(table + "-" + gate + ".json"), json(marker));
-            long deadline = System.nanoTime() + java.time.Duration.ofSeconds(90).toNanos();
+            columns.forEach((key, index) -> marker.put(key, row[index]));
+            var temporaryMarker = root.resolve(table + "-" + gate + ".tmp");
+            Files.writeString(temporaryMarker, json(marker));
+            Files.move(temporaryMarker, root.resolve(table + "-" + gate + ".json"), StandardCopyOption.ATOMIC_MOVE);
+            long deadline = System.nanoTime() + java.time.Duration.ofSeconds(gate.equals("accept") ? 240 : 90).toNanos();
             while (!Files.exists(root.resolve(table + "-" + gate + ".release"))) {
                 if (System.nanoTime() >= deadline) throw new SQLException("Fault barrier timed out");
                 Thread.sleep(25);

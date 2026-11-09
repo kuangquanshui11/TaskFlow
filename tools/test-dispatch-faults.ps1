@@ -1,10 +1,17 @@
-param([Parameter(Mandatory)][string]$ClusterSettingsPath, [switch]$AllowLegacyBroker, [switch]$SkipBuild)
+param([Parameter(Mandatory)][string]$ClusterSettingsPath, [switch]$AllowLegacyBroker, [switch]$SkipBuild,
+    [switch]$InFlightFailover)
 $ErrorActionPreference = 'Stop'
 $repoPath = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/mq-management.ps1')
 $cluster = Read-MqClusterSettings $ClusterSettingsPath
 $java = (Get-Command java -CommandType Application | Select-Object -First 1).Source
-$node = (Get-Command node -CommandType Application | Select-Object -First 1).Source
+$serviceNames = @('scheduler','worker')
+$portNames = $serviceNames
+if (!$InFlightFailover) {
+    $node = (Get-Command node -CommandType Application | Select-Object -First 1).Source
+    $serviceNames += 'worker2'
+    $portNames = $serviceNames + 'proxy'
+}
 $h2 = Get-ChildItem (Join-Path $env:USERPROFILE '.m2/repository/com/h2database/h2/*/h2-*.jar') |
     Where-Object Name -NotMatch 'sources|javadoc' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (!$h2) { throw 'H2 is missing; run Maven verify first.' }
@@ -20,7 +27,7 @@ $utf8 = [Text.UTF8Encoding]::new($false)
 $control = [Guid]::NewGuid().ToString('N'); $report = [Guid]::NewGuid().ToString('N'); $nodeToken = [Guid]::NewGuid().ToString('N')
 $processes = @{}; $files = @{}; $ports = @{}; $checks = [Collections.Generic.List[object]]::new()
 $allocatedPorts = [Collections.Generic.HashSet[int]]::new()
-foreach ($name in @('scheduler','worker','worker2','proxy')) {
+foreach ($name in $portNames) {
     do {
         $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
         $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
@@ -31,6 +38,7 @@ $http = [Net.Http.HttpClient]::new(); $http.Timeout = [TimeSpan]::FromSeconds(5)
 $management = New-MqManagementClient $cluster.username $cluster.password
 $base = $cluster.managementUrls[0]
 $completed = $false; $created = $false; $proxy = $null
+$faultNode = $null
 function Write-JsonFile([string]$Name, $Value) {
     [IO.File]::WriteAllText((Join-Path $root $Name), ($Value | ConvertTo-Json -Depth 60), $utf8)
 }
@@ -133,6 +141,126 @@ function Count-RejectedResults {
     if (!(Test-Path -LiteralPath $log)) { return 0 }
     return @(Get-Content -LiteralPath $log | Where-Object { $_ -match 'POST /internal/v1/attempts/updateResult HTTP/1\.[01] 409$' }).Count
 }
+function Get-WorkerBrokerConnection([string]$Queue) {
+    $consumers = @(Broker GET "consumers/$vhost" | Where-Object { $_.queue.name -ceq $Queue })
+    if ($consumers.Count -ne 1) { return }
+    Broker GET 'connections' | Where-Object {
+        $_.vhost -ceq $vhost -and $_.name -ceq $consumers[0].channel_details.connection_name
+    } | Select-Object name,node
+}
+function Wait-FailoverTopology([string[]]$Members, [string[]]$Online, [string]$Label, [int]$Seconds) {
+    Wait-Until {
+        try {
+            $nodes = @(Broker GET 'nodes')
+            $queues = @(Broker GET "queues/$vhost")
+        } catch {
+            if ($_.Exception.InnerException -is [Net.Http.HttpRequestException] -or
+                $_.Exception.InnerException -is [OperationCanceledException] -or $_.Exception.Message -match 'HTTP 5\d\d\.$') {
+                return $false
+            }
+            throw
+        }
+        $running = @($nodes | Where-Object running)
+        if ($nodes.Count -ne $Members.Count -or $running.Count -ne $Online.Count -or $queues.Count -ne 4 -or
+            @($nodes | Where-Object { $_.name -cnotin $Members }).Count -or
+            @($running | Where-Object { $_.name -cnotin $Online -or $_.mem_alarm -or $_.disk_free_alarm -or @($_.partitions).Count }).Count) {
+            return $false
+        }
+        foreach ($queue in $queues) {
+            if ($queue.type -ne 'quorum' -or @($queue.members).Count -ne $Members.Count -or
+                @($queue.online).Count -ne $Online.Count -or $queue.leader -cnotin $Online -or
+                @($queue.members | Where-Object { $_ -cnotin $Members }).Count -or
+                @($queue.online | Where-Object { $_ -cnotin $Online }).Count) { return $false }
+        }
+        Write-JsonFile "$Label.json" @{nodes=@($nodes | Select-Object name,running,partitions,mem_alarm,disk_free_alarm);
+            queues=@($queues | Select-Object name,type,leader,members,online,messages_ready,messages_unacknowledged)}
+        return $true
+    } "$Label ($($Online.Count) online replicas per queue)" $Seconds
+    Check $true "$Label`: all quorum queues have $($Online.Count) of 3 replicas online"
+}
+function Invoke-InFlightFailover {
+    $endpoints = @(foreach ($url in $cluster.managementUrls) {
+        $overview = Invoke-MqManagement $management $url GET 'overview'
+        [pscustomobject]@{url=$url;node=$overview.node}
+    })
+    $members = @($endpoints.node | Sort-Object -Unique)
+    if ($members.Count -ne 3 -or @($members | Where-Object { !$_ }).Count) {
+        throw 'In-flight failover requires three direct management endpoints, one for each Broker node.'
+    }
+    Wait-FailoverTopology $members $members 'failover-quorum-before' 45
+    Start-ServiceProcess scheduler
+    Start-ServiceProcess worker
+    Wait-Node worker-default
+    $pids = @{scheduler=$processes.scheduler.Id;worker=$processes.worker.Id}
+    $queueName = 'taskflow.worker.default.v1'
+    $queuePath = "queues/$vhost/$queueName"
+    Wait-Until { $null -ne (Get-WorkerBrokerConnection $queueName) } 'Worker consumer connection'
+
+    $gate = Join-Path $root 'worker_execution-accept'
+    [IO.File]::WriteAllText("$gate.arm", '*')
+    $run = New-Run -Timeout 420
+    $attempt = $run.attempts[0].id
+    Wait-Until { Test-Path -LiteralPath "$gate.json" } 'Worker reached Inbox insert barrier'
+    Wait-Until {
+        $queue = Broker GET $queuePath
+        $queue.messages_unacknowledged -eq 1 -and $queue.messages_ready -eq 0
+    } 'One real delivery remains unacknowledged'
+    $before = Snapshot 'failover-run-before' $run.id
+    $connection = Get-WorkerBrokerConnection $queueName
+    $accepted = Get-Content -LiteralPath "$gate.json" -Raw | ConvertFrom-Json
+    Check ($null -ne $connection -and $connection.node -cin $members -and $accepted.attempt_id -eq $attempt -and
+        $before.attempts.Count -eq 1 -and $before.outbox.Count -eq 1 -and $before.outbox[0].state -eq 'PUBLISHED' -and
+        $before.outbox[0].publish_attempts -eq 1 -and $before.inbox.worker.Count -eq 0) 'Original Attempt is published and held before the Worker Inbox commit and ACK'
+    if (@(Broker GET 'connections' | Where-Object { $_.vhost -cne $vhost }).Count) {
+        throw 'Other vhosts have active AMQP connections. Use a dedicated cluster or wait for a maintenance window.'
+    }
+    $script:faultNode = $connection.node
+    $survivors = @($members | Where-Object { $_ -cne $faultNode })
+    $script:base = ($endpoints | Where-Object { $_.node -ceq $survivors[0] }).url
+    Write-JsonFile 'failover-delivery-before.json' @{runId=$run.id;attemptId=$attempt;processIds=$pids;connection=$connection;
+        queue=(Broker GET $queuePath | Select-Object name,leader,messages_ready,messages_unacknowledged,message_stats)}
+
+    Write-Host "STOP NODE NOW: $faultNode. Leave the other two nodes running. Waiting up to 180 seconds."
+    try {
+        Wait-FailoverTopology $members $survivors 'failover-quorum-node-down' 180
+        Check (@(Broker GET 'connections' | Where-Object { $_.vhost -ceq $vhost -and $_.name -ceq $connection.name }).Count -eq 0) 'Original Worker AMQP connection is gone'
+        [IO.File]::WriteAllText("$gate.release", '')
+        $result = Wait-Terminal $run.id
+        Wait-Reported worker $attempt
+        Wait-Until {
+            $queue = Broker GET $queuePath
+            $replacement = Get-WorkerBrokerConnection $queueName
+            $null -ne $replacement -and $replacement.node -cin $survivors -and $replacement.name -cne $connection.name -and
+                $queue.messages_ready -eq 0 -and $queue.messages_unacknowledged -eq 0 -and
+                $queue.message_stats.redeliver -ge 1 -and $queue.message_stats.ack -ge 1
+        } 'Original delivery redelivered and acknowledged on a surviving node'
+        Wait-FailoverTopology $members $survivors 'failover-quorum-after-ack' 10
+        $final = Snapshot 'failover-run-after-ack' $run.id
+        $timeline = Api GET "runs/selectAttemptEvents?runId=$($run.id)&attemptId=$attempt"
+        Write-JsonFile 'failover-attempt-timeline.json' $timeline
+        Write-JsonFile 'failover-delivery-after.json' @{connection=(Get-WorkerBrokerConnection $queueName);processIds=$pids;
+            queue=(Broker GET $queuePath | Select-Object name,leader,messages_ready,messages_unacknowledged,message_stats)}
+        Check ($result.state -eq 'SUCCEEDED' -and $final.run[0].id -eq $run.id -and
+            $final.attempts.Count -eq 1 -and $final.attempts[0].id -eq $attempt -and $final.attempts[0].state -eq 'SUCCEEDED' -and
+            $final.attempts[0].lease_version -eq $before.attempts[0].lease_version -and
+            $final.outbox.Count -eq 1 -and $final.outbox[0].event_id -eq $before.outbox[0].event_id -and
+            $final.outbox[0].message_json -ceq $before.outbox[0].message_json -and
+            $final.outbox[0].state -eq 'PUBLISHED' -and $final.outbox[0].publish_attempts -eq 1 -and
+            $final.inbox.worker.Count -eq 1 -and $final.inbox.worker[0].attempt_id -eq $attempt -and
+            $final.inbox.worker[0].state -eq 'SUCCEEDED' -and $final.inbox.worker[0].reported) 'Original Run, Attempt, Outbox and Inbox converge under quorum without a second publication or Attempt'
+        Check ($timeline.workerStatus -eq 'AVAILABLE' -and
+            @($timeline.worker.events | Where-Object eventType -eq 'HANDLER_STARTED').Count -eq 1 -and
+            @($timeline.worker.events | Where-Object eventType -eq 'REPORT_ACKNOWLEDGED').Count -eq 1 -and
+            @($timeline.scheduler.events | Where-Object eventType -eq 'RUN_FINISHED').Count -eq 1) 'Timeline records one Handler entry, one result acknowledgement and one Run completion'
+        Check (!$processes.scheduler.HasExited -and !$processes.worker.HasExited -and
+            $processes.scheduler.Id -eq $pids.scheduler -and $processes.worker.Id -eq $pids.worker) 'Scheduler and Worker retained their original process IDs'
+    } finally {
+        Write-Host "RESTORE NODE NOW: $faultNode. Waiting up to 180 seconds."
+        Wait-FailoverTopology $members $members 'failover-quorum-restored' 180
+    }
+    $queues = @(Broker GET "queues/$vhost")
+    Check (@($queues | Where-Object { $_.messages_ready -ne 0 -or $_.messages_unacknowledged -ne 0 }).Count -eq 0) 'All test queues, including dead-letter queues, are empty after recovery'
+}
 try {
     $capability = Get-MqBrokerCapability $management $base ([bool]$AllowLegacyBroker)
     $null = Broker PUT "vhosts/$vhost" @{}; $created = $true
@@ -164,21 +292,24 @@ try {
     Check ($topology.Count -eq 4 -and @($topology | Where-Object { $_.type -ne 'quorum' -or @($_.online).Count -ne 3 }).Count -eq 0) 'Four isolated quorum queues have three online replicas'
     & (Join-Path (Split-Path -Parent $java) 'javac.exe') -cp $h2.FullName -d $classes (Join-Path $PSScriptRoot 'local/DispatchFaultProbe.java')
     if ($LASTEXITCODE -ne 0) { throw 'Fault probe compilation failed.' }
-    $target = [Uri]('amqp://' + $cluster.addresses.Split(',')[0])
-    Write-JsonFile 'proxy.json' @{port=$ports.proxy;targetHost=$target.Host;targetPort=$target.Port}
-    $proxy = Start-Process -FilePath $node -ArgumentList @(('"' + (Join-Path $PSScriptRoot 'local/mq-fault-proxy.mjs') + '"'),('"' + (Join-Path $root 'proxy.json') + '"')) `
-        -WorkingDirectory $repoPath -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $root 'proxy.out.log') -RedirectStandardError (Join-Path $root 'proxy.err.log')
-    Wait-Until { if ($proxy.HasExited) { throw 'Proxy exited' }; Test-Path -LiteralPath (Join-Path $root 'proxy.ready') } 'AMQP proxy ready'
-    foreach ($name in @('scheduler','worker','worker2')) {
+    if (!$InFlightFailover) {
+        $target = [Uri]('amqp://' + $cluster.addresses.Split(',')[0])
+        Write-JsonFile 'proxy.json' @{port=$ports.proxy;targetHost=$target.Host;targetPort=$target.Port}
+        $proxy = Start-Process -FilePath $node -ArgumentList @(('"' + (Join-Path $PSScriptRoot 'local/mq-fault-proxy.mjs') + '"'),('"' + (Join-Path $root 'proxy.json') + '"')) `
+            -WorkingDirectory $repoPath -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $root 'proxy.out.log') -RedirectStandardError (Join-Path $root 'proxy.err.log')
+        Wait-Until { if ($proxy.HasExited) { throw 'Proxy exited' }; Test-Path -LiteralPath (Join-Path $root 'proxy.ready') } 'AMQP proxy ready'
+    }
+    foreach ($name in $serviceNames) {
         $role = if ($name -eq 'worker2') { 'worker' } else { $name }
         $credentials = if ($cluster.serviceCredentials) { $cluster.serviceCredentials.$role } else { $cluster }
         $route = if ($name -eq 'worker2') { 'second' } else { 'default' }
         $workerId = if ($name -eq 'worker2') { 'worker-second' } else { 'worker-default' }
-        $addresses = if ($name -eq 'scheduler') { "127.0.0.1:$($ports.proxy)" } else { $cluster.addresses }
+        $addresses = if ($name -eq 'scheduler' -and !$InFlightFailover) { "127.0.0.1:$($ports.proxy)" } else { $cluster.addresses }
         $migrationDir = Join-Path $root "$name-migrations"
         New-Item -ItemType Directory -Path $migrationDir -Force | Out-Null
         $table = if ($name -eq 'scheduler') { 'dispatch_outbox' } else { 'worker_execution' }
-        [IO.File]::WriteAllText((Join-Path $migrationDir 'R__fault_barrier.sql'), "CREATE TRIGGER fault_barrier BEFORE UPDATE ON $table FOR EACH ROW CALL `"DispatchFaultProbe`";", $utf8)
+        $triggerActions = if ($InFlightFailover -and $name -eq 'worker') { 'INSERT, UPDATE' } else { 'UPDATE' }
+        [IO.File]::WriteAllText((Join-Path $migrationDir 'R__fault_barrier.sql'), "CREATE TRIGGER fault_barrier BEFORE $triggerActions ON $table FOR EACH ROW CALL `"DispatchFaultProbe`";", $utf8)
         $yaml = Join-Path $root "$name.yml"
         $configuration = @"
 spring:
@@ -240,6 +371,7 @@ taskflow:
     max-publish-attempts: 3
   execution:
     scheduler-url: "http://127.0.0.1:$($ports.scheduler)"
+    worker-url: "http://127.0.0.1:$($ports.worker)"
     control-token: $control
     dispatch-token: $control
     report-token: $report
@@ -257,6 +389,12 @@ taskflow:
         $jar = Join-Path $root "$name.jar"
         Copy-Item -LiteralPath (Join-Path $repoPath "taskflow-$role/target/taskflow-$role-0.0.1-SNAPSHOT.jar") -Destination $jar
         $files[$name] = @{yaml=$yaml;jar=$jar}
+    }
+
+    if ($InFlightFailover) {
+        Invoke-InFlightFailover
+        $completed = $true
+        return
     }
 
     # A confirmed message remains in the queue while the publishing process dies before its SQL commit.
@@ -389,13 +527,20 @@ taskflow:
     Check (@($queues | Where-Object { $_.name -like '*.dead.v1' -and ($_.messages_ready -ne 0 -or $_.messages_unacknowledged -ne 0) }).Count -eq 0) 'Process and connection faults leave no unexpected dead letters'
     $completed = $true
 } finally {
-    foreach ($name in @('worker2','worker','scheduler')) { Stop-ServiceProcess $name }
-    if ($proxy) { if (!$proxy.HasExited) { $proxy.Kill(); $null = $proxy.WaitForExit(10000) }; $proxy.Dispose() }
     try {
-        Write-JsonFile 'report.json' @{date=(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz');result=$(if ($completed) {'PASS'} else {'FAIL'});
-            brokerVersion=$capability.version;legacyBroker=$capability.legacy;vhost=$vhost;checks=$checks;
-            limitations=@('H2 file databases, not MySQL network faults','Publisher AMQP link cut, not Broker node shutdown or quorum loss','Reliable dead-letter transfer is a separate unverified acceptance')}
+        foreach ($name in @('worker2','worker','scheduler')) { Stop-ServiceProcess $name }
+        if ($proxy) { if (!$proxy.HasExited) { $proxy.Kill(); $null = $proxy.WaitForExit(10000) }; $proxy.Dispose() }
         if ($created -and $completed -and $vhost -match '^taskflow_it_[a-f0-9]{32}$') { $null = Broker DELETE "vhosts/$vhost" }
-    } finally { $http.Dispose(); $management.Dispose() }
-    Write-Output "Dispatch fault evidence: $root"
+    } catch {
+        $completed = $false
+        throw
+    } finally {
+        $faultScope = if ($InFlightFailover) { 'Confirmed delivery awaiting Inbox commit; one Broker node down with quorum retained' }
+            else { 'Publisher AMQP link cut; no Broker node shutdown or quorum loss' }
+        Write-JsonFile 'report.json' @{date=(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz');result=$(if ($completed) {'PASS'} else {'FAIL'});
+            brokerVersion=$capability.version;legacyBroker=$capability.legacy;vhost=$vhost;checks=$checks;faultNode=$faultNode;
+            limitations=@('H2 file databases, not MySQL network faults',$faultScope,'Reliable dead-letter transfer is a separate unverified acceptance')}
+        $http.Dispose(); $management.Dispose()
+        Write-Output "Dispatch fault evidence: $root"
+    }
 }
