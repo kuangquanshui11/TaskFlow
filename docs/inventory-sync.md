@@ -44,7 +44,9 @@ Worker 校验任务快照中的正整数 `warehouseId`，按 Run ID 派生请求
    .\tools\services.ps1 -Action restart -Service admin
    ```
 
-3. 在控制台新建「定期同步库存」，点击「刷新处理器列表」，用内置样例仓库 12 保存为停用。先手动运行，对照 Run 的 `batchId`、`sourceVersion` 和 `updatedCount`，通过内部查询接口核对 SKU 数量。首次同步预期 `APPLIED`，重复运行同一源版本预期 `UNCHANGED`。完成验证后再启用每 5 分钟的计划。
+3. 在控制台新建「定期同步库存」，点击「刷新处理器列表」，用样例仓库 12 保存为停用。先手动运行，对照 Run 的 `batchId`、`sourceVersion` 和 `updatedCount`，通过内部查询接口核对 SKU 数量。空镜像首次同步预期 `APPLIED`，另起 Run 同步同一源版本预期 `UNCHANGED`。
+4. 验证源更新时，将内置 JSON 样例复制到被 Git 忽略的 `.tools/inventory-snapshot.json`，保留已有文件，并在本机 YAML 的 `order.inventory-sync` 下设置 `sample-source: file:./.tools/inventory-snapshot.json`。重启订单服务加载路径。随后将完整的新快照写到临时文件再替换，提高源版本并更新一个 SKU 的数量。再手动运行，核对 `APPLIED`、新版本和镜像数量。每个新请求会重新读取文件。
+5. 手动验证完成后启用每 5 分钟的计划。确认计划副本已同步，等待下一个计划时间，在运行记录中核对触发方式为定时、状态为成功。若在线节点不可派发，先检查 Worker 健康与 Handler 注册。在 RabbitMQ 模式下同时检查 Broker 连通性。切换派发方式前先排空在途工作。 [可靠派发](reliable-dispatch.md)
 
 ## 验证命令
 
@@ -53,9 +55,21 @@ Worker 校验任务快照中的正整数 `warehouseId`，按 Run ID 派生请求
 .\tools\test-order-mysql.ps1 -IncludeInventorySync
 ```
 
-MySQL 专项创建回环临时实例及随机 schema，使用隔离的 Scheduler 和 Worker，故障代理在订单事务已提交后丢弃第一次 HTTP 响应，检查原 Run 的第二次 Attempt 返回同一批次。另验证版本 3 应用后版本 2 晚到，镜像保留版本 3 的数量。
+MySQL 专项创建回环临时实例及随机 schema。随后使用隔离的 Scheduler 和 Worker 验证完整派发链路。故障代理在订单事务已提交后丢弃第一次 HTTP 响应，原 Run 的第二次 Attempt 返回同一批次。新 Run 同步相同源版本时返回 `UNCHANGED`。应用版本 3 后收到迟到的版本 2 时返回 `STALE`，镜像保留版本 3 的数量。
 
-## 2026-11-09 验证记录
+## 2026-11-09 本机 RabbitMQ 验收
+
+环境为 Windows、Java 21、本机 MySQL 订单库及已配置的 RabbitMQ 派发。Chrome 经 Nginx、Gateway 和 Keycloak 登录。任务 9「定期同步库存（样例仓库 12）」每 5 分钟执行，时区为 Asia/Shanghai，最多尝试 3 次。数据源为本机 JSON 样例。
+
+| 命令 | 结果 | 证据 |
+| --- | --- | --- |
+| `mvnw.cmd -B -o verify` | 根构建成功，362 项通过，27 项按条件跳过 | `.tools/inventory-sync-local-verify.log` |
+| `tools/test-order-mysql.ps1 -IncludeInventorySync` | 隔离 MySQL 8.0.34 上 11 项通过。隔离派发另验证响应丢失后的同 Run 重试、同版本新 Run、更新版本及旧版本拒绝 | `.tools/order-mysql/20261109-175312-266/tests.log`、`.tools/order-flow/20261109-175334-779/evidence.json` |
+| `node .tools/inventory-sync-local-acceptance.cjs` | 通过控制台模板创建停用任务，三个手动 Run 均成功。版本 1 写入 80 和 35 件，同版本重复写入 0 条。版本 2 应用后两个 SKU 分别为 81 和 35 件。启用后 18:00 的首个定时 Run 成功，版本 2 返回 `UNCHANGED` | `.tools/inventory-sync-local-evidence.json`，定时 Run `0394fd96-4e3b-424b-b0b0-c9d26505a8d7` |
+
+此轮的本机 RabbitMQ 验收覆盖样例仓库正常派发。WMS 数据与 Broker 故障场景未纳入本轮本机验收。
+
+## 2026-11-09 隔离环境首次验收
 
 环境为 Windows、Java 21、H2 与回环隔离的 MySQL 8.0.34（REPEATABLE READ）。
 

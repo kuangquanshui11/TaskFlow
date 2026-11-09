@@ -108,11 +108,17 @@ function Test-InventorySync {
             $applied.attempts[0].state -ne 'FAILED' -or $applied.message -notlike "batchId=$($dropped.result.id),*") {
         throw 'Inventory retry did not return the first committed batch through a second Attempt.'
     }
+    Await-Run (New-Run inventorySync @{warehouseId=$inventoryWarehouse})
+    $unchanged=$script:latestRun
+    if($unchanged.id -eq $applied.id -or $unchanged.message -notlike '*sourceVersion=1, outcome=UNCHANGED, updatedCount=0') {
+        throw 'A new Run for the same inventory version should record an unchanged batch.'
+    }
     Write-InventorySnapshot 3 17
     $replayed=Api order POST 'internal/v1/inventory-sync/insert' @{warehouseId=$inventoryWarehouse;requestKey="$($run.id):inventory-sync"}
     if($replayed.id -ne $dropped.result.id -or $replayed.sourceVersion -ne 1){throw 'Inventory request key did not preserve the original batch.'}
     Await-Run (New-Run inventorySync @{warehouseId=$inventoryWarehouse})
-    if($script:latestRun.message -notlike '*sourceVersion=3, outcome=APPLIED, updatedCount=1'){throw 'Inventory version 3 was not applied.'}
+    $advanced=$script:latestRun
+    if($advanced.message -notlike '*sourceVersion=3, outcome=APPLIED, updatedCount=1'){throw 'Inventory version 3 was not applied.'}
     Write-InventorySnapshot 2 99
     Await-Run (New-Run inventorySync @{warehouseId=$inventoryWarehouse})
     $stale=$script:latestRun
@@ -120,8 +126,8 @@ function Test-InventorySync {
     if($stale.message -notlike '*sourceVersion=2, outcome=STALE, updatedCount=0' -or $stock.sourceVersion -ne 3 -or $stock.quantity -ne 17){
         throw 'Late snapshot modified the newer inventory.'
     }
-    $evidence.Add(@{name='inventory sync committed response lost and late source';result='PASS';applied=$applied;replayed=$replayed;stale=$stale;stock=$stock})
-    Write-Output 'PASS inventory sync committed response lost and late source'
+    $evidence.Add(@{name='inventory sync retries and source versions';result='PASS';applied=$applied;unchanged=$unchanged;replayed=$replayed;advanced=$advanced;stale=$stale;stock=$stock})
+    Write-Output 'PASS inventory sync retries and source versions'
 }
 try {
     # 覆盖常见全局启动变量，避免复用本机业务数据和配置。
