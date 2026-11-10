@@ -1,6 +1,9 @@
-param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$SkipFailover, [switch]$IncludeWorkerCluster,
+param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$SkipFailover, [switch]$IncludeWorkerCluster, [switch]$CleanupOnly,
     [string]$ClusterSettingsPath, [switch]$ManualFailover, [switch]$AllowLegacyBroker)
 $ErrorActionPreference = 'Stop'
+if ($CleanupOnly -and (!$SkipFailover -or $IncludeWorkerCluster)) {
+    throw '-CleanupOnly requires -SkipFailover and a single isolated Worker.'
+}
 $repoPath = Split-Path -Parent $PSScriptRoot
 $clusterPath = Join-Path $repoPath 'infra/rabbitmq'
 $envPath = Join-Path $clusterPath '.env'
@@ -75,6 +78,23 @@ function Invoke-ExecutionAcceptance([string]$Label, [bool]$SkipPhaseBuild) {
     $checks = @(Get-Content -LiteralPath (Join-Path $evidencePath 'report.json') -Raw | ConvertFrom-Json)
     if (!$checks.Count -or @($checks | Where-Object { $_.result -ne 'PASS' }).Count) { throw 'Execution report contains incomplete checks.' }
     $phases.Add([pscustomobject]@{phase=$Label;checks=$checks.Count;evidencePath=$evidencePath;result='PASS'})
+}
+function Invoke-CleanupAcceptance {
+    if (!$SkipBuild) {
+        & (Join-Path $repoPath 'mvnw.cmd') verify
+        if ($LASTEXITCODE -ne 0) { throw 'Build for cleanup acceptance failed.' }
+    }
+    Write-TestSettings
+    & (Join-Path $PSScriptRoot 'test-order-mysql.ps1') -IncludeCleanup -CleanupMqSettingsPath $settingsPath |
+        Tee-Object -FilePath (Join-Path $runPath 'cleanup.log') | Tee-Object -Variable cleanupOutput
+    $location = @($cleanupOutput | Where-Object { "$_".StartsWith('Order process evidence: ') })
+    if ($location.Count -ne 1) { throw 'Cleanup acceptance did not produce an evidence directory.' }
+    $evidencePath = "$($location[0])".Substring('Order process evidence: '.Length)
+    $checks = @(Get-Content -LiteralPath (Join-Path $evidencePath 'evidence.json') -Raw | ConvertFrom-Json)
+    if ($checks.Count -ne 3 -or @($checks | Where-Object { $_.result -ne 'PASS' }).Count) {
+        throw 'Cleanup acceptance report is incomplete.'
+    }
+    $phases.Add([pscustomobject]@{phase='cleanup';checks=$checks.Count;evidencePath=$evidencePath;result='PASS'})
 }
 function Invoke-BackpressureAcceptance {
     $variables = @{
@@ -152,8 +172,11 @@ try {
         }
     }
     Wait-Topology 3 'quorum-before'
-    Invoke-BackpressureAcceptance
-    Invoke-ExecutionAcceptance 'three-nodes' ([bool]$SkipBuild)
+    if ($CleanupOnly) { Invoke-CleanupAcceptance }
+    else {
+        Invoke-BackpressureAcceptance
+        Invoke-ExecutionAcceptance 'three-nodes' ([bool]$SkipBuild)
+    }
     if (!$SkipFailover) {
         $stopped = $true
         if ($ManualFailover) { $null = Read-Host "Stop node $($capability.node), then press Enter" }

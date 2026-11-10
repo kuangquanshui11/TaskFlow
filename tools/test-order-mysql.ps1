@@ -1,5 +1,7 @@
-param([ValidateRange(1024,65535)][int]$Port = 13389, [switch]$IncludeFlow, [switch]$IncludeSales, [switch]$IncludeInventorySync, [switch]$IncludeCleanup)
+param([ValidateRange(1024,65535)][int]$Port = 13389, [switch]$IncludeFlow, [switch]$IncludeSales,
+    [switch]$IncludeInventorySync, [switch]$IncludeCleanup, [string]$CleanupMqSettingsPath)
 $ErrorActionPreference = 'Stop'
+if ($CleanupMqSettingsPath -and !$IncludeCleanup) { throw 'Cleanup MQ acceptance requires -IncludeCleanup.' }
 $repoPath = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoPath
 $mysqlExe = (Get-Command mysqld.exe -CommandType Application -ErrorAction Stop).Source
@@ -49,6 +51,13 @@ try {
     Write-Output ('Order MySQL tests passed. Evidence: ' + $runPath)
     if($IncludeInventorySync) { & (Join-Path $PSScriptRoot 'test-order-flow.ps1') -IncludeInventorySync }
     if($IncludeFlow) { & (Join-Path $PSScriptRoot 'test-order-flow.ps1') }
+    if($CleanupMqSettingsPath) {
+        # Give the process fixture a fresh schema in the same isolated MySQL instance.
+        $env:TASKFLOW_ORDER_TEST_DB_SCHEMA = 'taskflow_it_order_' + [Guid]::NewGuid().ToString('N')
+        & (Join-Path $mysqlBinPath 'mysql.exe') --no-defaults --protocol=TCP --host=127.0.0.1 "--port=$Port" --user=root "--execute=CREATE DATABASE $env:TASKFLOW_ORDER_TEST_DB_SCHEMA CHARACTER SET utf8mb4"
+        if ($LASTEXITCODE -ne 0) { throw 'Cleanup flow schema creation failed.' }
+        & (Join-Path $PSScriptRoot 'test-order-flow.ps1') -CleanupMqSettingsPath $CleanupMqSettingsPath
+    }
 } finally {
     foreach ($name in $variableNames) { [Environment]::SetEnvironmentVariable($name, $savedVariables[$name], 'Process') }
     if ($mysqlProcess -and !$mysqlProcess.HasExited) {
