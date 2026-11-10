@@ -44,7 +44,7 @@ try {
     # 数据源 URL 与会话隔离级别由 application-test-mysql.yml 提供。
     $testClasses = @('OrderMysqlTests')
     if ($IncludeSales) { $testClasses += 'SalesReportMysqlTests' }
-    if ($IncludeInventorySync) { $testClasses += 'InventorySyncMysqlTests' }
+    if ($IncludeInventorySync) { $testClasses += @('InventorySyncMysqlTests', 'WmsInventorySyncMysqlTests') }
     if ($IncludeCleanup) { $testClasses += 'CleanupMysqlTests' }
     if ($IncludePayment) { $testClasses += 'OrderPaymentMysqlTests' }
     & (Join-Path $repoPath 'mvnw.cmd') -B -l (Join-Path $runPath 'tests.log') -pl examples/taskflow-order-service ("-Dtest=" + ($testClasses -join ',')) test

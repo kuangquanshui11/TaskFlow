@@ -2,6 +2,7 @@ package com.taskflow.orders.inventory.controller;
 
 import com.taskflow.orders.inventory.dto.InventorySyncProtocol.Request;
 import com.taskflow.orders.inventory.dto.InventorySyncProtocol.Result;
+import com.taskflow.orders.inventory.dto.InventorySyncProtocol.Status;
 import com.taskflow.orders.inventory.dto.InventorySyncProtocol.Stock;
 import com.taskflow.orders.inventory.service.IInventorySyncService;
 import jakarta.validation.Valid;
@@ -32,5 +33,10 @@ public class InventorySyncController {
     @GetMapping("/select")
     public Stock select(@Positive @RequestParam long warehouseId, @Positive @RequestParam long skuId) {
         return inventorySync.select(warehouseId, skuId);
+    }
+
+    @GetMapping("/selectStatus")
+    public Status selectStatus(@Positive @RequestParam long warehouseId) {
+        return inventorySync.selectStatus(warehouseId);
     }
 }

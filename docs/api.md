@@ -497,10 +497,11 @@ Worker salesReport 参数示例为 `{"shopId":8}`，首次生成历史日期示�
 
 | 方法与路径 | 参数 | HTTP 200 响应 |
 | --- | --- | --- |
-| POST `/internal/v1/inventory-sync/insert` | JSON `warehouseId`（正整数）、`requestKey`（1–100 个小写 ASCII 字母、数字或 `._:-`，首字符须为字母或数字） | `id`、`warehouseId`、`sourceVersion`、`outcome`、`updatedCount` |
-| GET `/internal/v1/inventory-sync/select` | query `warehouseId`、`skuId`（正整数） | `warehouseId`、`skuId`、`quantity`、该 SKU 的 `sourceVersion` |
+| POST `/internal/v1/inventory-sync/insert` | JSON `warehouseId`（正整数）、`requestKey`（1–100 个小写 ASCII 字母、数字或 `._:-`，首字符须为字母或数字） | `id`、`warehouseId`、`sourceVersion`、`outcome`、`updatedCount`、`sourceId` |
+| GET `/internal/v1/inventory-sync/select` | query `warehouseId`、`skuId`（正整数） | 当前来源的 `warehouseId`、`skuId`、`quantity` 和该 SKU 的 `sourceVersion` |
+| GET `/internal/v1/inventory-sync/selectStatus` | query `warehouseId`（正整数） | 当前来源的 `sourceId`、`warehouseId`、`sourceVersion`（0 表示尚无有效版本）、`skuCount`、`lastSyncedAt`、`lastFailureAt`、`lastFailureCode`、`lastFailureRequestKey`。时间和失败字段可为空 |
 
-同键同仓库返回原结果，同键换仓库返回 409 `IDEMPOTENCY_CONFLICT`。未知仓库、未同步的 SKU 和关闭入口返回 404，源暂不可读或快照不合法返回 503，参数或令牌错误分别返回 400、401。结果含义和部署方式见 [仓库库存快照同步](inventory-sync.md)。
+同键同仓库返回原结果，同键换仓库返回 409 `IDEMPOTENCY_CONFLICT`。新请求遇到同源同仓库同版本异内容返回 409 `INVENTORY_VERSION_CONFLICT`。WMS 模式的 `updatedCount` 计入本次 upsert 和移除的镜像行。未知仓库、未同步的 SKU 和关闭入口返回 404，源超时、暂不可读或快照不合法返回 503。订单服务的参数或内部令牌错误分别返回 400、401，WMS 拒绝凭据返回 422 `WMS_AUTH_FAILED`，其他不可重试的 WMS HTTP 响应返回 422 `WMS_REQUEST_REJECTED`。全量接口和部署方式见 [仓库库存快照同步](inventory-sync.md)。
 
 ## 过期库存缓存投递历史清理 API（v1）
 

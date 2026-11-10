@@ -42,7 +42,14 @@ management:
 order:
   inventory-sync:
     enabled: "${TASKFLOW_INVENTORY_SYNC_SOURCE_ENABLED:false}"
+    source: "${TASKFLOW_INVENTORY_SYNC_SOURCE:sample}"
     sample-source: "${TASKFLOW_INVENTORY_SYNC_SAMPLE_SOURCE:classpath:samples/inventory-snapshot.json}"
+    wms-source-id: "${TASKFLOW_INVENTORY_SYNC_WMS_SOURCE_ID:wms}"
+    wms-url: "${TASKFLOW_INVENTORY_SYNC_WMS_URL:}"
+    wms-token: "${TASKFLOW_INVENTORY_SYNC_WMS_TOKEN:}"
+    wms-connect-timeout: 1s
+    wms-request-timeout: 3s
+    wms-allow-loopback-http: false
   cleanup:
     enabled: "${TASKFLOW_EXPIRED_DATA_CLEANUP_SOURCE_ENABLED:false}"
     token: "${TASKFLOW_EXPIRED_DATA_CLEANUP_TOKEN:}"

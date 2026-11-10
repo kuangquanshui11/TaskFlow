@@ -258,6 +258,7 @@ try {
         $inventoryWarehouse=120
         $inventorySource=Join-Path $runPath 'inventory-source.json'
         Write-InventorySnapshot 1 80
+        Set-TestEnvironment 'TASKFLOW_INVENTORY_SYNC_SOURCE' 'sample'
         Set-TestEnvironment 'TASKFLOW_INVENTORY_SYNC_SAMPLE_SOURCE' ([Uri]$inventorySource).AbsoluteUri
     }
     Start-Proxy pass;Start-Service scheduler;Start-Service worker;Start-Service order

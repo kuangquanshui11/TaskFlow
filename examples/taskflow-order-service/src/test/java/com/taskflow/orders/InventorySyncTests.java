@@ -42,6 +42,7 @@ class InventorySyncTests {
     @DynamicPropertySource
     static void configureSource(DynamicPropertyRegistry properties) {
         properties.add("order.inventory-sync.enabled", () -> true);
+        properties.add("order.inventory-sync.source", () -> "sample");
         properties.add("order.inventory-sync.sample-source", () -> sourceDir.resolve("snapshot.json").toUri().toString());
     }
 
@@ -67,6 +68,8 @@ class InventorySyncTests {
                 """);
         assertThat(sync.insert(originalRequest)).isEqualTo(committed);
         assertThat(sync.insert(new Request("new-version", 12)).sourceVersion()).isEqualTo(3);
+        // 升级前最后一批只有 SKU 上的版本标记，未提交的旧 SKU 不参与该版摘要。
+        db.update("UPDATE inventory_sync_warehouse SET fingerprint=NULL WHERE source_id='sample' AND warehouse_id=12");
         assertThat(sync.insert(new Request("same-version", 12)).outcome()).isEqualTo(Outcome.UNCHANGED);
 
         snapshot(12, 2, """
