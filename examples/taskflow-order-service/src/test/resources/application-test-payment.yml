@@ -1,0 +1,8 @@
+order:
+  wechat-pay:
+    enabled: true
+    app-id: wxTest
+    merchant-id: "123456"
+  payment-work:
+    inventory-release-enabled: true
+    scan-delay: 3600000

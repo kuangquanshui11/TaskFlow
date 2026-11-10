@@ -49,6 +49,33 @@ order:
   samples-enabled: "${TASKFLOW_ORDER_SAMPLES_ENABLED:false}"
   api-token: "${TASKFLOW_ORDER_API_TOKEN:}"
   worker-token: "${TASKFLOW_ORDER_WORKER_TOKEN:}"
+  wechat-pay:
+    enabled: "${TASKFLOW_WECHAT_PAY_ENABLED:false}"
+    app-id: "${TASKFLOW_WECHAT_PAY_APP_ID:}"
+    merchant-id: "${TASKFLOW_WECHAT_PAY_MERCHANT_ID:}"
+    merchant-serial: "${TASKFLOW_WECHAT_PAY_MERCHANT_SERIAL:}"
+    private-key-path: "${TASKFLOW_WECHAT_PAY_PRIVATE_KEY_PATH:}"
+    public-key-id: "${TASKFLOW_WECHAT_PAY_PUBLIC_KEY_ID:}"
+    public-key-path: "${TASKFLOW_WECHAT_PAY_PUBLIC_KEY_PATH:}"
+    api-v3-key: "${TASKFLOW_WECHAT_PAY_API_V3_KEY:}"
+    notify-url: "${TASKFLOW_WECHAT_PAY_NOTIFY_URL:}"
+    connect-timeout: 2s
+    request-timeout: 5s
+  payment-work:
+    inventory-release-enabled: "${TASKFLOW_INVENTORY_RELEASE_ENABLED:false}"
+    inventory-release-url: "${TASKFLOW_INVENTORY_RELEASE_URL:}"
+    inventory-release-token: "${TASKFLOW_INVENTORY_RELEASE_TOKEN:}"
+    inventory-connect-timeout: 2s
+    inventory-request-timeout: 5s
+    lease: 30s
+    retry-delay: 15s
+    payment-poll-delay: 30s
+    refund-poll-delay: 1m
+    reconciliation-window: 8d
+    max-failures: 8
+    batch-size: 10
+    scan-enabled: true
+    scan-delay: 2000
   payment-window: "${TASKFLOW_ORDER_PAYMENT_WINDOW:30m}"
   cache-enabled: "${TASKFLOW_ORDER_CACHE_ENABLED:true}"
   cache-ttl: 30s

@@ -21,6 +21,9 @@ public interface OrderMapper {
         ORDER BY expires_at,id LIMIT #{batchSize}</script>
         """)
     List<Order> candidates(Batch batch);
-    @Select("SELECT order_id,sku_id,operation,quantity,request_id,created_at FROM stock_ledger WHERE order_id=#{id} ORDER BY created_at,id")
+    @Select("""
+        SELECT order_id,sku_id,operation,quantity,request_id,created_at FROM stock_ledger WHERE order_id=#{id}
+        ORDER BY created_at,CASE WHEN operation='HELD' THEN 0 ELSE 1 END,id
+        """)
     List<Ledger> ledger(String id);
 }

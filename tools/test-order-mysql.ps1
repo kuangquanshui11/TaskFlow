@@ -1,5 +1,5 @@
 param([ValidateRange(1024,65535)][int]$Port = 13389, [switch]$IncludeFlow, [switch]$IncludeSales,
-    [switch]$IncludeInventorySync, [switch]$IncludeCleanup, [string]$CleanupMqSettingsPath)
+    [switch]$IncludeInventorySync, [switch]$IncludeCleanup, [switch]$IncludePayment, [string]$CleanupMqSettingsPath)
 $ErrorActionPreference = 'Stop'
 if ($CleanupMqSettingsPath -and !$IncludeCleanup) { throw 'Cleanup MQ acceptance requires -IncludeCleanup.' }
 $repoPath = Split-Path -Parent $PSScriptRoot
@@ -46,6 +46,7 @@ try {
     if ($IncludeSales) { $testClasses += 'SalesReportMysqlTests' }
     if ($IncludeInventorySync) { $testClasses += 'InventorySyncMysqlTests' }
     if ($IncludeCleanup) { $testClasses += 'CleanupMysqlTests' }
+    if ($IncludePayment) { $testClasses += 'OrderPaymentMysqlTests' }
     & (Join-Path $repoPath 'mvnw.cmd') -B -l (Join-Path $runPath 'tests.log') -pl examples/taskflow-order-service ("-Dtest=" + ($testClasses -join ',')) test
     if ($LASTEXITCODE -ne 0) { throw ('Order MySQL tests failed. Evidence: ' + $runPath) }
     Write-Output ('Order MySQL tests passed. Evidence: ' + $runPath)

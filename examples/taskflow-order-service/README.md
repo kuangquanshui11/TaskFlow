@@ -1,6 +1,6 @@
 # 订单超时关闭与库存示例
 
-我把订单和库存预占归入独立业务服务，使用同一本地事务保证业务正确性。TaskFlow 只通过 HTTP 发起超时检查，不访问订单数据库。第一版每笔订单购买一种 SKU，默认付款窗口为 30 分钟，创建时写入 `expires_at`；本接口是模拟付款，不对接支付渠道或资金系统。
+我把订单和库存预占归入独立业务服务，使用同一本地事务保证业务正确性。TaskFlow 只通过 HTTP 发起超时检查，不访问订单数据库。每笔订单购买一种 SKU，默认付款窗口为 30 分钟，创建时写入 `expires_at`。默认提供受保护的模拟付款，可按 [微信支付 Native](../../docs/wechat-native-payment.md) 配置真实支付、迟到款退款和外部库存补偿。
 
 ## 启动
 
@@ -38,7 +38,7 @@ java -jar examples/taskflow-order-service/target/taskflow-order-service-0.0.1-SN
 
 我先插入唯一的下单请求键，再以 `available >= quantity` 条件更新库存，创建预占和流水、写入缓存同步 Outbox，一起提交。相同请求键和参数返回原订单；更换购买参数返回 409。数量必须为正。库存扣减失败时整笔创建回滚。
 
-付款和关单按订单主键执行 `FOR UPDATE`，再转换 `HELD` 预占及更新库存。付款严格要求当前时刻早于截止时间；已付款请求重复确认返回原结果，已关闭或过期则返回 409。付款只减少预占量，关单同时返还可用量。订单、库存、预占、唯一业务流水和 Outbox 一起提交；不宣称真实外部支付副作用恰好执行一次。
+付款和关单按订单主键执行 `FOR UPDATE`，再转换 `HELD` 预占及更新库存。模拟付款按当前时间检查截止，真实支付按微信确认的付款时间及锁内订单状态决定消费预占或安排退款。付款只减少预占量，关单同时返还可用量。订单、库存、预占、唯一业务流水和 Outbox 一起提交。
 
 超时查询使用 `(state, expires_at, id)` 索引和键集游标，以本轮第一次请求的服务端时间为 cutoff。每个订单一个短事务，锁内重新检查状态与期限。失败订单计入 `failed`，游标继续前进；Worker 批量结束后将部分失败报告为可重试，后续 Attempt 从头重扫。达到批数或执行预算后结束本轮，剩余订单留到下一轮。没有候选也是成功；成功不能证明所有积压订单已经处理。流水保存 Run 关联请求 ID，但库存幂等依赖稳定的订单预占键，人工新建 Run 也不会重复释放。
 
@@ -55,6 +55,7 @@ HTTP POST 不自动重放。Worker 的 Feign 客户端使用 YAML 超时、现�
 ```powershell
 .\mvnw.cmd -pl examples/taskflow-order-service test
 .\tools\test-order-mysql.ps1
+.\tools\test-order-mysql.ps1 -IncludePayment
 # 先在根目录完成 verify，生成三个服务的 JAR，再执行进程故障验收：
 .\tools\test-order-mysql.ps1 -IncludeFlow
 # RedisServerPath 指向本机 Redis 可执行文件：
@@ -63,6 +64,6 @@ HTTP POST 不自动重放。Worker 的 Feign 客户端使用 YAML 超时、现�
 
 MySQL 脚本要求 PATH 中有 mysqld/mysql/mysqladmin；在 `.tools/order-mysql` 新建临时实例，只监听回环端口 13389，结束时停止进程，保留数据和日志证据。进程验收还需要 Node，启动 Scheduler、Worker、订单服务与故障代理，默认使用 19380–19383；订单用独立 MySQL，平台用各自 H2 文件。不会复用业务数据库。不要把此测试配置用于部署。
 
-启动失败先检查对应日志、端口、schema 权限和令牌；迁移失败不应跳过校验或自动清库。进程故障测试在 finally 中关闭所启动的进程。真实支付、独立仓储补偿、Redis 前置预扣以及跨机器故障仍不属于此示例的保证范围。
+启动失败先检查对应日志、端口、schema 权限和令牌。迁移失败应保留数据并排查错误。进程故障测试在 finally 中关闭所启动的进程。微信商户和仓储接收端的联调使用实际接入配置，订单模块的隔离测试使用外部协议替身。
 
 当前验证日期、环境、证据和未验证范围见 [订单验收记录](../../docs/order-verification.md)。

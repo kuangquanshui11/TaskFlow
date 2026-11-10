@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import com.taskflow.orders.cleanup.config.CleanupProperties;
+import com.taskflow.orders.payment.controller.OrderPaymentController;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
 import org.springframework.stereotype.Component;
@@ -25,7 +26,11 @@ public class ApiAuthenticationFilter extends OncePerRequestFilter {
     @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         String path = request.getRequestURI();
-        if (path.equals("/actuator/health")) { chain.doFilter(request, response); return; }
+        if (path.equals("/actuator/health") || ("POST".equals(request.getMethod())
+                && OrderPaymentController.WECHAT_CALLBACK_PATH.equals(path))) {
+            chain.doFilter(request, response);
+            return;
+        }
         boolean internal = path.equals("/internal/v1/orders/updateTimeout")
                 || path.startsWith("/internal/v1/sales-reports/") || path.startsWith("/internal/v1/inventory-sync/");
         String expected = request.getServletPath().startsWith("/internal/v1/expired-data/")

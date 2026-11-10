@@ -7,6 +7,7 @@ import com.taskflow.orders.inventory.service.IInventoryService;
 import com.taskflow.orders.order.dto.OrderProtocol.*;
 import com.taskflow.orders.order.mapper.OrderMapper;
 import com.taskflow.orders.order.service.IOrderService;
+import com.taskflow.orders.payment.service.IOrderPaymentService;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -21,9 +22,11 @@ public class OrderServiceImpl implements IOrderService {
     private final OrderProperties properties;
     private final TransactionTemplate transactions;
     private final com.taskflow.orders.report.mapper.SalesMapper sales;
+    private final IOrderPaymentService payments;
     public OrderServiceImpl(OrderMapper mapper,IInventoryService inventory,OrderProperties properties,PlatformTransactionManager manager,
-                            com.taskflow.orders.report.mapper.SalesMapper sales) {
+                            com.taskflow.orders.report.mapper.SalesMapper sales,IOrderPaymentService payments) {
         this.sales=sales;
+        this.payments=payments;
         this.mapper=mapper;this.inventory=inventory;this.properties=properties;transactions=new TransactionTemplate(manager);
     }
     @Override public Order insert(Create request) {
@@ -61,6 +64,7 @@ public class OrderServiceImpl implements IOrderService {
     @Override public Order updatePayment(String id) {
         return transactions.execute(status -> {
             var order=require(mapper.lock(id)); var now=Instant.now();
+            payments.checkSimulationAllowed(id);
             if(order.state().equals("PAID")) return order;
             if(!order.state().equals("PENDING") || !now.isBefore(order.expiresAt()))
                 throw new ResponseStatusException(HttpStatus.CONFLICT,"ORDER_CLOSED_OR_EXPIRED");
@@ -87,6 +91,7 @@ public class OrderServiceImpl implements IOrderService {
                     if(!order.state().equals("PENDING") || order.expiresAt().isAfter(cutoff)) return false;
                     inventory.settle(order.id(),order.skuId(),order.quantity(),true,requestId);
                     if(mapper.close(order.id(),Instant.now())!=1) throw new IllegalStateException("Order changed under lock");
+                    payments.enqueueInventoryRelease(order);
                     return true;
                 }));
                 if(changed) closed++; else skipped++;

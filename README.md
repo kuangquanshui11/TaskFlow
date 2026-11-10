@@ -282,4 +282,4 @@ Relay 发布后未标记时退出、Worker 执行中退出、迟到上报与发�
 
 ## 独立订单业务示例
 
-新增 [订单服务](examples/taskflow-order-service/README.md)，默认端口 8083，使用独立 MySQL schema/账号；可选 Redis 查询缓存。它实现下单预占、模拟付款、超时关单和库存释放，Worker 通过可选 `orderTimeoutCheck` Handler 接入。启动、鉴权、故障验收见示例 README。
+独立订单服务默认端口 8083，使用独立 MySQL schema 和账号，可选 Redis 查询缓存。它实现下单预占、超时关单和库存释放，Worker 通过 `orderTimeoutCheck` Handler 接入。订单服务默认使用受保护的模拟付款，配置微信商户后可启用 Native 扫码、验签回调、查单和迟到款退款，并按需接入外部仓储库存补偿。 [订单服务](examples/taskflow-order-service/README.md) · [支付接入](docs/wechat-native-payment.md)
