@@ -32,7 +32,8 @@ public class ApiAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
         boolean internal = path.equals("/internal/v1/orders/updateTimeout")
-                || path.startsWith("/internal/v1/sales-reports/") || path.startsWith("/internal/v1/inventory-sync/");
+                || path.startsWith("/internal/v1/sales-reports/") && !path.equals("/internal/v1/sales-reports/update")
+                || path.startsWith("/internal/v1/inventory-sync/");
         String expected = request.getServletPath().startsWith("/internal/v1/expired-data/")
                 ? cleanup.token() : internal ? properties.workerToken() : properties.apiToken();
         String supplied = request.getHeader("X-Taskflow-Token");

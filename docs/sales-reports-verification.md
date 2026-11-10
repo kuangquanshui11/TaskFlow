@@ -1,5 +1,18 @@
 # 销售日报验证记录
 
+## 2026-11-10 日报修订、目录与补录
+
+环境为 Windows、PowerShell、Java 21.0.12.1、Spring Boot 4.1.1。全仓测试使用 H2 等默认测试设施，MySQL 专项使用独立回环实例 MySQL 8.0.34 和 REPEATABLE READ。
+
+| 命令 | 结果 | 证据 |
+| --- | --- | --- |
+| `.\mvnw.cmd -B -l .tools-sales-verify.log verify` | 七个服务模块成功，382 通过、40 条件跳过，0 失败或错误 | `.tools-sales-verify.log`，16:00:44 +08:00 完成 |
+| `.\tools\test-order-mysql.ps1 -IncludeSales` | 17 通过，含 9 个销售测试，0 失败、错误或跳过 | `.tools/order-mysql/20261110-160107-127/tests.log`，16:01:35 +08:00 完成 |
+
+H2 和 MySQL 均覆盖目录更新、快照补录、SKU 改名聚合、修订前后的金额及版本历史、修订写入失败回滚、并发重放、跨天日期绑定和夏令时窗口。H2 另验证从 V5 迁移时保留旧报表 ID、明细和请求结果。订单与 Admin 的 HTTP 测试覆盖写入令牌和历史读取权限。
+
+本轮使用测试目录与成交凭据，实际 ERP/PIM 发布、生产数据对账和持续定时任务故障链路仍待部署验证。
+
 ## 2026-11-02 环境与结果
 
 环境：Windows、PowerShell 7、Java 21.0.12.1、Spring Boot 4.1.1、Node.js 24.15.0、Chrome、MySQL 8.0.34。默认测试使用独立 H2；MySQL 专项新建回环地址的隔离实例，REPEATABLE READ。运行验证使用本机独立 taskflow_order 账号/schema、既有 Keycloak/Gateway/Redis/Eureka 和真实 RabbitMQ，未改已有前端回调地址。

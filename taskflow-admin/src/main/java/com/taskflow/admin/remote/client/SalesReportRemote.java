@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.*;
 public interface SalesReportRemote {
     @GetMapping("/internal/v1/sales-reports/select")
     Page select(@SpringQueryMap Map<String,String> query,@RequestHeader Map<String,String> headers);
+    @GetMapping("/internal/v1/sales-reports/selectRevisions")
+    Page revisions(@SpringQueryMap Map<String,String> query,@RequestHeader Map<String,String> headers);
     @GetMapping("/internal/v1/sales-reports/selectById")
     Detail detail(@RequestParam String id,@RequestHeader Map<String,String> headers);
     @GetMapping("/internal/v1/sales-reports/selectExport")

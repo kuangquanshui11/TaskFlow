@@ -8,7 +8,7 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 控制台 `/runs` 提供全局运行列表，支持创建时间、Run 状态、任务 ID、触发来源组合筛选与 Run ID 精确查询；沿用 run:read 权限，查询数据由 Scheduler 管理。时间与分页边界见 [全局运行查询](docs/global-run-query.md)。
 
-销售日报已接入订单示例、Worker salesReport 与控制台查询/CSV 下载。可按固定种子导入样例订单，按店铺及付款日期生成持久化快照；准备、启动和统计边界见 [销售日报](docs/sales-reports.md)。
+销售日报已接入订单示例、Worker salesReport 与控制台查询/CSV 下载。订单服务支持目录发布、历史成交快照补录和按日期重算，保留各版日报。准备、启动和修订流程见 [销售日报](docs/sales-reports.md)。
 
 定期同步库存模板已接入可选的 Worker inventorySync。订单示例从指定仓库的样例快照更新独立镜像，支持按 Run 去重和版本比较。启用和验证见 [仓库库存快照同步](docs/inventory-sync.md)。
 

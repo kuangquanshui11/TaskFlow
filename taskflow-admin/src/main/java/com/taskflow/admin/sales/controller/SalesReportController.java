@@ -13,6 +13,10 @@ public class SalesReportController {
             @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int pageSize) {
         return ApiResponse.success(reports.select(shopId,page,pageSize));
     }
+    @GetMapping("/selectRevisions") public ApiResponse<Page> revisions(@RequestParam String id,
+            @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int pageSize) {
+        return ApiResponse.success(reports.selectRevisions(id,page,pageSize));
+    }
     @GetMapping("/selectById") public ApiResponse<Detail> detail(@RequestParam String id) { return ApiResponse.success(reports.selectById(id)); }
     @GetMapping("/selectExport") public ApiResponse<Export> export(@RequestParam String id) { return ApiResponse.success(reports.selectExport(id)); }
 }

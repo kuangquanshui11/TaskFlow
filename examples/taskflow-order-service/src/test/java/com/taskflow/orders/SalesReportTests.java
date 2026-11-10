@@ -5,7 +5,9 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import com.taskflow.orders.report.dto.SalesProtocol.*;
+import com.taskflow.orders.report.dto.SalesInput.*;
 import com.taskflow.orders.report.mapper.SalesMapper;
+import com.taskflow.orders.report.service.ISalesInputService;
 import com.taskflow.orders.report.service.ISalesReportService;
 import com.taskflow.orders.sample.mapper.SalesSampleMapper;
 import com.taskflow.orders.sample.service.ISalesSampleService;
@@ -27,6 +29,7 @@ import static org.mockito.Mockito.*;
 @ActiveProfiles("test")
 class SalesReportTests {
     @Autowired ISalesReportService reports;
+    @Autowired ISalesInputService inputs;
     @Autowired ISalesSampleService seeder;
     @Autowired SalesSampleMapper samples;
     @MockitoSpyBean SalesMapper sales;
@@ -81,6 +84,8 @@ class SalesReportTests {
         assertThat(sales.request(input.requestKey()).businessDate()).isEqualTo(report.businessDate());
         now.set(now.get().plus(Duration.ofDays(2)));
         assertThat(reports.insert(input)).isEqualTo(report);
+        assertThat(reports.insert(request(shop,null)).businessDate()).isEqualTo(report.businessDate().plusDays(2));
+        assertThat(reports.insert(request(shop,report.businessDate()))).isEqualTo(report);
         now.set(Instant.now());
         assertThatThrownBy(()->reports.insert(request(shop,LocalDate.now(ZoneId.of("Asia/Shanghai"))))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(()->reports.select(null,0,20)).isInstanceOf(IllegalArgumentException.class);
@@ -146,5 +151,70 @@ class SalesReportTests {
         paid(sku,1,day.plusDays(1).atStartOfDay(zone).toInstant());
         var report=reports.insert(new Generate(UUID.randomUUID().toString(),shop,day,zone.getId()));
         assertThat(report.orderCount()).isEqualTo(1);
+    }
+    @Test void historicalSnapshotAndCatalogUpdatesAreIncludedInAnImmutableRevision() {
+        long shop=shop(), sku=ids.incrementAndGet();
+        inventory.insert(sku,100);
+        var legacy=orders.insert(new Create(UUID.randomUUID().toString(),sku,2));
+        orders.updatePayment(legacy.id());
+        var start=date.atStartOfDay(ZoneId.of("Asia/Shanghai")).toInstant();
+        samples.dates(legacy.id(),start.minusSeconds(60),start.plusSeconds(1800),start,null);
+
+        var firstRequest=request(shop,date);
+        var first=reports.insert(firstRequest);
+        assertThat(first.revision()).isEqualTo(1);
+        assertThat(first.totalAmountCents()).isZero();
+
+        var product=new CatalogProduct(sku,shop,"旧名称",300,"erp-test",1L);
+        assertThat(inputs.updateProduct(product)).isEqualTo(product);
+        assertThat(inputs.updateProduct(product)).isEqualTo(product);
+        paid(sku,1,start.plusSeconds(60));
+        inputs.updateProduct(new CatalogProduct(sku,shop,"新名称",500,"erp-test",2L));
+        assertThatThrownBy(()->inputs.updateProduct(product))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        paid(sku,1,start.plusSeconds(120));
+        var backfill=new Backfill(legacy.id(),shop,"历史名称",100,"legacy-pos","receipt-"+legacy.id());
+        assertThat(inputs.insertBackfill(backfill)).isEqualTo(backfill);
+        assertThat(inputs.insertBackfill(backfill)).isEqualTo(backfill);
+        assertThatThrownBy(()->inputs.insertBackfill(new Backfill(legacy.id(),shop,"历史名称",200,
+                backfill.sourceSystem(),backfill.sourceReference())))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+
+        var revise=new Revise(UUID.randomUUID().toString(),shop,date,first.timeZone(),"补录旧订单与迟到成交");
+        var revised=reports.update(revise);
+        assertThat(revised.revision()).isEqualTo(2);
+        assertThat(revised.revisionReason()).isEqualTo(revise.reason());
+        assertThat(revised.orderCount()).isEqualTo(3);
+        assertThat(revised.totalQuantity()).isEqualTo(4);
+        assertThat(revised.totalAmountCents()).isEqualTo(1000);
+        assertThat(reports.selectById(revised.id()).items()).containsExactly(new Item(sku,"新名称",3,4,1000));
+        assertThat(reports.selectById(first.id()).items()).isEmpty();
+        assertThat(reports.selectExport(first.id()).content()).contains("0,0,0,1");
+        assertThat(reports.select(shop,1,20).items()).containsExactly(revised);
+        assertThat(reports.selectRevisions(first.id(),1,20).items()).containsExactly(revised,first);
+        assertThat(reports.insert(firstRequest)).isEqualTo(first);
+        assertThat(reports.insert(request(shop,date))).isEqualTo(revised);
+        assertThat(reports.update(revise)).isEqualTo(revised);
+        assertThatThrownBy(()->reports.update(new Revise(revise.requestKey(),shop,date,revise.timeZone(),"修改原因")))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+    }
+    @Test void concurrentRevisionRetriesCommitOnceAndFailedRevisionPreservesLatest() throws Exception {
+        long shop=shop(), sku=product(shop,100,"商品");
+        var first=reports.insert(request(shop,date));
+        paid(sku,1,date.atStartOfDay(ZoneId.of(first.timeZone())).toInstant());
+        var revise=new Revise(UUID.randomUUID().toString(),shop,date,first.timeZone(),"迟到付款");
+        doThrow(new IllegalStateException("injected")).when(sales).insertItem(anyString(),any(Item.class));
+        try {
+            assertThatThrownBy(()->reports.update(revise)).isInstanceOf(IllegalStateException.class);
+            assertThat(reports.selectRevisions(first.id(),1,20).items()).containsExactly(first);
+        } finally { reset(sales); }
+        try(var pool=Executors.newFixedThreadPool(4)) {
+            var attempts=Collections.<Callable<Report>>nCopies(8,()->reports.update(revise));
+            var results=pool.invokeAll(attempts);
+            var winner=results.getFirst().get(15,TimeUnit.SECONDS);
+            assertThat(winner.revision()).isEqualTo(2);
+            for(var result:results) assertThat(result.get(15,TimeUnit.SECONDS)).isEqualTo(winner);
+        }
+        assertThat(reports.selectRevisions(first.id(),1,20).total()).isEqualTo(2);
     }
 }

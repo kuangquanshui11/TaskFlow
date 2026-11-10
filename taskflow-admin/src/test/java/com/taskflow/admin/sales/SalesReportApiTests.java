@@ -25,7 +25,7 @@ class SalesReportApiTests {
     @MockitoBean SalesReportRemote remote;
     @Autowired JsonMapper json;
     @Test void viewerCanQueryAndExportWithoutLocalSqlTransaction() throws Exception {
-        var report=new Report(UUID.randomUUID().toString(),8,LocalDate.of(2026,10,1),"Asia/Shanghai",2,2,30000,Instant.now());
+        var report=new Report(UUID.randomUUID().toString(),8,LocalDate.of(2026,10,1),"Asia/Shanghai",2,2,30000,Instant.now(),2L,"迟到数据");
         when(remote.select(anyMap(),anyMap())).thenAnswer(call -> {
             assertThat(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
             assertThat(call.<Map<String,String>>getArgument(1)).containsEntry("X-Taskflow-Token","test-sales-query");
@@ -34,6 +34,12 @@ class SalesReportApiTests {
         assertThat(get("select?shopId=8",true).statusCode()).isEqualTo(200);
         when(remote.detail(eq(report.id()),anyMap())).thenReturn(new Detail(report,List.of(new Item(1,"测试商品",2,2,30000))));
         assertThat(get("selectById?id="+report.id(),true).statusCode()).isEqualTo(200);
+        when(remote.revisions(eq(Map.of("id",report.id(),"page","1","pageSize","20")),anyMap()))
+                .thenReturn(new Page(List.of(report),1,1,20));
+        var revisions=get("selectRevisions?id="+report.id(),true);
+        assertThat(revisions.statusCode()).isEqualTo(200);
+        assertThat(json.readTree(revisions.body()).path("data").path("items").get(0).path("revision").asLong()).isEqualTo(2);
+        assertThat(get("selectRevisions?id="+report.id(),false).statusCode()).isEqualTo(403);
         when(remote.export(eq(report.id()),anyMap())).thenReturn(new Export("sales-8-2026-10-01.csv","total,30000"));
         var exported=get("selectExport?id="+report.id(),true);
         assertThat(exported.statusCode()).isEqualTo(200);

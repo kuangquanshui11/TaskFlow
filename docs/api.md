@@ -463,23 +463,33 @@ Worker Handler 参数为 `{"batchSize":100,"maxBatches":10}`，上限分别500�
 
 | 方法与路径 | 参数 | data |
 | --- | --- | --- |
-| GET /api/v1/sales-reports/select | 可选 shopId；page 默认1、范围1–100万；pageSize 默认20、范围1–100 | items、total、page、pageSize |
+| GET /api/v1/sales-reports/select | 可选 shopId；page 默认1、范围1–100万；pageSize 默认20、范围1–100 | 每个店铺、日期和时区的最新 Report，分页字段为 items、total、page、pageSize |
 | GET /api/v1/sales-reports/selectById | id（报表 UUID） | report 与 items（商品明细） |
+| GET /api/v1/sales-reports/selectRevisions | id（任一版本的报表 UUID）、page、pageSize | 同范围的 Report 按版本降序分页 |
 | GET /api/v1/sales-reports/selectExport | id | filename、content；前端将 UTF-8 CSV 内容下载为文件 |
 
-Report 字段：id、shopId、businessDate、timeZone、orderCount、totalQuantity、totalAmountCents、generatedAt。Item 字段：skuId、productName、orderCount、totalQuantity、totalAmountCents。暂无日报返回空 items；合法的零销售日报保留零汇总；上游故障或损坏响应返回 503，不伪造空报表。未知报表返回404，无读权限403，参数错误400。
+Report 字段包括 id、shopId、businessDate、timeZone、orderCount、totalQuantity、totalAmountCents、generatedAt、revision（从 1 开始）和 revisionReason（首版为 null）。Item 字段包括 skuId、productName、orderCount、totalQuantity、totalAmountCents。暂无日报返回空 items，零销售日报保留零汇总。上游故障或损坏响应返回 503，未知报表返回 404，无读权限返回 403，参数错误返回 400。
 
 以下接口仅在独立订单服务开放，公共 Gateway 不转发；成功时直接返回业务对象，不套 Admin 响应信封。
 
 | 方法与路径 | 鉴权与参数 | 行为 |
 | --- | --- | --- |
 | POST /internal/v1/sales-reports/insert | X-Taskflow-Token 使用订单 worker-token；JSON requestKey（1–100字符）、shopId（正整数）、可选 businessDate、timeZone（合法 ZoneId，最多100字符） | 固定统计日期并幂等保存日报，返回 Report |
+| POST /internal/v1/sales-reports/update | 订单 api-token；同生成参数，businessDate 必填，另加 reason（非空，最多 200 字符） | 重算已有日报并保存新版本，返回 Report |
 | GET /internal/v1/sales-reports/select | worker-token；同公共分页参数 | 返回 Page |
 | GET /internal/v1/sales-reports/selectById | worker-token；id | 返回 Detail |
+| GET /internal/v1/sales-reports/selectRevisions | worker-token；同公共分页参数 | 返回版本历史 Page |
 | GET /internal/v1/sales-reports/selectExport | worker-token；id | 返回 Export |
+| POST /internal/v1/sales-inputs/shops/insert | 订单 api-token；shopId（正整数）、name（非空，最多 100 字符） | 注册店铺，返回同结构 |
+| POST /internal/v1/sales-inputs/products/update | 订单 api-token；skuId、shopId（正整数）、name（非空，最多 100 字符）、unitPriceCents（1 至 9223372036854）、catalogSource（非空，最多 64 字符）、catalogVersion（正整数） | 发布或更新 SKU，返回同结构 |
+| POST /internal/v1/sales-inputs/snapshots/insert | 订单 api-token；orderId（订单 UUID）、shopId（正整数）、productName（非空，最多 100 字符）、unitPriceCents（正整数，乘以订单数量须在 long 范围内）、sourceSystem（非空，最多 64 字符）、sourceReference（非空，最多 100 字符） | 补齐已付款订单的成交快照，返回同结构 |
 | POST /api/v1/sales-samples/insert | 订单 api-token 且 order.samples-enabled=true；JSON dataset（小写字母开头、最多32字符，仅字母数字连字符）、startDate、days（1–90）、orderCount（1–10000）、seed（long） | 事务导入并返回批次参数；样例日期区间必须已经结束 |
 
-生成只允许已结束的业务日，未指定日期取首次成功绑定时任务时区的前一天；同 requestKey 改店铺/原始日期/时区返回409；未知店铺404；同范围不同 Run 返回同一份报表。每日快照不自动包含生成后的后补/迟到数据，未建成交快照的旧订单不计入。样例同 dataset 同参数不重复导入，不同参数409，关闭样例入口时404。详细事务、时区、幂等及故障边界见 [销售日报](sales-reports.md)。
+生成及修订只允许已结束的业务日。生成未指定日期时取首次成功绑定时任务时区的前一天。已成功的 requestKey 重放返回原版本，新生成请求返回该范围最新版。重用 requestKey 更改动作、店铺、原始日期、时区或修订原因返回 409。未知店铺、订单、报表返回 404。已有版本为不可变快照，迟到数据通过显式修订进入新版本。
+
+目录拒绝店铺名称冲突、SKU 换店铺或换来源、过期版本及同版本异内容，返回 409。补录要求已有订单为 PAID 并持有原付款时间，重复凭据、同订单异内容、已存在的常规快照或店铺不符返回 409。相同订单的原补录请求可以重放。样例同 dataset 同参数返回原批次，不同参数返回 409，关闭样例入口时返回 404。修订和对账步骤见 [销售日报](sales-reports.md)。
+
+Worker salesReport 参数示例为 `{"shopId":8}`，首次生成历史日期示例为 `{"shopId":8,"businessDate":"2026-11-01"}`。设置 taskflow.sales.enabled=true 并配置订单 worker-token 后注册。HTTP POST 的业务重试复用 Run 操作键。
 
 ## 仓库库存同步 API（v1）
 
@@ -491,8 +501,6 @@ Report 字段：id、shopId、businessDate、timeZone、orderCount、totalQuanti
 | GET `/internal/v1/inventory-sync/select` | query `warehouseId`、`skuId`（正整数） | `warehouseId`、`skuId`、`quantity`、该 SKU 的 `sourceVersion` |
 
 同键同仓库返回原结果，同键换仓库返回 409 `IDEMPOTENCY_CONFLICT`。未知仓库、未同步的 SKU 和关闭入口返回 404，源暂不可读或快照不合法返回 503，参数或令牌错误分别返回 400、401。结果含义和部署方式见 [仓库库存快照同步](inventory-sync.md)。
-
-Worker salesReport 参数示例为 `{"shopId":8}`，回补示例为 `{"shopId":8,"businessDate":"2026-11-01"}`；默认关闭，开启 taskflow.sales.enabled 并配置订单 worker-token 后注册实际能力。HTTP POST 不自动重放，有限业务重试复用 Run 操作键。
 
 ## 过期库存缓存投递历史清理 API（v1）
 

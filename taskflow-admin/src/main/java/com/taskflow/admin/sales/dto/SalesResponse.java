@@ -4,7 +4,7 @@ import java.util.List;
 public final class SalesResponse {
     private SalesResponse() { }
     public record Report(String id,long shopId,LocalDate businessDate,String timeZone,long orderCount,
-                         long totalQuantity,long totalAmountCents,Instant generatedAt) { }
+                         long totalQuantity,long totalAmountCents,Instant generatedAt,Long revision,String revisionReason) { }
     public record Item(long skuId,String productName,long orderCount,long totalQuantity,long totalAmountCents) { }
     public record Page(List<Report> items,long total,int page,int pageSize) { }
     public record Detail(Report report,List<Item> items) { }

@@ -11,11 +11,16 @@ public class SalesReportController {
     public SalesReportController(ISalesReportService reports) { this.reports=reports; }
     @PostMapping("/internal/v1/sales-reports/insert")
     public Report insert(@Valid @RequestBody Generate request) { return reports.insert(request); }
+    @PostMapping("/internal/v1/sales-reports/update")
+    public Report update(@Valid @RequestBody Revise request) { return reports.update(request); }
     @GetMapping("/internal/v1/sales-reports/select")
     public Page select(@RequestParam(required=false) Long shopId,@RequestParam(defaultValue="1") int page,
                        @RequestParam(defaultValue="20") int pageSize) { return reports.select(shopId,page,pageSize); }
     @GetMapping("/internal/v1/sales-reports/selectById")
     public Detail detail(@RequestParam String id) { return reports.selectById(id); }
+    @GetMapping("/internal/v1/sales-reports/selectRevisions")
+    public Page revisions(@RequestParam String id,@RequestParam(defaultValue="1") int page,
+                          @RequestParam(defaultValue="20") int pageSize) { return reports.selectRevisions(id,page,pageSize); }
     @GetMapping("/internal/v1/sales-reports/selectExport")
     public Export export(@RequestParam String id) { return reports.selectExport(id); }
 }

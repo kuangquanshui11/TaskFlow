@@ -39,20 +39,35 @@ public class SalesReportServiceImpl implements ISalesReportService {
         if(report==null || report.id()==null || !report.id().matches("[a-f0-9-]{36}") || report.shopId()<1
                 || report.businessDate()==null || report.timeZone()==null || report.timeZone().isBlank()
                 || report.generatedAt()==null || report.orderCount()<0 || report.totalQuantity()<0
-                || report.totalAmountCents()<0) throw malformed();
+                || report.totalAmountCents()<0 || report.revision()!=null && report.revision()<1) throw malformed();
     }
     @Override public Page select(Long shopId,int page,int size) {
-        if(shopId!=null && shopId<1 || page<1 || page>1000000 || size<1 || size>100) throw new SalesReportException(400,"报表查询参数不合法");
-        var query=new HashMap<String,String>(); query.put("page",Integer.toString(page)); query.put("pageSize",Integer.toString(size));
+        if(shopId!=null && shopId<1) throw new SalesReportException(400,"报表查询参数不合法");
+        var query=pageQuery(page,size);
         if(shopId!=null) query.put("shopId",shopId.toString());
         var result=call(()->remote.select(query,headers()));
-        if(result.items()==null || result.total()<0 || result.page()!=page || result.pageSize()!=size
-                || result.items().size()>size || result.total()<result.items().size()) throw malformed();
+        validatePage(result,page,size);
         for(var report:result.items()) {
-            valid(report);
             if(shopId!=null && report.shopId()!=shopId) throw malformed();
         }
         return result;
+    }
+    @Override public Page selectRevisions(String value,int page,int size) {
+        id(value);
+        var query=pageQuery(page,size);
+        query.put("id",value);
+        var result=call(()->remote.revisions(query,headers()));
+        validatePage(result,page,size);
+        return result;
+    }
+    private Map<String,String> pageQuery(int page,int size) {
+        if(page<1 || page>1000000 || size<1 || size>100) throw new SalesReportException(400,"报表查询参数不合法");
+        return new HashMap<>(Map.of("page",Integer.toString(page),"pageSize",Integer.toString(size)));
+    }
+    private void validatePage(Page result,int page,int size) {
+        if(result.items()==null || result.total()<0 || result.page()!=page || result.pageSize()!=size
+                || result.items().size()>size || result.total()<result.items().size()) throw malformed();
+        result.items().forEach(this::valid);
     }
     @Override public Detail selectById(String value) {
         id(value); var result=call(()->remote.detail(value,headers())); valid(result.report());
