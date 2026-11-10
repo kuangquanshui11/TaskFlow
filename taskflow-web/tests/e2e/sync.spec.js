@@ -12,9 +12,10 @@ test('配置同步显示真实状态，关闭抽屉后停止轮询', async ({ pa
   await page.getByRole('button', { name: '查看执行记录 ' + name, exact: true }).click();
   const panel = page.getByRole('region', { name: '配置同步' });
   await expect(panel).toContainText('配置 v1');
-  await expect(panel).toContainText('实际自动触发状态请查看下方调度计划');
+  await expect(panel).toContainText('此处记录上次同步确认');
+  await expect(panel.getByRole('link', { name: '配置对账', exact: true })).toHaveAttribute('href', '/config-reconciliation');
   if (process.env.TASKFLOW_EXECUTION_E2E === 'true') {
-    await expect(panel).toContainText('计划副本已同步', { timeout: 10000 });
+    await expect(panel).toContainText('同步已确认', { timeout: 10000 });
   } else await expect(panel).toContainText('等待同步');
   await page.setViewportSize({ width: 375, height: 812 });
   await panel.scrollIntoViewIfNeeded();
@@ -49,10 +50,10 @@ test('同步查询失败可恢复，重试提交未确认时不显示已同步',
   await expect(panel).toContainText('同步失败');
   await panel.getByRole('button', { name: '重试同步' }).click();
   await expect(panel.getByRole('alert')).toBeVisible();
-  await expect(panel).not.toContainText('计划副本已同步');
+  await expect(panel).not.toContainText('同步已确认');
   status = 'SYNCED';
   await panel.getByRole('button', { name: '刷新同步状态' }).click();
-  await expect(panel).toContainText('计划副本已同步');
+  await expect(panel).toContainText('同步已确认');
   await page.keyboard.press('Escape');
   await request.post('/api/v1/jobs/delete', { data: { id: job.id, configVersion: 1 } });
 });

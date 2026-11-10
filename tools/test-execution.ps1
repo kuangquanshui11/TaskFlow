@@ -137,6 +137,19 @@ function Stop-TestService([string]$Name) {
     $process.Dispose()
     $processes.Remove($Name)
 }
+function Remove-TestPlanReplica([long]$JobId) {
+    # Only remove a plan from this run's stopped H2 database. Keep the Inbox and Admin confirmation intact.
+    Stop-TestService 'scheduler'
+    $schedulerYaml = Get-Content -LiteralPath $serviceFiles.scheduler.yaml -Raw
+    $dbUrl = [regex]::Match($schedulerYaml, '(?m)^    url: "(jdbc:h2:file:[^"]+)"').Groups[1].Value
+    $dbUser = [regex]::Match($schedulerYaml, '(?m)^    username: ([^\r\n]+)').Groups[1].Value
+    $dbPassword = [regex]::Match($schedulerYaml, '(?m)^    password: "([^"]*)"').Groups[1].Value
+    $expectedPrefix = 'jdbc:h2:file:' + $runRoot.Replace('\','/') + '/scheduler-db;'
+    if (!$dbUrl.StartsWith($expectedPrefix) -or !$dbUser -or $JobId -lt 1) { throw 'Reconciliation fault database guard failed.' }
+    & $javaExe -cp $h2Jar.FullName org.h2.tools.Shell -url $dbUrl -user $dbUser -password $dbPassword -sql ("DELETE FROM schedule_plan WHERE job_id=" + $JobId)
+    if ($LASTEXITCODE -ne 0) { throw 'Replica fault injection failed.' }
+    Start-TestService 'scheduler'
+}
 function New-TestJob([string]$Handler, [int]$Attempts = 1, [int]$Timeout = 10, [int]$Delay = 50) {
     $body = @{ name = "execution-e2e-$Handler"; handlerKey = $Handler; payload = @{ durationMillis = $Delay };
         maxAttempts = $Attempts; timeoutSeconds = $Timeout; retryIntervalSeconds = 1 }
@@ -549,17 +562,7 @@ info:
     Assert-Check ($restoredPlan.body.deleted -and $restoredPlan.body.configVersion -eq 4) 'Scheduler restart preserves replica and tombstone'
 
     if ($IncludeConfigReconciliation) {
-        # 故障注入只修改本次脚本创建并已停止的 Scheduler H2；连接参数从隔离 YAML 读取。
-        Stop-TestService 'scheduler'
-        $schedulerYaml = Get-Content -LiteralPath $serviceFiles.scheduler.yaml -Raw
-        $dbUrl = [regex]::Match($schedulerYaml, '(?m)^    url: "(jdbc:h2:file:[^"]+)"').Groups[1].Value
-        $dbUser = [regex]::Match($schedulerYaml, '(?m)^    username: ([^\r\n]+)').Groups[1].Value
-        $dbPassword = [regex]::Match($schedulerYaml, '(?m)^    password: "([^"]*)"').Groups[1].Value
-        $expectedPrefix = 'jdbc:h2:file:' + $runRoot.Replace('\','/') + '/scheduler-db;'
-        if (!$dbUrl.StartsWith($expectedPrefix) -or !$dbUser -or $syncJob.id -lt 1) { throw 'Reconciliation fault database guard failed.' }
-        & $javaExe -cp $h2Jar.FullName org.h2.tools.Shell -url $dbUrl -user $dbUser -password $dbPassword -sql ("DELETE FROM schedule_plan WHERE job_id=" + [long]$syncJob.id)
-        if ($LASTEXITCODE -ne 0) { throw 'Replica fault injection failed.' }
-        Start-TestService 'scheduler'
+        Remove-TestPlanReplica $syncJob.id
         $historical = Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/job-sync/selectByJobId?id=" + $syncJob.id)
         Assert-Check ($historical.body.data.state -eq 'SYNCED') 'Historical sync remains successful after Scheduler replica loss'
         $staleRestore = Call-Api 'POST' 'http://127.0.0.1:19081/internal/v1/plans/update' $oldEvent $controlToken
@@ -778,14 +781,34 @@ info:
         $env:TASKFLOW_EXECUTION_E2E = 'true'
         $env:TASKFLOW_EXECUTION_EVIDENCE_DIR = $runRoot
         Set-AcceptanceEnvironment 'TASKFLOW_RERUN_SOURCE_ID' ''
+        Set-AcceptanceEnvironment 'TASKFLOW_RECONCILIATION_JOB_ID' ''
         if ($IncludeRunRerun) { New-RerunFixture }
+        if ($IncludeConfigReconciliation) {
+            $browserCron = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/jobs/insert' @{
+                name = 'reconciliation-browser-cron'; handlerKey = 'demoSuccess'; scheduleType = 'CRON';
+                cronExpression = '*/4 * * * * *'; timeZone = 'UTC'; enabled = $true
+            }
+            Assert-Check ($browserCron.status -eq 201) 'Browser reconciliation fixture is an enabled Cron Job'
+            $browserJobId = $browserCron.body.data.id
+            $null = Wait-TestSync $browserJobId 'SYNCED' 1
+            Remove-TestPlanReplica $browserJobId
+            Set-AcceptanceEnvironment 'TASKFLOW_RECONCILIATION_JOB_ID' ([string]$browserJobId)
+        }
         Push-Location (Join-Path $repoPath 'taskflow-web')
         try {
             if ($IncludeRunRerun) {
                 & npx.cmd playwright test global-runs.spec.js run-detail.spec.js --reporter=list
                 if ($LASTEXITCODE -ne 0) { throw 'Run rerun browser verification failed.' }
                 Assert-Check $true 'Browser rerun uses current configuration and recovers a lost response without a duplicate'
-            } else {
+            }
+            if ($IncludeConfigReconciliation) {
+                & npx.cmd playwright test config-reconciliation.spec.js sync.spec.js --reporter=list
+                if ($LASTEXITCODE -ne 0) { throw 'Config reconciliation browser verification failed.' }
+                & npx.cmd playwright test --config playwright.access.config.js --grep '只读账号'
+                if ($LASTEXITCODE -ne 0) { throw 'Config reconciliation permissions verification failed.' }
+                Assert-Check $true 'Browser finds missing plan, safely retries repair, confirms the restored version and observes a new successful Cron Run'
+            }
+            if (!$IncludeRunRerun -and !$IncludeConfigReconciliation) {
                 & npm.cmd run test:e2e
                 if ($LASTEXITCODE -ne 0) { throw 'Browser execution verification failed.' }
                 & npx.cmd playwright test --config playwright.access.config.js

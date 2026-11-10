@@ -4,6 +4,8 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 ## 当前能力
 
+控制台「配置对账」分批比较 Admin 配置和 Scheduler 计划副本。操作员可以补发缺失或落后的配置原事件，并用新批次复查。 [操作说明](docs/config-reconciliation.md#控制台操作)
+
 控制台 `/runs` 提供全局运行列表，支持创建时间、Run 状态、任务 ID、触发来源组合筛选与 Run ID 精确查询；沿用 run:read 权限，查询数据由 Scheduler 管理。时间与分页边界见 [全局运行查询](docs/global-run-query.md)。
 
 销售日报已接入订单示例、Worker salesReport 与控制台查询/CSV 下载。可按固定种子导入样例订单，按店铺及付款日期生成持久化快照；准备、启动和统计边界见 [销售日报](docs/sales-reports.md)。

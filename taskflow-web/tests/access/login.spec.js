@@ -65,11 +65,16 @@ test('只读账号隐藏修改按钮，直接请求仍被后端拒绝', async ({
   await expect(page.getByRole('button', { name: '新建任务', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^编辑任务 / })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^删除任务 / })).toHaveCount(0);
-  for (const path of ['jobs/insert', 'jobs/update', 'jobs/delete', 'jobs/enable', 'runs/insert', 'job-sync/updateRetry']) {
+  await page.screenshot({ path: evidence + '/viewer-desktop.png' });
+  await page.getByRole('link', { name: '配置对账', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '配置对账', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '查询批次', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '开始对账', exact: true })).toHaveCount(0);
+  for (const path of ['jobs/insert', 'jobs/update', 'jobs/delete', 'jobs/enable', 'runs/insert', 'job-sync/updateRetry',
+    'config-reconciliation/insert', 'config-reconciliation/updateRepair']) {
     const response = await request.post('/api/v1/' + path, { headers: { Authorization: authorization }, data: {} });
     expect(response.status(), path).toBe(403);
   }
-  await page.screenshot({ path: evidence + '/viewer-desktop.png' });
 });
 
 test('闲置过期后再次请求回到登录页', async ({ page }) => {

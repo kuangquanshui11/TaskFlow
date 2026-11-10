@@ -11,7 +11,7 @@ const loading = ref(false);
 let timer;
 let generation = 0;
 let controller;
-const labels = { PENDING: '等待同步', SENDING: '正在同步', SYNCED: '计划副本已同步', FAILED: '同步失败', SUPERSEDED: '已被更新版本替代' };
+const labels = { PENDING: '等待同步', SENDING: '正在同步', SYNCED: '同步已确认', FAILED: '同步失败', SUPERSEDED: '已被更新版本替代' };
 
 async function load(retry = false) {
   clearTimeout(timer);
@@ -46,7 +46,7 @@ onBeforeUnmount(() => { generation++; clearTimeout(timer); controller?.abort(); 
       <p class="field-hint">本轮已尝试 {{ status.attempts }} 次<span v-if="status.syncedAt"> · 确认时间 {{ fullDate(status.syncedAt) }}</span></p>
       <p v-if="status.lastErrorCode" class="field-error">上次同步未确认（{{ status.lastErrorCode }}）。{{ status.state === 'FAILED' ? '请检查调度服务后重试。' : '后台将自动重试。' }}</p>
     </template>
-    <p class="field-hint">配置保存在管理服务中，只有收到调度服务确认后才显示副本已同步。实际自动触发状态请查看下方调度计划。</p>
+    <p class="field-hint">此处记录上次同步确认。核实当前副本请前往<RouterLink to="/config-reconciliation" class="text-button">配置对账</RouterLink>，自动触发状态见下方调度计划。</p>
     <div class="sync-actions">
       <button class="button secondary" :disabled="loading" @click="load()">{{ loading ? '处理中…' : '刷新同步状态' }}</button>
       <button v-if="status?.state === 'FAILED' && can('job-sync:retry')" class="button secondary" :disabled="loading" @click="load(true)">重试同步</button>

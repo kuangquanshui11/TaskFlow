@@ -9,6 +9,7 @@ const router = createRouter({
   routes: [
     { path: '/', name: 'overview', component: () => import('./pages/OverviewPage.vue'), meta: { title: '工作台' } },
     { path: '/jobs', name: 'jobs', component: () => import('./pages/JobsPage.vue'), meta: { title: '任务管理' } },
+    { path: '/config-reconciliation', name: 'config-reconciliation', component: () => import('./pages/ConfigReconciliationPage.vue'), meta: { title: '配置对账' } },
     { path: '/schedule', name: 'schedule', component: () => import('./pages/SchedulePage.vue'), meta: { title: '时间预览' } },
     { path: '/workers', name: 'workers', component: () => import('./pages/WorkersPage.vue'), meta: { title: '工作节点' } },
     { path: '/runs', name: 'runs', component: () => import('./pages/RunsPage.vue'), meta: { title: '全局运行列表' } },

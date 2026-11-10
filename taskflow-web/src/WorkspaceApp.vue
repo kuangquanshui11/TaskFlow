@@ -14,11 +14,11 @@ const route = useRoute();
 const mobileNav = ref(false);
 watch(() => route.path, () => {
   mobileNav.value = false;
-  if (route.name === 'run-detail') workspace.detail.open = false;
+  if (['run-detail', 'config-reconciliation'].includes(route.name)) workspace.detail.open = false;
 });
 const today = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
 const connection = computed(() => workspace.state.error ? '连接异常' : workspace.state.summary ? '服务已连接' : '正在连接');
-const navigation = [{ to: '/', label: '工作台', icon: 'grid' }, { to: '/jobs', label: '任务管理', icon: 'jobs' }, { to: '/schedule', label: '时间预览', icon: 'clock' }, { to: '/workers', label: '工作节点', icon: 'server' }, { to: '/sales-reports', label: '销售日报', icon: 'jobs' }];
+const navigation = [{ to: '/', label: '工作台', icon: 'grid' }, { to: '/jobs', label: '任务管理', icon: 'jobs' }, { to: '/config-reconciliation', label: '配置对账', icon: 'refresh' }, { to: '/schedule', label: '时间预览', icon: 'clock' }, { to: '/workers', label: '工作节点', icon: 'server' }, { to: '/sales-reports', label: '销售日报', icon: 'jobs' }];
 onMounted(() => { workspace.refresh(false); workspace.loadHandlers(); });
 function saved() {
   workspace.editor.open = false;

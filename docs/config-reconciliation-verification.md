@@ -61,3 +61,22 @@ PASS Restart preserves repair audit and idempotency
 本次未执行真实 MySQL V4 升级与 MySQL 锁竞争专项、cloud 注册/熔断真实集群、RabbitMQ 通道、浏览器界面或大规模吞吐基准。默认构建跳过的条件测试不作为已验收结果。`JobSyncMysqlMigrationTests` 已扩展为同时检查 V4 闸门，仍需专用空 MySQL schema 才执行；H2 的成功不能替代真实 MySQL 验收。
 
 本能力不验证未知孤立副本、任意配置字段损坏或整库同时丢失副本与 Inbox 的恢复，边界和关闭自动触发的操作要求见 [设计](config-reconciliation.md)。
+
+## 控制台复查与 Cron 恢复
+
+日期为 2026-11-10（Asia/Shanghai）。环境为 Windows、PowerShell、Java 21、Chrome、独立 Keycloak 和会话及限流 Redis。控制台走 Nginx、Gateway、Admin。三个业务服务使用独立 H2 文件库，Scheduler 通过 HTTP 派发到 Worker。
+
+```powershell
+.\mvnw.cmd -B -o verify
+.\tools\test-execution.ps1 -SkipBuild -IncludeConfigReconciliation -IdentityPort 19290
+```
+
+| 验证 | 结果 |
+| --- | --- |
+| Maven 全量构建 | 构建成功，370 项通过，32 项条件跳过 |
+| 前端 | 29 项单元测试通过，生产构建成功 |
+| 隔离脚本和浏览器 | 59 项脚本检查通过，5 个 Playwright 用例通过 |
+
+脚本创建启用的测试 Cron 任务，等待 Admin 记录 `SYNCED`，停止隔离 Scheduler 并删除该任务的一行 `schedule_plan`，保留 Inbox 后重启。浏览器显示 `MISSING`，并确认 Admin 版本为 v1。补发在服务端受理后模拟响应丢失，显式重试沿用同一请求 ID。随后查询原批次并核实补发记录的操作者与原事件，发起新批次看到 `MATCH`、两侧均为 v1 且已启用。复查结束后，Scheduler 新建了 `CRON` 类型 Run，由 Worker 执行到 `SUCCEEDED`。
+
+浏览器另检查了下一批使用返回的游标、查询不可用时不开放补发、任务详情同步状态与只读权限。真实故障证据保存在 `.tools/execution-e2e/20261110-093059-224/`，其中 `report.json` 记录断言，`reconciliation-missing.png`、`reconciliation-mobile.png` 和 `reconciliation-restored.png` 记录页面。终端输出保存在 `.tools/config-reconciliation-console-e2e-final.log` 与 `.tools/config-reconciliation-console-verify.log`。本轮故障注入未使用 MySQL、RabbitMQ 或 cloud 注册发现。
