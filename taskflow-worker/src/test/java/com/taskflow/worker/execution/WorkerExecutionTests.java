@@ -49,6 +49,7 @@ class WorkerExecutionTests {
     @Autowired ExecutionProperties properties;
     @Autowired PlatformTransactionManager transactions;
     @Autowired IExecutionResultService results;
+    @Autowired IExecutionRecoveryService recovery;
     @Autowired IExecutionLeaseService leases;
     @Autowired ResultPersistenceProperties resultProperties;
     @Autowired MeterRegistry metrics;
@@ -122,7 +123,7 @@ class WorkerExecutionTests {
                 throw new org.springframework.dao.DataAccessResourceFailureException("temporary save failure");
             return call.callRealMethod();
         }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
-        var stopped = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, properties, json, transactions, results, leases);
+        var stopped = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, properties, json, transactions, results, leases, recovery);
         try {
             stopped.recover(); stopped.insert(command); stopped.shutdown();
             assertThatCode(stopped::executePending).doesNotThrowAnyException();
@@ -210,18 +211,24 @@ class WorkerExecutionTests {
         verifyNoInteractions(reports);
         assertThat(eventTypes(command)).containsExactly("HANDLER_STARTED", "HANDLER_FINISHED", "REPORT_CLAIMED", "REPORT_ACKNOWLEDGED");
     }
-    @Test void exhaustedSavingIsFiniteTraceableAndDoesNotRepeatUnknownBusiness(CapturedOutput output) throws Exception {
+    @Test void exhaustedSavingRecoversOriginalResultOnTheSameWorker(CapturedOutput output) throws Exception {
         var command = command("demoSuccess", 1, 30, "{}");
         var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        var available = new java.util.concurrent.atomic.AtomicBoolean();
+        var originalFinish = new java.util.concurrent.atomic.AtomicReference<Instant>();
         var exhaustedBefore = outcome("exhausted");
         doAnswer(call -> {
             attempts.incrementAndGet();
-            throw new org.springframework.dao.DataAccessResourceFailureException("sensitive-db-error-do-not-log");
+            originalFinish.compareAndSet(null, call.getArgument(6));
+            assertThat((Instant) call.getArgument(6)).isEqualTo(originalFinish.get());
+            if (!available.get()) throw new org.springframework.dao.DataAccessResourceFailureException("sensitive-db-error-do-not-log");
+            return call.callRealMethod();
         }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
         executions.insert(command); executions.executePending();
         await().atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
             assertThat(outcome("exhausted")).isEqualTo(exhaustedBefore + 1);
             assertThat(output.getOut()).contains("code=RESULT_SAVE_EXHAUSTED attemptId=" + command.attemptId());
+            assertThat(metrics.get("taskflow.worker.result.recovery.pending").gauge().value()).isEqualTo(1);
         });
         assertThat(attempts.get()).isEqualTo(resultProperties.maxAttempts());
         assertThat(output.getOut()).contains("runId=" + command.runId(), "intendedState=SUCCEEDED", "resultCode=SUCCEEDED", "attempts=3")
@@ -233,12 +240,86 @@ class WorkerExecutionTests {
         assertThat(mapper.find(command.attemptId()).orElseThrow().state()).isEqualTo("RUNNING");
         verify(handlers, times(1)).execute(any(), any());
         verifyNoInteractions(reports);
-        // 模拟丢失内存结果后的启动恢复：只记录副作用未知，不重新执行。
-        executions.recover();
+        assertThatThrownBy(executions::recoverPendingResults).isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
+        assertThat(mapper.pendingCount()).isEqualTo(1);
+        available.set(true);
+        executions.recoverPendingResults();
+        executions.recoverPendingResults();
         var recovered = mapper.find(command.attemptId()).orElseThrow();
-        assertThat(recovered.resultCode()).isEqualTo("WORKER_RESTARTED");
-        assertThat(recovered.retryable()).isFalse();
+        assertThat(recovered.resultCode()).isEqualTo("SUCCEEDED");
+        assertThat(recovered.message()).isEqualTo("执行成功");
+        assertThat(recovered.finishedAt()).isCloseTo(originalFinish.get(), within(1, java.time.temporal.ChronoUnit.MILLIS));
+        assertThat(mapper.pendingCount()).isZero();
+        assertThat(metrics.get("taskflow.worker.result.recovery.pending").gauge().value()).isZero();
+        when(reports.report(any())).thenReturn(Outcome.STALE);
+        executions.reportPending();
+        verify(reports).report(argThat(result -> result.attemptId().equals(command.attemptId())
+                && result.leaseVersion() == command.leaseVersion() && result.sessionId().equals(leases.owner().sessionId())));
+        assertThat(eventTypes(command)).containsExactly("HANDLER_STARTED", "HANDLER_FINISHED", "RESULT_RECOVERED", "REPORT_CLAIMED", "REPORT_STALE");
         executions.executePending();
+        verify(handlers, times(1)).execute(any(), any());
+    }
+
+    @Test void onlineRecoveryClosesClaimWithLostConfirmationAndSkipsOtherSessions() throws Exception {
+        var command = command("demoSuccess", 1, 30, "{}");
+        var foreign = command("demoSuccess", 1, 30, "{}");
+        var otherOwner = new com.taskflow.worker.execution.model.ExecutionOwner(leases.owner().workerId(), UUID.randomUUID());
+        executions.insert(foreign);
+        mapper.claim(foreign.attemptId(), otherOwner);
+        executions.insert(command);
+        doAnswer(call -> {
+            assertThat((boolean) call.callRealMethod()).isTrue();
+            throw new org.springframework.dao.DataAccessResourceFailureException("claim confirmation lost");
+        }).when(mapper).claim(command.attemptId(), leases.owner());
+        assertThatThrownBy(executions::executePending).isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
+        doThrow(new org.springframework.dao.DataAccessResourceFailureException("event insert failed"))
+                .when(mapper).appendExecutionEvent(eq(command.attemptId()), eq("RESULT_RECOVERY_UNKNOWN"), any());
+        assertThatThrownBy(executions::recoverPendingResults).isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
+        assertThat(mapper.find(command.attemptId()).orElseThrow().state()).isEqualTo("RUNNING");
+        assertThat(eventTypes(command)).isEmpty();
+
+        doCallRealMethod().when(mapper).appendExecutionEvent(eq(command.attemptId()), eq("RESULT_RECOVERY_UNKNOWN"), any());
+        executions.recoverPendingResults();
+        executions.recoverPendingResults();
+        var row = mapper.find(command.attemptId()).orElseThrow();
+        assertThat(row.state()).isEqualTo("FAILED");
+        assertThat(row.resultCode()).isEqualTo("RESULT_OUTCOME_UNKNOWN");
+        assertThat(row.retryable()).isFalse();
+        assertThat(eventTypes(command)).containsExactly("RESULT_RECOVERY_UNKNOWN");
+        assertThat(mapper.find(foreign.attemptId()).orElseThrow().state()).isEqualTo("RUNNING");
+        assertThat(mapper.pendingCount()).isEqualTo(1);
+        verifyNoInteractions(reports);
+        verify(handlers, never()).execute(any(), any());
+    }
+
+    @Test void deferredRecoveryConfirmsOriginalCommitAndPreservesReportProgress() throws Exception {
+        var command = command("demoSuccess", 1, 30, "{}");
+        var writes = new java.util.concurrent.atomic.AtomicInteger();
+        doAnswer(call -> {
+            int number = writes.incrementAndGet();
+            if (number < resultProperties.maxAttempts()) throw new org.springframework.dao.DataAccessResourceFailureException("before commit");
+            var answer = call.callRealMethod();
+            if (number == resultProperties.maxAttempts()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override public void afterCommit() {
+                        throw new org.springframework.dao.DataAccessResourceFailureException("final commit confirmation lost");
+                    }
+                });
+            }
+            return answer;
+        }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
+        executions.insert(command);
+        executions.executePending();
+        await().atMost(Duration.ofSeconds(4)).untilAsserted(() ->
+                assertThat(metrics.get("taskflow.worker.result.recovery.pending").gauge().value()).isEqualTo(1));
+        when(reports.report(any())).thenReturn(Outcome.ACKNOWLEDGED);
+        executions.reportPending();
+        var before = mapper.find(command.attemptId()).orElseThrow();
+        assertThat(before.reported()).isTrue();
+        executions.recoverPendingResults();
+        assertThat(mapper.find(command.attemptId()).orElseThrow()).isEqualTo(before);
+        assertThat(eventTypes(command)).containsExactly("HANDLER_STARTED", "HANDLER_FINISHED", "REPORT_CLAIMED", "REPORT_ACKNOWLEDGED");
+        assertThat(metrics.get("taskflow.worker.result.recovery.pending").gauge().value()).isZero();
         verify(handlers, times(1)).execute(any(), any());
     }
     @Test void conflictingOrMissingTerminalRecordIsNotReportedAsSaved(CapturedOutput output) {
@@ -247,10 +328,10 @@ class WorkerExecutionTests {
         mapper.finish(command.attemptId(), "FAILED", "WORKER_RESTARTED", "unknown", false, false, Instant.now());
         var conflictsBefore = outcome("conflict");
         var completion = new ExecutionCompletion(command.attemptId(), command.runId(), "SUCCEEDED", "SUCCEEDED", "done", false, true, Instant.now());
-        assertThat(results.save(completion)).isFalse();
+        assertThat(results.save(completion)).isEqualTo(IExecutionResultService.Outcome.CONFLICT);
         assertThat(mapper.find(command.attemptId()).orElseThrow().resultCode()).isEqualTo("WORKER_RESTARTED");
         var missing = new ExecutionCompletion(UUID.randomUUID(), command.runId(), "SUCCEEDED", "SUCCEEDED", "done", false, true, Instant.now());
-        assertThat(results.save(missing)).isFalse();
+        assertThat(results.save(missing)).isEqualTo(IExecutionResultService.Outcome.CONFLICT);
         assertThat(outcome("conflict")).isEqualTo(conflictsBefore + 2);
         assertThat(output.getOut()).contains("code=RESULT_SAVE_CONFLICT");
         verify(mapper, times(2)).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
@@ -278,6 +359,7 @@ class WorkerExecutionTests {
             executions.insert(first); executions.insert(second); executions.executePending();
             assertThat(entered.await(3, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
             executions.insert(third); executions.insert(fourth); executions.executePending();
+            executions.recoverPendingResults();
             executions.insert(first); executions.executePending();
             assertThat(mapper.find(third.attemptId()).orElseThrow().state()).isEqualTo("ACCEPTED");
             assertThat(mapper.find(fourth.attemptId()).orElseThrow().state()).isEqualTo("ACCEPTED");
@@ -409,7 +491,7 @@ class WorkerExecutionTests {
         var limited = new ExecutionProperties(properties.schedulerUrl(), properties.dispatchToken(), properties.reportToken(),
                 properties.connectTimeout(), properties.requestTimeout(), properties.scanInterval(), properties.parallelism(),
                 properties.maxPending(), properties.maxReportAttempts(), properties.reportRetryDelay(), false, Duration.ofMillis(1));
-        var reporting = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, limited, json, transactions, results, leases);
+        var reporting = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, limited, json, transactions, results, leases, recovery);
         try {
             reporting.recover(); reporting.reportPending();
             verify(reports, atMostOnce()).report(any());

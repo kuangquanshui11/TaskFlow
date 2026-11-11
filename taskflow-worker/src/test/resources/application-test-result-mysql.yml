@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    url: "jdbc:mysql://127.0.0.1:${TASKFLOW_WORKER_RESULT_TEST_PORT}/${TASKFLOW_WORKER_RESULT_TEST_SCHEMA}?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=3000&socketTimeout=10000"
+    username: root
+    password: ""
+    hikari:
+      connection-init-sql: "SET time_zone = '+00:00'"

@@ -21,6 +21,7 @@ import com.taskflow.worker.execution.service.IHandlerRegistryService;
 import com.taskflow.worker.execution.exception.HandlerFailureException;
 import com.taskflow.worker.execution.service.IExecutionService;
 import com.taskflow.worker.execution.service.IExecutionResultService;
+import com.taskflow.worker.execution.service.IExecutionRecoveryService;
 import jakarta.annotation.PreDestroy;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -34,22 +35,23 @@ public class ExecutionServiceImpl implements IExecutionService {
     private final IHandlerRegistryService handlers;
     private final SchedulerReportClient reports;
     private final IExecutionResultService results;
+    private final IExecutionRecoveryService recovery;
     private final IExecutionLeaseService leases;
     private final ExecutionProperties properties;
     private final JsonMapper json;
     private final TransactionTemplate transactions;
     private final ExecutorService pool;
     private final ScheduledExecutorService timeouts;
-    private final Semaphore slots;
     private final AtomicBoolean recovered = new AtomicBoolean();
     public ExecutionServiceImpl(ExecutionMapper mapper, IHandlerRegistryService handlers, SchedulerReportClient reports,
                                 ExecutionProperties properties, JsonMapper json, PlatformTransactionManager manager,
-                                IExecutionResultService results, IExecutionLeaseService leases) {
+                                IExecutionResultService results, IExecutionLeaseService leases,
+                                IExecutionRecoveryService recovery) {
         this.mapper = mapper; this.handlers = handlers; this.reports = reports; this.properties = properties; this.json = json;
         this.results = results;
         this.leases = leases;
+        this.recovery = recovery;
         transactions = new TransactionTemplate(manager);
-        slots = new Semaphore(properties.parallelism());
         pool = new ThreadPoolExecutor(properties.parallelism(), properties.parallelism(), 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(properties.parallelism()), Thread.ofPlatform().name("taskflow-handler-", 0).factory(),
                 new ThreadPoolExecutor.AbortPolicy());
@@ -93,26 +95,32 @@ public class ExecutionServiceImpl implements IExecutionService {
         recovered.set(true);
     }
     @Override
+    public void recoverPendingResults() {
+        if (recovered.get()) recovery.scan();
+    }
+    @Override
     public com.taskflow.worker.execution.model.ExecutionLoad selectLoad() { return mapper.selectLoad(); }
     @Override
     public void executePending() {
         if (!recovered.get()) return;
         for (var row : mapper.pending(properties.parallelism())) {
-            if (!slots.tryAcquire()) break;
-            boolean claimed = false;
+            if (!recovery.tryTrack(row.attemptId())) break;
+            boolean submitted = false;
+            ExecutionCompletion deferred = null;
             try {
-                if (!mapper.claim(row.attemptId(), leases.owner())) { slots.release(); continue; }
-                claimed = true;
-                var dispatch = json.readValue(row.dispatchJson(), Dispatch.class);
-                pool.execute(() -> execute(dispatch));
-            } catch (RuntimeException failure) {
+                if (!mapper.claim(row.attemptId(), leases.owner())) continue;
                 try {
-                    if (!claimed) throw failure;
+                    var dispatch = json.readValue(row.dispatchJson(), Dispatch.class);
+                    pool.execute(() -> execute(dispatch));
+                    submitted = true;
+                } catch (RuntimeException failure) {
                     boolean rejected = failure instanceof RejectedExecutionException;
-                    results.save(new ExecutionCompletion(row.attemptId(), row.runId(), "FAILED",
+                    deferred = saveResult(new ExecutionCompletion(row.attemptId(), row.runId(), "FAILED",
                             rejected ? "EXECUTOR_REJECTED" : "EXECUTION_PREPARATION_FAILED",
                             "Worker 未能启动 Handler，未执行业务", false, false, Instant.now()));
-                } finally { slots.release(); }
+                }
+            } finally {
+                if (!submitted) settleSlot(row.attemptId(), deferred);
             }
         }
     }
@@ -123,6 +131,7 @@ public class ExecutionServiceImpl implements IExecutionService {
         var active = new AtomicBoolean(true);
         ScheduledFuture<?> timeout = null;
         ExecutionContext context = null;
+        ExecutionCompletion deferred = null;
         try {
             long remaining = java.time.Duration.between(Instant.now(), dispatch.expiresAt()).toMillis()
                     - properties.requestTimeout().toMillis();
@@ -187,18 +196,27 @@ public class ExecutionServiceImpl implements IExecutionService {
                 }
             }
             // 终态、待上报信息与事件一起提交；HTTP 上报由独立扫描完成。
-            results.save(new ExecutionCompletion(dispatch.attemptId(), dispatch.runId(), state, code, message,
+            deferred = saveResult(new ExecutionCompletion(dispatch.attemptId(), dispatch.runId(), state, code, message,
                     retryable, handlerStarted, Instant.now()));
         } catch (RuntimeException failure) {
             org.slf4j.LoggerFactory.getLogger(getClass()).error("Execution persistence failed. attemptId={}, type={}",
                     dispatch.attemptId(), failure.getClass().getSimpleName());
         } finally {
             synchronized (active) { active.set(false); if (timeout != null) timeout.cancel(false); }
-            if (context != null) leases.close(context);
-            Thread.interrupted();
-            // Handler 真正退出且结果保存结束后才释放槽位，限制故障期间内存中的结果数量。
-            slots.release();
+            try {
+                if (context != null) leases.close(context);
+            } finally {
+                Thread.interrupted();
+                settleSlot(dispatch.attemptId(), deferred);
+            }
         }
+    }
+    private ExecutionCompletion saveResult(ExecutionCompletion completion) {
+        return results.save(completion) == IExecutionResultService.Outcome.DEFERRED ? completion : null;
+    }
+    private void settleSlot(UUID attemptId, ExecutionCompletion deferred) {
+        if (deferred == null) recovery.release(attemptId);
+        else recovery.defer(deferred);
     }
     private void recordHandlerStart(UUID attemptId) {
         try {

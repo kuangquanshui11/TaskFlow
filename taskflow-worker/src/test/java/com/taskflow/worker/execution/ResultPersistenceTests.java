@@ -19,6 +19,7 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
+import static com.taskflow.worker.execution.service.IExecutionResultService.Outcome.*;
 
 class ResultPersistenceTests {
     @Test void shutdownInterruptsSavingWithoutChangingTheBusinessOutcomeOrRetryingAgain() throws Exception {
@@ -30,13 +31,13 @@ class ResultPersistenceTests {
         });
         var metrics = new SimpleMeterRegistry();
         try {
-            var service = new ExecutionResultServiceImpl(mapper, new ResultPersistenceProperties(3, Duration.ofSeconds(5)),
+            var service = new ExecutionResultServiceImpl(mapper, new ResultPersistenceProperties(3, Duration.ofSeconds(5), Duration.ofSeconds(1)),
                     metrics, mock(PlatformTransactionManager.class));
             var completion = completion();
             var stopped = new AtomicBoolean();
             var interruptPreserved = new AtomicBoolean();
             var worker = Thread.ofPlatform().start(() -> {
-                stopped.set(!service.save(completion));
+                stopped.set(service.save(completion) == DEFERRED);
                 interruptPreserved.set(Thread.currentThread().isInterrupted());
             });
             try {
@@ -58,9 +59,9 @@ class ResultPersistenceTests {
                 .thenThrow(new DataAccessResourceFailureException("database unavailable"));
         var metrics = new SimpleMeterRegistry();
         try {
-            var service = new ExecutionResultServiceImpl(mapper, new ResultPersistenceProperties(1, Duration.ofSeconds(5)),
+            var service = new ExecutionResultServiceImpl(mapper, new ResultPersistenceProperties(1, Duration.ofSeconds(5), Duration.ofSeconds(1)),
                     metrics, mock(PlatformTransactionManager.class));
-            assertThat(service.save(completion())).isFalse();
+            assertThat(service.save(completion())).isEqualTo(DEFERRED);
             verify(mapper, times(1)).finish(any(), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
             verifyNoMoreInteractions(mapper);
             assertThat(metrics.get("taskflow.worker.result.persistence").tag("outcome", "exhausted").counter().count()).isEqualTo(1);
@@ -77,8 +78,8 @@ class ResultPersistenceTests {
                 .thenReturn(true);
         var metrics = new SimpleMeterRegistry();
         try {
-            var service = new ExecutionResultServiceImpl(mapper, new ResultPersistenceProperties(2, Duration.ofMillis(1)), metrics, manager);
-            assertThat(service.save(completion)).isTrue();
+            var service = new ExecutionResultServiceImpl(mapper, new ResultPersistenceProperties(2, Duration.ofMillis(1), Duration.ofSeconds(1)), metrics, manager);
+            assertThat(service.save(completion)).isEqualTo(SAVED);
             verify(manager, times(2)).getTransaction(any());
             verify(mapper, times(1)).finish(completion.attemptId(), "SUCCEEDED", "SUCCEEDED", "done", false, true, completion.finishedAt());
         } finally { metrics.close(); }
@@ -86,14 +87,18 @@ class ResultPersistenceTests {
 
     @Test void invalidRetryPoliciesAreRejectedBeforeStartingAWorker() {
         for (int count : new int[] { 0, -1, 11 }) {
-            assertThatThrownBy(() -> new ResultPersistenceProperties(count, Duration.ofMillis(1)))
+            assertThatThrownBy(() -> new ResultPersistenceProperties(count, Duration.ofMillis(1), Duration.ofSeconds(1)))
                     .isInstanceOf(IllegalArgumentException.class);
         }
         for (var delay : new Duration[] { null, Duration.ZERO, Duration.ofNanos(1), Duration.ofMillis(-1), Duration.ofSeconds(5).plusNanos(1) }) {
-            assertThatThrownBy(() -> new ResultPersistenceProperties(3, delay)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new ResultPersistenceProperties(3, delay, Duration.ofSeconds(1))).isInstanceOf(IllegalArgumentException.class);
         }
-        assertThatCode(() -> new ResultPersistenceProperties(1, Duration.ofMillis(1))).doesNotThrowAnyException();
-        assertThatCode(() -> new ResultPersistenceProperties(10, Duration.ofSeconds(5))).doesNotThrowAnyException();
+        for (var interval : new Duration[] { null, Duration.ofMillis(99), Duration.ofMinutes(1).plusMillis(1) }) {
+            assertThatThrownBy(() -> new ResultPersistenceProperties(3, Duration.ofSeconds(1), interval))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThatCode(() -> new ResultPersistenceProperties(1, Duration.ofMillis(1), Duration.ofMillis(100))).doesNotThrowAnyException();
+        assertThatCode(() -> new ResultPersistenceProperties(10, Duration.ofSeconds(5), Duration.ofMinutes(1))).doesNotThrowAnyException();
     }
 
     private ExecutionCompletion completion() {

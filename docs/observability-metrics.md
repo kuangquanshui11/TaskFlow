@@ -25,6 +25,8 @@
 | taskflow.dispatch.attempt.lease.expired | Gauge / 条 | 无 | run_attempt：READY/DISPATCHING/RUNNING 且 expires_at<=now | 保值；首次 -1 |
 | taskflow.dispatch.attempt.lease.expiring | Gauge / 条 | 无 | run_attempt：上述非终态，expires_at 在 (now,now+60s] | 保值；首次 -1 |
 | taskflow.worker.result.unreported | Gauge / 条 | 无 | Worker worker_execution：reported=FALSE 且 SUCCEEDED/FAILED，含重报耗尽和退避中的记录 | 保值；首次 -1 |
+| taskflow.worker.result.recovery.pending | Gauge / 条 | 无 | 当前 Worker 进程内已移交后台扫描的原结果数量，受 `parallelism` 约束 | 内存实时值 |
+| taskflow.worker.result.recovery | Counter / 次 | outcome=`original` 或 `unknown` | 在线扫描确认原结果，或成功落库副作用未知的收尾记录 | 内存累计值 |
 | taskflow.worker.execution.backlog | Gauge / 条 | 无 | worker_execution：ACCEPTED；不计 RUNNING | 保值；首次 -1 |
 | taskflow.worker.node.heartbeat.age | Gauge / 秒 | 无 | Scheduler worker_node：expires_at>now 的在线节点中最大 now-last_heartbeat_at | 保值；首次或无在线节点为 -1 |
 | taskflow.metrics.sample.age | Gauge / 秒 | 无 | 两服务各自内存：距最近成功采样观察时间的秒数 | 失败后持续增加；从未成功为 -1 |

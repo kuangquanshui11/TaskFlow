@@ -1,5 +1,6 @@
 package com.taskflow.worker.execution.service.impl;
 
+import java.time.Instant;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.taskflow.worker.execution.config.ResultPersistenceProperties;
@@ -43,32 +44,29 @@ public class ExecutionResultServiceImpl implements IExecutionResultService {
     }
 
     @Override
-    public boolean save(ExecutionCompletion completion) {
+    public Outcome save(ExecutionCompletion completion) {
         saving.incrementAndGet();
         try {
             for (int attempt = 1; attempt <= properties.maxAttempts(); attempt++) {
                 try {
-                    if (Boolean.TRUE.equals(transactions.execute(status -> mapper.finish(completion.attemptId(),
-                            completion.state(), completion.resultCode(), completion.message(), completion.retryable(),
-                            completion.handlerInvoked(), completion.finishedAt())))
-                            || alreadySaved(completion)) {
+                    if (persist(completion, false)) {
                         saved.increment();
                         if (attempt > 1) {
                             recovered.increment();
                             log.info("code=RESULT_SAVE_RECOVERED attemptId={} runId={} attempts={}",
                                     completion.attemptId(), completion.runId(), attempt);
                         }
-                        return true;
+                        return Outcome.SAVED;
                     }
                     // 更新 0 行可能表示记录缺失或已有冲突终态，不能把它当作成功或覆盖终态。
                     conflicts.increment();
                     diagnostic("RESULT_SAVE_CONFLICT", completion, attempt, "STATE_CONFLICT");
-                    return false;
+                    return Outcome.CONFLICT;
                 } catch (DataAccessException | TransactionException failure) {
                     if (attempt == properties.maxAttempts()) {
                         exhausted.increment();
                         diagnostic("RESULT_SAVE_EXHAUSTED", completion, attempt, failure.getClass().getSimpleName());
-                        return false;
+                        return Outcome.DEFERRED;
                     }
                     log.warn("code=RESULT_SAVE_RETRY attemptId={} runId={} attempts={} type={}",
                             completion.attemptId(), completion.runId(), attempt, failure.getClass().getSimpleName());
@@ -79,7 +77,7 @@ public class ExecutionResultServiceImpl implements IExecutionResultService {
                         Thread.currentThread().interrupt();
                         interrupted.increment();
                         diagnostic("RESULT_SAVE_INTERRUPTED", completion, attempt, stopped.getClass().getSimpleName());
-                        return false;
+                        return Outcome.DEFERRED;
                     }
                 }
             }
@@ -87,6 +85,26 @@ public class ExecutionResultServiceImpl implements IExecutionResultService {
         } finally {
             saving.decrementAndGet();
         }
+    }
+
+    @Override
+    public Outcome recover(ExecutionCompletion completion) {
+        if (persist(completion, true)) {
+            saved.increment();
+            return Outcome.SAVED;
+        }
+        conflicts.increment();
+        diagnostic("RESULT_SAVE_CONFLICT", completion, 1, "STATE_CONFLICT");
+        return Outcome.CONFLICT;
+    }
+
+    private boolean persist(ExecutionCompletion completion, boolean deferred) {
+        return Boolean.TRUE.equals(transactions.execute(status -> {
+            if (!mapper.finish(completion.attemptId(), completion.state(), completion.resultCode(), completion.message(),
+                    completion.retryable(), completion.handlerInvoked(), completion.finishedAt())) return false;
+            if (deferred) mapper.appendExecutionEvent(completion.attemptId(), "RESULT_RECOVERED", Instant.now());
+            return true;
+        })) || alreadySaved(completion);
     }
 
     private boolean alreadySaved(ExecutionCompletion completion) {

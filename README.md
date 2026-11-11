@@ -30,7 +30,7 @@ Scheduler/Worker 已支持积压与延迟指标独立采样、失败保值及本
 
 独立 Vue 3 管理台已连接真实 Admin 接口，支持任务管理、Cron 预览、手动执行与运行历史，由 Nginx 托管。Admin 已实现 Redis 详情缓存，默认 TTL 60 秒。手动执行已打通 Admin → Scheduler → Worker → 结果上报：Run/Attempt、执行快照、幂等接收、有限重试、超时与重启恢复均有独立持久化。配置异步同步已实现：Admin 事务 Outbox、后台有限重试、Scheduler 版本副本和删除墓碑。Cron 已支持到期扫描、计划轮次去重及 SKIP/FIRE_ONCE。Scheduler 派发 Outbox、RabbitMQ 发布确认、Worker Inbox 提交后消费确认已实现；远程三节点正常与单节点停机场景各 43 项真实 MQ 检查通过，当前 3.8 Broker 使用显式兼容策略，至少一次死信转移仍未验收。Worker 注册、心跳、在线/离线判定及节点查询页面已实现，MQ 派发按节点能力和负载选择独立 Worker 队列，Attempt 与 Outbox 固定目标和路由；有界续租和 Handler 执行上下文已实现，见 [执行租约](docs/execution-leases.md)；租约失效后可按快照上限创建新 Attempt 并重新选节点，见 [Worker 水平扩展](docs/worker-horizontal-scaling.md)。Java 21 与 Spring Boot 4.1.1 保持不变。
 
-Worker 对同一份执行结果有限重试写库，恢复后继续上报，耗尽时记录可定位错误；保存重试不重新调用 Handler，线程池拒绝已领取任务时也有收尾。进程崩溃、重试耗尽和过期租约的限制见 [结果保存恢复](docs/worker-result-recovery.md)。
+Worker 对同一份执行结果有限重试写库，耗尽后交给在线恢复扫描。数据库恢复时补存原结果并释放容量，原结果不可用时记录副作用未知。进程崩溃和过期租约的处置见 [结果保存恢复](docs/worker-result-recovery.md)。
 
 ## 模块和边界
 

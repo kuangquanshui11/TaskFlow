@@ -1,7 +1,10 @@
-param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster, [switch]$IncludeConfigReconciliation, [switch]$IncludeAttemptTimeline, [switch]$IncludeRunRerun,
+param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$InjectWorkerResultSaveExhaustion, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster, [switch]$IncludeConfigReconciliation, [switch]$IncludeAttemptTimeline, [switch]$IncludeRunRerun,
     [ValidateSet('http','rabbitmq')][string]$Transport = 'http', [string]$MqSettingsPath,[string]$PlatformSettingsPath,
     [ValidateRange(1024,65535)][int]$IdentityPort = 19190)
 $ErrorActionPreference = 'Stop'
+if ($InjectWorkerResultSaveExhaustion -and ($InjectWorkerResultSaveFailure -or $Transport -ne 'http' -or $PlatformSettingsPath)) {
+    throw 'Result save exhaustion requires isolated standalone HTTP mode and its own fault injector.'
+}
 if ($IncludeWorkerCluster -and ($Transport -ne 'rabbitmq' -or $PlatformSettingsPath)) {
     throw 'Worker cluster acceptance requires standalone RabbitMQ mode and an isolated test vhost.'
 }
@@ -26,6 +29,7 @@ if ($Transport -eq 'rabbitmq') {
 $javaExe = (Get-Command java -CommandType Application).Source
 $ports = @{ admin = 19080; scheduler = 19081; worker = 19082; gateway = 19088 }
 if ($IncludeWorkerCluster) { $ports['worker2'] = 19083 }
+if ($InjectWorkerResultSaveExhaustion) { $ports['result-ledger'] = 19084 }
 $nginxPort = 8091
 foreach ($testPort in @($ports.Values) + @($nginxPort)) {
     $probe = [Net.Sockets.TcpClient]::new()
@@ -103,6 +107,9 @@ function Start-TestService([string]$Name) {
     $javaArguments = @(('-Dloader.path="' + $loaderPaths + '"'),
         ('"-Dspring.config.additional-location=file:' + $file.yaml.Replace('\','/') + '"'),
         '-cp', ('"' + $file.jar + '"'), 'org.springframework.boot.loader.launch.PropertiesLauncher')
+    if ($Name -eq 'worker' -and $InjectWorkerResultSaveExhaustion) {
+        $javaArguments = @('-Dtaskflow.test.result-save.exhaustion=true') + $javaArguments
+    }
     if ($platform) {
         # Config imports are resolved for every profile document during bootstrap.
         # Supply the isolated endpoint before any application-cloud.yml is read.
@@ -171,6 +178,57 @@ function Wait-TestRun([string]$Id) {
     }
     throw 'Run did not reach a terminal state.'
 }
+function Read-TestWorkerLog {
+    $stream = [IO.File]::Open($processes['worker'].log, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    $reader = [IO.StreamReader]::new($stream)
+    try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+}
+function Test-WorkerResultRecovery {
+    $job = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/jobs/insert' @{
+        name = 'online-result-recovery'; handlerKey = 'orderTimeoutCheck'; payload = @{batchSize=2;maxBatches=1};
+        maxAttempts = 1; timeoutSeconds = 25
+    }
+    Assert-Check ($job.status -eq 201) 'Result recovery uses an order Handler with an independent ledger'
+    $originalWorker = $processes['worker'].id
+    $marker = Join-Path $runRoot 'worker-result-save.blocked'
+    $cases = [Collections.Generic.List[object]]::new()
+    foreach ($expireLease in @($false,$true)) {
+        [IO.File]::WriteAllText($marker, 'fail terminal SQL', $utf8)
+        try {
+            $run = New-TestRun $job.body.data
+            $attemptId = $run.run.attempts[0].id
+            $exhausted = $false
+            for ($i=0; $i -lt 40; $i++) {
+                if ((Read-TestWorkerLog).Contains('code=RESULT_SAVE_EXHAUSTED attemptId=' + $attemptId)) { $exhausted=$true; break }
+                Start-Sleep -Milliseconds 100
+            }
+            $local = Call-Api 'GET' "http://127.0.0.1:19082/internal/v1/executions/selectById?attemptId=$attemptId" $null $dispatchToken
+            Assert-Check ($exhausted -and $local.status -eq 200 -and $local.body.state -eq 'RUNNING') "SQL fault exceeds foreground retry window (lease expires: $expireLease)"
+            if ($expireLease) {
+                $timedOut = Wait-TestRun $run.run.id
+                Assert-Check ($timedOut.state -eq 'FAILED' -and $timedOut.attempts[0].state -eq 'TIMED_OUT') 'Scheduler expires the lease while Worker result SQL is unavailable'
+            }
+        } finally { [IO.File]::Delete($marker) }
+        $expectedReport = if ($expireLease) { 'REPORT_STALE' } else { 'REPORT_ACKNOWLEDGED' }
+        $timeline = Wait-TestAttemptEvents $run.run.id $attemptId {
+            param($value)
+            $value.worker.events.eventType -contains 'RESULT_RECOVERED' -and
+                $value.worker.events.eventType -contains $expectedReport
+        }
+        $authority = Wait-TestRun $run.run.id
+        $local = Call-Api 'GET' "http://127.0.0.1:19082/internal/v1/executions/selectById?attemptId=$attemptId" $null $dispatchToken
+        Assert-Check ($local.body.state -eq 'SUCCEEDED' -and $processes['worker'].id -eq $originalWorker -and !$processes['worker'].process.HasExited) 'The same Worker process persists the original success and exits RUNNING'
+        $expectedState = if ($expireLease) { 'FAILED' } else { 'SUCCEEDED' }
+        $expectedCode = if ($expireLease) { 'LEASE_EXPIRED' } else { 'SUCCEEDED' }
+        Assert-Check ($authority.state -eq $expectedState -and $authority.resultCode -eq $expectedCode -and @($authority.attempts).Count -eq 1) "Scheduler preserves its authoritative outcome for $expectedReport"
+        $ledgerRows = @(Get-Content -LiteralPath $resultLedgerFile | ForEach-Object { $_ | ConvertFrom-Json } |
+                Where-Object key -eq ($run.run.id + ':close-0'))
+        Assert-Check ($ledgerRows.Count -eq 1 -and @($timeline.worker.events | Where-Object eventType -eq 'HANDLER_STARTED').Count -eq 1) 'Recovered Attempt produced exactly one external business ledger entry'
+        $cases.Add([pscustomobject]@{ run=$authority; workerPid=$originalWorker; timeline=$timeline; ledger=$ledgerRows[0] })
+    }
+    $cases | ConvertTo-Json -Depth 18 |
+        Set-Content -LiteralPath (Join-Path $runRoot 'worker-result-recovery.json') -Encoding utf8
+}
 function New-RerunFixture {
     $rerunJob = New-TestJob 'demoSuccess'
     $templateRun = New-TestRun $rerunJob
@@ -228,7 +286,7 @@ $accessRedisPorts = @{ 'session-redis' = 16379; 'rate-redis' = 16380 }
 . (Join-Path $PSScriptRoot 'lib/execution-access.ps1')
 try {
     Initialize-AcceptanceAccess
-    if ($InjectWorkerResultSaveFailure) {
+    if ($InjectWorkerResultSaveFailure -or $InjectWorkerResultSaveExhaustion) {
         $resultFailureClasses = Join-Path $runRoot 'result-save-classes'
         $resultFailureMigrations = Join-Path $runRoot 'result-save-migrations'
         New-Item -ItemType Directory -Path $resultFailureClasses, $resultFailureMigrations -Force | Out-Null
@@ -237,6 +295,20 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Result persistence fault injector compilation failed.' }
         [IO.File]::WriteAllText((Join-Path $resultFailureMigrations 'R__inject_result_save_failure.sql'),
             'CREATE TRIGGER worker_result_save_failure BEFORE UPDATE ON worker_execution FOR EACH ROW CALL "FailFirstResultSave";', $utf8)
+    }
+    if ($InjectWorkerResultSaveExhaustion) {
+        $resultLedgerFile = Join-Path $runRoot 'worker-result-ledger.jsonl'
+        $fixture = Join-Path $PSScriptRoot 'local/worker-result-ledger.mjs'
+        $node = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
+        $accessProcesses['result-ledger'] = Start-Process -FilePath $node -ArgumentList @(
+            ('"' + $fixture + '"'), [string]$ports['result-ledger'], ('"' + $resultLedgerFile + '"')) -WindowStyle Hidden -PassThru
+        $ledgerReady = $false
+        for ($i=0; $i -lt 30; $i++) {
+            if ($accessProcesses['result-ledger'].HasExited) { throw 'Result ledger fixture exited during startup.' }
+            try { if ((Call-Api 'GET' "http://127.0.0.1:$($ports['result-ledger'])/health").status -eq 200) { $ledgerReady=$true; break } } catch { }
+            Start-Sleep -Milliseconds 100
+        }
+        if (!$ledgerReady) { throw 'Result ledger fixture was not ready.' }
     }
     foreach ($name in @('admin','scheduler','worker')) {
         $jar = Join-Path $runRoot ("taskflow-$name.jar")
@@ -272,7 +344,13 @@ try {
         }
         $accessImport = if ($name -eq 'admin') { 'file:' + (Join-Path $PSScriptRoot 'acceptance/application-access-admin.yml').Replace('\','/') } else { '' }
         $testImport = @($testImport, $accessImport | Where-Object { $_ }) -join ','
-        $executionLeaseYaml = if ($IncludeExecutionLease -or $IncludeWorkerCluster -or $IncludeAttemptTimeline) { "    lease:`n      duration: 10s`n      renewal-interval: 500ms" } else { '' }
+        $executionLeaseYaml = if ($IncludeExecutionLease -or $IncludeWorkerCluster -or $IncludeAttemptTimeline -or $InjectWorkerResultSaveExhaustion) { "    lease:`n      duration: 10s`n      renewal-interval: 500ms" } else { '' }
+        $resultOrderYaml = if ($name -eq 'worker' -and $InjectWorkerResultSaveExhaustion) {
+            "  order:`n    enabled: true`n    token: `"$dispatchToken`"`n    url: http://127.0.0.1:$($ports['result-ledger'])`n    connect-timeout: 500ms`n    request-timeout: 1s"
+        } else { '' }
+        $resultPersistenceYaml = if ($name -eq 'worker' -and $InjectWorkerResultSaveExhaustion) {
+            "    result-persistence:`n      max-attempts: 3`n      retry-delay: 100ms`n      recovery-interval: 200ms"
+        } else { '' }
         $configuration = @"
 spring:
   config:
@@ -300,6 +378,7 @@ $traceYaml
     rabbit:
       enabled: $mqHealth
 taskflow:
+$resultOrderYaml
   nodes:
     enabled: true
     worker-id: worker-default
@@ -332,6 +411,7 @@ taskflow:
       enabled: false
   execution:
 $executionLeaseYaml
+$resultPersistenceYaml
     scheduler-url: "http://127.0.0.1:19081"
     worker-url: "http://127.0.0.1:19082"
     control-token: "$controlToken"
@@ -461,15 +541,14 @@ info:
         Assert-Check ((Call-Api 'POST' 'http://127.0.0.1:19081/internal/v1/attempts/updateLease' $wrongOwner $reportToken).status -eq 409) 'Terminal Attempt cannot be revived by renewal'
     }
     if ($InjectWorkerResultSaveFailure) {
-        $stream = [IO.File]::Open($processes['worker'].log, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
-        $reader = [IO.StreamReader]::new($stream)
-        try { $workerLog = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        $workerLog = Read-TestWorkerLog
         $savedAttemptId = $successResult.attempts[0].id
         Assert-Check ($workerLog.Contains('code=RESULT_SAVE_RETRY attemptId=' + $savedAttemptId) -and
             $workerLog.Contains('code=RESULT_SAVE_RECOVERED attemptId=' + $savedAttemptId)) 'Actual terminal SQL failure recovers by saving the same Attempt'
         Assert-Check ($successResult.resultCode -eq 'SUCCEEDED' -and $successResult.message -eq '执行成功' -and
             @($successResult.attempts).Count -eq 1) 'Scheduler accepts the original result after Worker database write recovery'
     }
+    if ($InjectWorkerResultSaveExhaustion) { Test-WorkerResultRecovery }
     if ($Transport -eq 'rabbitmq') {
         $attempt = $successResult.attempts[0]
         $event = @{version=1;eventId=$attempt.id;command=@{attemptId=$attempt.id;runId=$successResult.id;
@@ -823,7 +902,7 @@ info:
 } finally {
     if ($nginxStarted) { & $nginxExe -p $nginxPrefix -c conf/nginx.conf -s quit }
     foreach ($name in @('gateway','admin','worker2','worker','scheduler')) { Stop-TestService $name }
-    foreach ($name in @('identity','rate-redis','session-redis')) { Stop-AcceptanceDependency $name }
+    foreach ($name in @('identity','rate-redis','session-redis','result-ledger')) { Stop-AcceptanceDependency $name }
     foreach ($entry in $mutatedEnvironment.GetEnumerator()) {
         if ($null -eq $entry.Value) { Remove-Item ('Env:' + $entry.Key) -ErrorAction SilentlyContinue }
         else { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process') }

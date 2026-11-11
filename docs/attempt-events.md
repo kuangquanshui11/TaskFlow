@@ -26,6 +26,7 @@
 | `HANDLER_STARTED` | 领取租约且通过执行资格检查后，进入调用 Handler 的边界前写入 |
 | `HANDLER_FINISHED` | 已进入 Handler 的执行结果成功保存 |
 | `EXECUTION_FINISHED`、`EXECUTION_RECOVERED` | 调用前失败，或重启收尾本地 RUNNING 工作 |
+| `RESULT_RECOVERED`、`RESULT_RECOVERY_UNKNOWN` | Worker 在线补存原结果，或将原结果不可用的遗留记录按副作用未知收尾 |
 | `REPORT_CLAIMED` | 本次上报计数和下次上报时间已提交，随后在事务外发起请求 |
 | `REPORT_ACKNOWLEDGED`、`REPORT_STALE` | Scheduler 确认结果，或返回 409 表示该结果已无法覆盖权威状态；两种情况都停止重报 |
 | `REPORT_UNCONFIRMED`、`REPORT_EXHAUSTED` | 未获确认，按既有预算安排后续上报或结束重试 |

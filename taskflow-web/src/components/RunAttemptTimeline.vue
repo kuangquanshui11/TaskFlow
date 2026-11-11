@@ -22,6 +22,7 @@ const labels = {
   LEASE_RENEWED: '执行租约已续期', RUN_FINISHED: 'Run 已进入终态',
   HANDLER_STARTED: '进入 Handler 调用',
   EXECUTION_FINISHED: '执行在调用 Handler 前结束', EXECUTION_RECOVERED: 'Worker 重启后记录中断',
+  RESULT_RECOVERED: 'Worker 已补存原执行结果', RESULT_RECOVERY_UNKNOWN: '执行结果不可用，请核对业务流水',
   REPORT_CLAIMED: '已领取结果上报', REPORT_ACKNOWLEDGED: 'Scheduler 已确认结果',
   REPORT_STALE: '迟到结果已被拒绝', REPORT_UNCONFIRMED: '结果上报未确认',
   REPORT_EXHAUSTED: '结果上报次数已耗尽',

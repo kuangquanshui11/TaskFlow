@@ -22,6 +22,11 @@ public class ExecutionConfiguration {
     @Bean public ThreadPoolTaskScheduler workerReportScheduler() {
         var scheduler = new ThreadPoolTaskScheduler(); scheduler.setPoolSize(1); scheduler.setThreadNamePrefix("taskflow-report-"); return scheduler;
     }
+    @Bean public ThreadPoolTaskScheduler workerResultRecoveryScheduler() {
+        var scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setThreadNamePrefix("taskflow-result-recovery-");
+        return scheduler;
+    }
     @EventListener(ApplicationReadyEvent.class)
     public void recover() { executions.recover(); }
     @Scheduled(fixedDelayString = "${taskflow.execution.scan-interval}", initialDelayString = "${taskflow.execution.scan-interval}")
@@ -36,6 +41,17 @@ public class ExecutionConfiguration {
         if (properties.scanningEnabled()) {
             try { executions.reportPending(); }
             catch (RuntimeException error) { org.slf4j.LoggerFactory.getLogger(getClass()).warn("Worker report failed. type={}", error.getClass().getSimpleName()); }
+        }
+    }
+    @Scheduled(scheduler = "workerResultRecoveryScheduler",
+            fixedDelayString = "${taskflow.execution.result-persistence.recovery-interval}",
+            initialDelayString = "${taskflow.execution.result-persistence.recovery-interval}")
+    public void recoverResults() {
+        if (properties.scanningEnabled()) {
+            try { executions.recoverPendingResults(); }
+            catch (RuntimeException error) {
+                org.slf4j.LoggerFactory.getLogger(getClass()).debug("Worker result recovery delayed. type={}", error.getClass().getSimpleName());
+            }
         }
     }
 }

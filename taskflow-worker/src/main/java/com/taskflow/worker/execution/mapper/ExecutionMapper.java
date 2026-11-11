@@ -53,12 +53,34 @@ public class ExecutionMapper {
         boolean updated = jdbc.update("UPDATE worker_execution SET state=?,result_code=?,message=?,retryable=?,finished_at=?,next_report_at=? WHERE attempt_id=? AND state='RUNNING'",
                 state, code, message, retryable, ts(now), ts(now), id.toString()) == 1;
         if (!updated) return false;
+        appendExecutionEvent(id, handlerInvoked ? "HANDLER_FINISHED" : "EXECUTION_FINISHED", now);
+        return true;
+    }
+    public void appendExecutionEvent(UUID id, String type, Instant now) {
         jdbc.update("""
                 INSERT INTO worker_attempt_event (run_id,attempt_id,worker_id,event_type,occurred_at,state,result_code)
                 SELECT run_id,attempt_id,report_worker_id,?,?,state,result_code
                 FROM worker_execution WHERE attempt_id=?
-                """, handlerInvoked ? "HANDLER_FINISHED" : "EXECUTION_FINISHED", ts(now), id.toString());
-        return true;
+                """, type, ts(now), id.toString());
+    }
+    public record Running(UUID attemptId, UUID runId) { }
+
+    public List<Running> running(ExecutionOwner owner, int limit) {
+        return jdbc.query("""
+                SELECT attempt_id,run_id FROM worker_execution
+                WHERE state='RUNNING' AND report_worker_id=? AND report_session_id=?
+                ORDER BY created_at,attempt_id LIMIT ?
+                """, (rs, i) -> new Running(UUID.fromString(rs.getString(1)), UUID.fromString(rs.getString(2))),
+                owner.workerId(), owner.sessionId().toString(), limit);
+    }
+    public boolean finishUnknown(UUID attemptId, UUID runId, ExecutionOwner owner, Instant now) {
+        boolean updated = jdbc.update("""
+                UPDATE worker_execution SET state='FAILED',result_code='RESULT_OUTCOME_UNKNOWN',
+                    message='原执行结果不可用，外部副作用未知，请核对业务流水',retryable=FALSE,finished_at=?,next_report_at=?
+                WHERE attempt_id=? AND run_id=? AND state='RUNNING' AND report_worker_id=? AND report_session_id=?
+                """, ts(now), ts(now), attemptId.toString(), runId.toString(), owner.workerId(), owner.sessionId().toString()) == 1;
+        if (updated) appendExecutionEvent(attemptId, "RESULT_RECOVERY_UNKNOWN", now);
+        return updated;
     }
     public void recoverRunning(Instant now) {
         jdbc.update("""

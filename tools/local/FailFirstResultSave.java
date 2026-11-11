@@ -1,12 +1,15 @@
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.h2.api.Trigger;
 
-/** 仅隔离进程验收加载：让首次终态 UPDATE 真实回滚，后续 SQL 正常。 */
+/** 仅隔离进程验收加载，控制终态 UPDATE 的真实回滚。 */
 public final class FailFirstResultSave implements Trigger {
     private final AtomicBoolean failed = new AtomicBoolean();
     private int stateColumn = -1;
+    private Path outageMarker;
 
     @Override
     public void init(Connection connection, String schema, String trigger, String table, boolean before, int type)
@@ -16,6 +19,9 @@ public final class FailFirstResultSave implements Trigger {
             String path = rows.next() ? rows.getString(1) : null;
             if (path == null || !path.replace('\\', '/').contains("/.tools/execution-e2e/"))
                 throw new SQLException("Result save fault injection requires the isolated execution-e2e file database");
+            if (Boolean.getBoolean("taskflow.test.result-save.exhaustion")) {
+                outageMarker = Path.of(path).resolveSibling("worker-result-save.blocked");
+            }
         }
         try (var statement = connection.prepareStatement("SELECT * FROM worker_execution WHERE 1=0")) {
             var metadata = statement.getMetaData();
@@ -30,8 +36,8 @@ public final class FailFirstResultSave implements Trigger {
     public void fire(Connection connection, Object[] oldRow, Object[] newRow) throws SQLException {
         if ("RUNNING".equals(oldRow[stateColumn])
                 && ("SUCCEEDED".equals(newRow[stateColumn]) || "FAILED".equals(newRow[stateColumn]))
-                && failed.compareAndSet(false, true)) {
-            throw new SQLException("Injected first Worker terminal result save failure", "08006");
+                && (outageMarker == null ? failed.compareAndSet(false, true) : Files.exists(outageMarker))) {
+            throw new SQLException("Injected Worker terminal result save failure", "08006");
         }
     }
 }

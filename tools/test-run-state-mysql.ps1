@@ -1,4 +1,5 @@
-param([ValidateRange(1024,65535)][int]$Port = 13387, [switch]$IncludeDispatchFairness, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster)
+param([ValidateRange(1024,65535)][int]$Port = 13387, [switch]$IncludeDispatchFairness, [switch]$IncludeExecutionLease,
+    [switch]$IncludeWorkerCluster, [switch]$IncludeWorkerResultRecovery)
 $ErrorActionPreference = 'Stop'
 $repoPath = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoPath
@@ -12,7 +13,8 @@ $socketProbe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $Port)
 try { $socketProbe.Start() } finally { $socketProbe.Stop() }
 $schema = 'taskflow_it_run_state_' + [Guid]::NewGuid().ToString('N')
 $variableNames = @('TASKFLOW_RUN_STATE_TEST_DB_URL','TASKFLOW_RUN_STATE_TEST_DB_PORT',
-    'TASKFLOW_RUN_STATE_TEST_DB_SCHEMA','TASKFLOW_RUN_STATE_TEST_DB_USERNAME','TASKFLOW_RUN_STATE_TEST_DB_PASSWORD')
+    'TASKFLOW_RUN_STATE_TEST_DB_SCHEMA','TASKFLOW_RUN_STATE_TEST_DB_USERNAME','TASKFLOW_RUN_STATE_TEST_DB_PASSWORD',
+    'TASKFLOW_WORKER_RESULT_TEST_PORT','TASKFLOW_WORKER_RESULT_TEST_SCHEMA')
 $savedVariables = @{}
 foreach ($name in $variableNames) { $savedVariables[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 $mysqlProcess = $null
@@ -46,6 +48,16 @@ try {
     & (Join-Path $repoPath 'mvnw.cmd') -B -l (Join-Path $runPath 'tests.log') -pl taskflow-scheduler ("-Dtest=" + $testClasses) test
     if ($LASTEXITCODE -ne 0) { throw ('Scheduler MySQL tests failed. Evidence: ' + $runPath) }
     Write-Output ('Scheduler MySQL tests passed. Evidence: ' + $runPath)
+    if ($IncludeWorkerResultRecovery) {
+        $workerSchema = 'taskflow_it_worker_result_' + [Guid]::NewGuid().ToString('N')
+        & (Join-Path $mysqlBinPath 'mysql.exe') --no-defaults --protocol=TCP --host=127.0.0.1 "--port=$Port" --user=root "--execute=CREATE DATABASE $workerSchema CHARACTER SET utf8mb4;"
+        if ($LASTEXITCODE -ne 0) { throw 'Worker test schema creation failed.' }
+        $env:TASKFLOW_WORKER_RESULT_TEST_PORT = [string]$Port
+        $env:TASKFLOW_WORKER_RESULT_TEST_SCHEMA = $workerSchema
+        & (Join-Path $repoPath 'mvnw.cmd') -B -l (Join-Path $runPath 'worker-result-tests.log') -pl taskflow-worker '-Dtest=WorkerResultRecoveryMysqlTests' test
+        if ($LASTEXITCODE -ne 0) { throw ('Worker result recovery MySQL tests failed. Evidence: ' + $runPath) }
+        Write-Output ('Worker result recovery MySQL tests passed. Evidence: ' + $runPath)
+    }
 } finally {
     foreach ($name in $variableNames) { [Environment]::SetEnvironmentVariable($name, $savedVariables[$name], 'Process') }
     if ($mysqlProcess -and !$mysqlProcess.HasExited) {

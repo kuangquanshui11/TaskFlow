@@ -9,5 +9,6 @@ public interface IExecutionService {
     void executePending();
     void reportPending();
     void recover();
+    void recoverPendingResults();
     com.taskflow.worker.execution.model.ExecutionLoad selectLoad();
 }

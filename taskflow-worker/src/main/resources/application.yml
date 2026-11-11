@@ -141,6 +141,7 @@ taskflow:
     result-persistence:
       max-attempts: "${TASKFLOW_RESULT_SAVE_MAX_ATTEMPTS:5}"
       retry-delay: "${TASKFLOW_RESULT_SAVE_RETRY_DELAY:500ms}"
+      recovery-interval: "${TASKFLOW_RESULT_RECOVERY_INTERVAL:1s}"
     scheduler-url: "${TASKFLOW_SCHEDULER_URL:http://localhost:8081}"
     worker-url: "${TASKFLOW_WORKER_URL:http://localhost:8082}"
     control-token: "${TASKFLOW_CONTROL_TOKEN:}"

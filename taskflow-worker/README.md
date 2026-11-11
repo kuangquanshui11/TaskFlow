@@ -6,7 +6,7 @@
 
 已实现独立 MySQL / Flyway V1、持久化 Inbox、幂等接收、有界线程执行、超时中断、结果持久化与有限重报。Controller 调用 IExecutionService / ExecutionServiceImpl，ExecutionMapper 只读写 Worker 自己的表，SchedulerReportClient 在本地事务外上报结果。
 
-结果保存已拆为 IExecutionResultService / ExecutionResultServiceImpl：对同一份不可变结果有限重试，默认总共 5 次、间隔 500ms，保留原执行槽位，不重新执行 Handler。保存恢复后继续原结果上报；耗尽、冲突和中断有结构化错误及 Micrometer 计数。线程池拒绝已领取任务时保存 EXECUTOR_REJECTED 终态。耗尽或进程崩溃仍可能遗留本地 RUNNING，重启按副作用未知处理；配置、故障边界及验证见 [结果保存恢复](../docs/worker-result-recovery.md)。
+结果保存对同一份不可变结果有限重试，默认总共 5 次、间隔 500ms。重试耗尽时把原结果和槽位移交在线恢复扫描，数据库恢复后补存并释放容量。当前会话的遗留执行若缺少原结果，会记录副作用未知的处置事件，进程重启则沿用 `WORKER_RESTARTED`。结果继续按原执行身份上报。配置、故障边界及验证见 [结果保存恢复](../docs/worker-result-recovery.md)。
 
 dispatch 模块默认从 RabbitMQ 固定 Worker quorum 队列接收 v1 事件，校验消息标识及完整 DTO，复用本地 Inbox 持久化后才手动 ACK；重复事件沿用原记录，永久错误或有限接收重试耗尽进入死信队列。三节点集群配置已提供，真实 Broker 验收待执行，见 [可靠派发](../docs/reliable-dispatch.md)。一个固定队列仍只对应同一 Worker 身份、一个执行进程与其持久化数据库，当前不支持其他 Worker 数据库竞争接管此队列。
 

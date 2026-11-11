@@ -27,8 +27,17 @@ class ExecutionConfigurationTests {
     }
     @Test void disabledScanningSkipsDispatchAndReporting() {
         var configuration = new ExecutionConfiguration(properties(false, Duration.ofSeconds(2)), executions);
-        configuration.scan(); configuration.report();
+        configuration.scan(); configuration.report(); configuration.recoverResults();
         verifyNoInteractions(executions);
+    }
+    @Test void resultRecoveryUsesItsOwnScheduler() throws Exception {
+        var configuration = new ExecutionConfiguration(properties(true, Duration.ofSeconds(2)), executions);
+        configuration.recoverResults();
+        verify(executions).recoverPendingResults();
+        verifyNoMoreInteractions(executions);
+        var schedule = ExecutionConfiguration.class.getMethod("recoverResults").getAnnotation(Scheduled.class);
+        assertThat(schedule.scheduler()).isEqualTo("workerResultRecoveryScheduler");
+        assertThat(schedule.fixedDelayString()).isEqualTo("${taskflow.execution.result-persistence.recovery-interval}");
     }
     @Test void reportingUsesDedicatedSingleThreadSchedulerAndFixedDelay() throws Exception {
         var configuration = new ExecutionConfiguration(properties(true, Duration.ofSeconds(2)), executions);
