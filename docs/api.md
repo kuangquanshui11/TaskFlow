@@ -512,6 +512,18 @@ Worker salesReport 参数示例为 `{"shopId":8}`，首次生成历史日期示�
 | GET `/internal/v1/expired-data/select` | query `retentionDays`（90–3650）、`batchSize`（1–500） | UTC `cutoff`、当前批 `eligibleCount`、`hasMore` |
 | POST `/internal/v1/expired-data/delete` | JSON `requestKey`（1–100 个小写 ASCII 字母、数字或 `._:-`，首字符为字母或数字）、`retentionDays`（90–3650）、`batchSize`（1–500）、`batchNumber`（1–10） | UTC `cutoff`、`batchNumber`、`deletedCount`、`hasMore` |
 
-同键同批返回已提交的原结果；同键改变保留天数或批大小返回 409 `IDEMPOTENCY_CONFLICT`。首批编号为 1，后续批次要求前一批已提交且报告 `hasMore=true`，否则返回 409 `CLEANUP_BATCH_OUT_OF_SEQUENCE`。参数非法返回 400，令牌错误返回 401。
+回执保留期内，同键同批返回已提交的原结果。同键改变保留天数或批大小返回 409 `IDEMPOTENCY_CONFLICT`。首批编号为 1，后续批次要求前一批已提交且报告 `hasMore=true`，否则返回 409 `CLEANUP_BATCH_OUT_OF_SEQUENCE`。请求自最后一次提交批次或首次绑定起超过 90 天后返回 409 `CLEANUP_REQUEST_EXPIRED`，需要继续清理时创建新 Run。参数非法返回 400，令牌错误返回 401。
 
 Worker 参数示例为 `{"retentionDays":90,"batchSize":500,"maxBatches":10,"dryRun":true}`。`dryRun` 缺省为 `true`，只有布尔值 `false` 才发起删除。 [执行与保留规则](expired-data-cleanup.md)
+
+## 订单服务投递诊断与审计保留 API（v1）
+
+开启 `order.operations.enabled` 后，直接访问订单服务的 `/internal/v1/order-operations` 前缀。请求通过 `X-Taskflow-Token` 携带独立的 `order.operations.token`。
+
+| 入口（相对于前缀） | 参数 | 成功返回 |
+| --- | --- | --- |
+| GET `/stock-outbox-failures/select` | 可选 `eventId`（UUID）、`afterId`（默认 0）、`limit`（默认 100，范围 1–100）、`includeResolved`（默认 `false`） | 按诊断 `id` 升序返回列表。包含 `eventId`、`generation`、`skuId`、`attempts`、`detectedAt`、`lastFailedAt`、`errorCode`、补偿请求时间和原因及 `resolvedAt`。下一页使用末条 `id`。 |
+| POST `/stock-outbox-failures/{eventId}/updateRetry` | `eventId`（UUID），JSON `generation`（非负整数）、`reason`（非空白，最多 250 个字符） | `eventId`、原 `generation`、`queuedGeneration`、`queuedAt`、`reason`。 |
+| GET `/cleanup-retention/select` | 无 | UTC `cutoff`，以及 `cleanupRuns`、`resolvedFailures` 各自的 `eligibleCount` 和 `hasMore`，计数以单批上限为界。 |
+
+补偿以事件 ID 和失败轮次为幂等键。同键同原因返回原回执，同键改变原因返回 409 `IDEMPOTENCY_CONFLICT`。诊断不存在或其回执已清理返回 404 `STOCK_OUTBOX_FAILURE_NOT_FOUND`。非当前耗尽轮次返回 409 `STOCK_OUTBOX_FAILURE_NOT_CURRENT`。缓存关闭时，新补偿返回 409 `STOCK_CACHE_DISABLED`。令牌错误返回 401。 [处置和保留规则](expired-data-cleanup.md)

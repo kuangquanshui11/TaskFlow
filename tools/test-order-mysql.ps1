@@ -42,6 +42,10 @@ try {
     $env:TASKFLOW_ORDER_TEST_DB_USERNAME = 'root'
     $env:TASKFLOW_ORDER_TEST_DB_PASSWORD = ''
     # 数据源 URL 与会话隔离级别由 application-test-mysql.yml 提供。
+    if ($IncludeCleanup) {
+        & (Join-Path $repoPath 'mvnw.cmd') -B -l (Join-Path $runPath 'cleanup-migration.log') -pl examples/taskflow-order-service '-Dtest=CleanupRetentionMigrationMysqlTests' test
+        if ($LASTEXITCODE -ne 0) { throw ('Cleanup MySQL migration test failed. Evidence: ' + $runPath) }
+    }
     $testClasses = @('OrderMysqlTests')
     if ($IncludeSales) { $testClasses += 'SalesReportMysqlTests' }
     if ($IncludeInventorySync) { $testClasses += @('InventorySyncMysqlTests', 'WmsInventorySyncMysqlTests') }

@@ -3,3 +3,8 @@ order:
   cleanup:
     enabled: true
     token: test-order-cleanup
+    retention-enabled: true
+    retention-batch-size: 1
+  operations:
+    enabled: true
+    token: test-order-operations

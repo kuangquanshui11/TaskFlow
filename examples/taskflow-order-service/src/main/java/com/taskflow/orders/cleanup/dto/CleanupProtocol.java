@@ -11,6 +11,7 @@ public final class CleanupProtocol {
     public static final int MAX_RETENTION_DAYS = 3650;
     public static final int MAX_BATCH_SIZE = 500;
     public static final int MAX_BATCHES = 10;
+    public static final int AUDIT_RETENTION_DAYS = 90;
 
     private CleanupProtocol() { }
 
@@ -22,4 +23,9 @@ public final class CleanupProtocol {
     public record Preview(Instant cutoff, int eligibleCount, boolean hasMore) { }
 
     public record Batch(Instant cutoff, int batchNumber, int deletedCount, boolean hasMore) { }
+
+    public record RetentionCandidates(int eligibleCount, boolean hasMore) { }
+
+    public record RetentionPreview(Instant cutoff, RetentionCandidates cleanupRuns,
+                                   RetentionCandidates resolvedFailures) { }
 }

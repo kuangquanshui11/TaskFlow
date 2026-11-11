@@ -7,20 +7,21 @@ import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface CleanupMapper {
-    record Run(Instant cutoff, int retentionDays, int batchSize) { }
+    record Run(Instant cutoff, Integer retentionDays, Integer batchSize, Instant lastActivityAt, boolean expired) { }
 
     @Insert("""
-            INSERT INTO expired_data_cleanup_run(request_key, cutoff, retention_days, batch_size)
-            VALUES (#{requestKey}, #{cutoff}, #{retentionDays}, #{batchSize})
+            INSERT INTO expired_data_cleanup_run(request_key, cutoff, retention_days, batch_size, last_activity_at)
+            VALUES (#{requestKey}, #{cutoff}, #{retentionDays}, #{batchSize}, #{now})
             ON DUPLICATE KEY UPDATE request_key = request_key
             """)
-    void bind(String requestKey, Instant cutoff, int retentionDays, int batchSize);
+    void bind(String requestKey, Instant cutoff, int retentionDays, int batchSize, Instant now);
 
     @Select("""
-            SELECT cutoff, retention_days, batch_size FROM expired_data_cleanup_run
+            SELECT cutoff, retention_days, batch_size, last_activity_at, expired FROM expired_data_cleanup_run
             WHERE request_key = #{requestKey} FOR UPDATE
             """)
     Run lockRun(String requestKey);
@@ -57,4 +58,22 @@ public interface CleanupMapper {
             VALUES (#{requestKey}, #{batch.batchNumber}, #{batch.deletedCount}, #{batch.hasMore})
             """)
     void save(String requestKey, Batch batch);
+
+    @Update("UPDATE expired_data_cleanup_run SET last_activity_at = #{now} WHERE request_key = #{key}")
+    void touch(String key, Instant now);
+
+    @Select("""
+            SELECT request_key FROM expired_data_cleanup_run WHERE expired = FALSE AND last_activity_at < #{cutoff}
+            ORDER BY last_activity_at, request_key LIMIT #{limit}
+            """)
+    List<String> previewExpiredRuns(Instant cutoff, int limit);
+
+    @Delete("DELETE FROM expired_data_cleanup_batch WHERE request_key = #{key}")
+    void deleteReceipts(String key);
+
+    @Update("""
+            UPDATE expired_data_cleanup_run SET expired = TRUE, cutoff = NULL, retention_days = NULL,
+                batch_size = NULL, last_activity_at = NULL WHERE request_key = #{key}
+            """)
+    void expireRun(String key);
 }

@@ -18,12 +18,34 @@ public interface InventoryMapper {
     @Insert("INSERT INTO stock_ledger(id,order_id,sku_id,operation,quantity,request_id,created_at) VALUES(#{id},#{orderId},#{skuId},#{operation},#{quantity},#{requestId},#{now})")
     void ledger(String id, String orderId, long skuId, String operation, int quantity, String requestId, Instant now);
     @Insert("INSERT INTO stock_outbox(id,sku_id,created_at,next_attempt_at) VALUES(#{id},#{skuId},#{now},#{now})") void enqueue(String id, long skuId, Instant now);
-    record Pending(String id, long skuId, int attempts) { }
-    @Select("SELECT id,sku_id,attempts FROM stock_outbox WHERE next_attempt_at<=#{now} AND attempts<#{max} ORDER BY next_attempt_at,created_at LIMIT 100")
+    record Pending(String id, long skuId, int attempts, long generation) { }
+
+    @Select("""
+            SELECT id, sku_id, attempts, generation FROM stock_outbox
+            WHERE delivery_state = 'PENDING' AND next_attempt_at <= #{now} AND attempts < #{max}
+            ORDER BY next_attempt_at, created_at, id LIMIT 100
+            """)
     List<Pending> pending(Instant now, int max);
-    @Select("SELECT id FROM stock_outbox WHERE id=#{id} FOR UPDATE") String lockOutbox(String id);
+
+    @Select("""
+            SELECT id, sku_id, attempts, generation FROM stock_outbox
+            WHERE delivery_state = 'PENDING' AND attempts >= #{max} ORDER BY attempts, id LIMIT 100
+            """)
+    List<Pending> exhaustedWithoutDiagnosis(int max);
+
     @Insert("INSERT INTO stock_outbox_history(id,sku_id,published_at) VALUES(#{id},#{skuId},#{publishedAt})")
     void recordPublished(String id, long skuId, Instant publishedAt);
-    @Delete("DELETE FROM stock_outbox WHERE id=#{id}") void published(String id);
-    @Update("UPDATE stock_outbox SET attempts=attempts+1,next_attempt_at=#{next} WHERE id=#{id} AND attempts=#{attempts}") void defer(String id, int attempts, Instant next);
+
+    @Delete("""
+            DELETE FROM stock_outbox WHERE id = #{id} AND generation = #{generation}
+              AND attempts = #{attempts} AND delivery_state = 'PENDING'
+            """)
+    int published(Pending row);
+
+    @Update("""
+            UPDATE stock_outbox SET attempts = #{newAttempts}, next_attempt_at = #{next}, delivery_state = #{state}
+            WHERE id = #{row.id} AND generation = #{row.generation} AND attempts = #{row.attempts}
+              AND delivery_state = 'PENDING'
+            """)
+    int defer(Pending row, int newAttempts, Instant next, String state);
 }

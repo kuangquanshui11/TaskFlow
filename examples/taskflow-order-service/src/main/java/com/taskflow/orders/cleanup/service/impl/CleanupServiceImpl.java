@@ -14,12 +14,13 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
+import static com.taskflow.orders.cleanup.dto.CleanupProtocol.AUDIT_RETENTION_DAYS;
+
 @Service
 @ConditionalOnProperty(name = "order.cleanup.enabled", havingValue = "true")
 public class CleanupServiceImpl implements ICleanupService {
     private final CleanupMapper mapper;
     private final TransactionTemplate transactions;
-
     public CleanupServiceImpl(CleanupMapper mapper, PlatformTransactionManager manager) {
         this.mapper = mapper;
         this.transactions = new TransactionTemplate(manager);
@@ -27,7 +28,7 @@ public class CleanupServiceImpl implements ICleanupService {
 
     @Override
     public Preview select(int retentionDays, int batchSize) {
-        var cutoff = cutoff(retentionDays);
+        var cutoff = now().minus(retentionDays, ChronoUnit.DAYS);
         int found = mapper.preview(cutoff, batchSize + 1).size();
         return new Preview(cutoff, Math.min(found, batchSize), found > batchSize);
     }
@@ -36,8 +37,11 @@ public class CleanupServiceImpl implements ICleanupService {
     public Batch delete(Request request) {
         if (request.batchNumber() == 1) {
             // 固定截止时间先提交，首批删除回滚后仍按原截止时间重试。
-            transactions.executeWithoutResult(status -> mapper.bind(request.requestKey(),
-                    cutoff(request.retentionDays()), request.retentionDays(), request.batchSize()));
+            transactions.executeWithoutResult(status -> {
+                var now = now();
+                mapper.bind(request.requestKey(), now.minus(request.retentionDays(), ChronoUnit.DAYS),
+                        request.retentionDays(), request.batchSize(), now);
+            });
         }
         return transactions.execute(status -> deleteBatch(request));
     }
@@ -47,7 +51,10 @@ public class CleanupServiceImpl implements ICleanupService {
         int number = request.batchNumber();
         var run = mapper.lockRun(key);
         if (run == null) throw conflict("CLEANUP_BATCH_OUT_OF_SEQUENCE");
-        if (run.retentionDays() != request.retentionDays() || run.batchSize() != request.batchSize()) {
+        if (run.expired() || run.lastActivityAt().isBefore(now().minus(AUDIT_RETENTION_DAYS, ChronoUnit.DAYS))) {
+            throw conflict("CLEANUP_REQUEST_EXPIRED");
+        }
+        if (!run.retentionDays().equals(request.retentionDays()) || !run.batchSize().equals(request.batchSize())) {
             throw conflict("IDEMPOTENCY_CONFLICT");
         }
         var saved = mapper.batch(key, number);
@@ -63,11 +70,12 @@ public class CleanupServiceImpl implements ICleanupService {
         if (deleted != count) throw new IllegalStateException("Locked cleanup batch changed");
         var result = new Batch(run.cutoff(), number, deleted, ids.size() > count);
         mapper.save(key, result);
+        mapper.touch(key, now());
         return result;
     }
 
-    private static Instant cutoff(int retentionDays) {
-        return Instant.now().truncatedTo(ChronoUnit.MICROS).minus(retentionDays, ChronoUnit.DAYS);
+    private static Instant now() {
+        return Instant.now().truncatedTo(ChronoUnit.MICROS);
     }
 
     private static ResponseStatusException conflict(String reason) {

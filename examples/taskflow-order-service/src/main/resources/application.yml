@@ -53,6 +53,12 @@ order:
   cleanup:
     enabled: "${TASKFLOW_EXPIRED_DATA_CLEANUP_SOURCE_ENABLED:false}"
     token: "${TASKFLOW_EXPIRED_DATA_CLEANUP_TOKEN:}"
+    retention-enabled: "${TASKFLOW_ORDER_CLEANUP_RETENTION_ENABLED:false}"
+    retention-batch-size: 100
+    retention-scan-delay: 1h
+  operations:
+    enabled: "${TASKFLOW_ORDER_OPERATIONS_ENABLED:false}"
+    token: "${TASKFLOW_ORDER_OPERATIONS_TOKEN:}"
   samples-enabled: "${TASKFLOW_ORDER_SAMPLES_ENABLED:false}"
   api-token: "${TASKFLOW_ORDER_API_TOKEN:}"
   worker-token: "${TASKFLOW_ORDER_WORKER_TOKEN:}"

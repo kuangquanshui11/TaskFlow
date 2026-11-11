@@ -3,6 +3,7 @@ package com.taskflow.orders.inventory.service.impl;
 import java.time.Instant;
 import java.util.UUID;
 import com.taskflow.orders.config.OrderProperties;
+import com.taskflow.orders.config.OrderOperationsProperties;
 import com.taskflow.orders.inventory.mapper.*;
 import com.taskflow.orders.inventory.model.Stock;
 import com.taskflow.orders.inventory.service.IInventoryService;
@@ -17,13 +18,17 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class InventoryServiceImpl implements IInventoryService {
     private final InventoryMapper mapper;
+    private final StockOutboxFailureMapper failures;
     private final StockCache cache;
     private final OrderProperties properties;
+    private final OrderOperationsProperties operations;
     private final TransactionTemplate transactions;
 
-    public InventoryServiceImpl(InventoryMapper mapper, StockCache cache, OrderProperties properties,
+    public InventoryServiceImpl(InventoryMapper mapper, StockOutboxFailureMapper failures,
+                                StockCache cache, OrderProperties properties, OrderOperationsProperties operations,
                                 PlatformTransactionManager manager) {
-        this.mapper=mapper; this.cache=cache; this.properties=properties;
+        this.mapper=mapper; this.failures=failures; this.cache=cache; this.properties=properties;
+        this.operations = operations;
         this.transactions = new TransactionTemplate(manager);
     }
     @Override @Transactional public Stock insert(long skuId, long available) {
@@ -66,21 +71,50 @@ public class InventoryServiceImpl implements IInventoryService {
     }
     @Override @Scheduled(fixedDelayString="${order.outbox-delay}")
     public void publishPending() {
-        if(!properties.cacheEnabled()) return;
-        for(var row:mapper.pending(Instant.now(),properties.outboxMaxAttempts())) {
+        if (!properties.cacheEnabled() && !operations.enabled()) return;
+        int maxAttempts = properties.outboxMaxAttempts();
+        for (var row : mapper.exhaustedWithoutDiagnosis(maxAttempts)) {
+            var now = Instant.now();
+            // 旧版本没有保存失败时间和错误类别，升级时仅记录发现时间。
+            recordFailure(row, row.attempts(), maxAttempts, now, null, "PREVIOUS_FAILURE_UNKNOWN");
+        }
+        if (!properties.cacheEnabled()) return;
+
+        for (var row : mapper.pending(Instant.now(), maxAttempts)) {
+            var stock = mapper.find(row.skuId());
+            if (stock == null) {
+                var now = Instant.now();
+                recordFailure(row, row.attempts() + 1, maxAttempts, now, now, "SKU_NOT_FOUND");
+                continue;
+            }
             try {
-                cache.put(mapper.find(row.skuId()),properties.cacheTtl());
-                transactions.executeWithoutResult(status -> {
-                    // 两个投递者可能都已刷新缓存。只归档仍持有待投递行的那次成功。
-                    if (mapper.lockOutbox(row.id()) == null) return;
-                    mapper.recordPublished(row.id(), row.skuId(), Instant.now());
-                    mapper.published(row.id());
-                });
+                cache.put(stock, properties.cacheTtl());
             } catch(RuntimeException unavailable) {
-                mapper.defer(row.id(),row.attempts(),Instant.now().plus(properties.outboxRetryDelay()));
-                // Redis 故障时一次只尝试一条，限制阻塞。耗尽行保留供对账；查询回填和 TTL 仍可恢复缓存。
+                var now = Instant.now();
+                recordFailure(row, row.attempts() + 1, maxAttempts, now, now, "CACHE_WRITE_FAILED");
+                // Redis 故障时一次只尝试一条，限制阻塞。
                 break;
             }
+            transactions.executeWithoutResult(status -> {
+                // Redis 在事务外执行。旧轮次或旧尝试的结果不能关闭当前待投递行。
+                if (mapper.published(row) == 1) {
+                    var now = Instant.now();
+                    mapper.recordPublished(row.id(), row.skuId(), now);
+                    failures.resolve(row.id(), now);
+                }
+            });
         }
+    }
+
+    private void recordFailure(InventoryMapper.Pending row, int attempts, int maxAttempts,
+                               Instant now, Instant failedAt, String errorCode) {
+        boolean exhausted = attempts >= maxAttempts;
+        String state = exhausted ? "EXHAUSTED" : "PENDING";
+        var next = now.plus(properties.outboxRetryDelay());
+        transactions.executeWithoutResult(status -> {
+            if (mapper.defer(row, attempts, next, state) == 1 && exhausted) {
+                failures.insert(row, attempts, now, failedAt, errorCode);
+            }
+        });
     }
 }
