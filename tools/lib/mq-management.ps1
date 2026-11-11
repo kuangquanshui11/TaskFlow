@@ -45,7 +45,7 @@ function Get-MqBrokerCapability($Client, [string]$BaseUrl, [bool]$AllowLegacy) {
     $legacy = $version -lt [version]'3.10.0'
     if ($legacy -and !$AllowLegacy) { throw 'RabbitMQ older than 3.10 lacks at-least-once dead lettering. Explicitly use -AllowLegacyBroker for limited compatibility.' }
     if ($legacy) { Write-Warning 'Legacy Broker: dead lettering is at-most-once; reliable dead-letter transfer is NOT accepted.' }
-    return [pscustomobject]@{ version=$overview.rabbitmq_version; legacy=$legacy; node=$overview.node }
+    return [pscustomobject]@{ version=$overview.rabbitmq_version; legacy=$legacy; collectorCompatible=($version -ge [version]'4.3.0'); node=$overview.node }
 }
 
 function New-MqDispatchSafetyPolicy([bool]$Legacy) {
@@ -54,4 +54,23 @@ function New-MqDispatchSafetyPolicy([bool]$Legacy) {
     if (!$Legacy) { $definition['dead-letter-strategy'] = 'at-least-once' }
     return @{pattern='^taskflow\.worker\.default\.v1$'; 'apply-to'=$(if ($Legacy) {'queues'} else {'quorum_queues'});
         priority=10; definition=$definition}
+}
+
+function New-MqDeadLetterRetentionPolicy([string]$QueuePattern) {
+    return @{pattern=$QueuePattern; 'apply-to'='quorum_queues'; priority=10;
+        definition=@{'delivery-limit'=-1; overflow='reject-publish'}}
+}
+
+function Assert-MqDeadLetterPolicies($Client, [string]$BaseUrl, [string]$VirtualHost, [string]$Source, [string]$Target) {
+    $vhost = [Uri]::EscapeDataString($VirtualHost)
+    $sourceState = Invoke-MqManagement $Client $BaseUrl 'GET' ("queues/$vhost/" + [Uri]::EscapeDataString($Source))
+    $targetState = Invoke-MqManagement $Client $BaseUrl 'GET' ("queues/$vhost/" + [Uri]::EscapeDataString($Target))
+    $policy = $sourceState.effective_policy_definition
+    if ($sourceState.type -ne 'quorum' -or $targetState.type -ne 'quorum' -or
+        $policy.'dead-letter-strategy' -ne 'at-least-once' -or $policy.overflow -ne 'reject-publish' -or
+        $policy.'dead-letter-exchange' -ne 'taskflow.dispatch.dead.v1' -or
+        $sourceState.arguments.'x-overflow' -eq 'drop-head' -or
+        $targetState.effective_policy_definition.'delivery-limit' -ne -1) {
+        throw 'Effective queue policy does not preserve at-least-once dead-letter transfer and collector redelivery.'
+    }
 }

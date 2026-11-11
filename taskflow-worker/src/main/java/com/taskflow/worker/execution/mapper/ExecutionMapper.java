@@ -104,6 +104,32 @@ public class ExecutionMapper {
         if (settled) jdbc.update("UPDATE worker_execution SET reported=TRUE WHERE attempt_id=?", id.toString());
         appendReportEvent(id, number, type, now);
     }
+    public void recordReportFailure(UUID id, int number, String code) {
+        jdbc.update("""
+                UPDATE worker_execution SET last_report_error_code=?, last_report_outcome_number=?
+                WHERE attempt_id=? AND report_count=? AND reported=FALSE
+                """, code, number, id.toString(), number);
+    }
+    public Optional<com.taskflow.worker.execution.dto.AttemptEvents.ReportFailure> selectReportFailure(
+            UUID runId, UUID attemptId, String workerId, int maxAttempts, Instant unknownBefore, Instant observedAt) {
+        return jdbc.query("""
+                SELECT report_count,last_report_error_code,last_report_outcome_number
+                FROM worker_execution WHERE run_id=? AND attempt_id=? AND report_worker_id=?
+                  AND state IN ('SUCCEEDED','FAILED') AND reported=FALSE AND report_count>=?
+                  AND (last_report_outcome_number=report_count OR next_report_at<=?)
+                """, (rs, i) -> {
+            int number = rs.getInt("report_count");
+            String code = rs.getInt("last_report_outcome_number") == number
+                    ? rs.getString("last_report_error_code") : "REPORT_CONFIRMATION_UNKNOWN";
+            return new com.taskflow.worker.execution.dto.AttemptEvents.ReportFailure(code, number, observedAt);
+        }, runId.toString(), attemptId.toString(), workerId, maxAttempts, ts(unknownBefore)).stream().findFirst();
+    }
+    public long countExhaustedReports(int maxAttempts, Instant unknownBefore) {
+        return jdbc.queryForObject("""
+                SELECT COUNT(*) FROM worker_execution WHERE state IN ('SUCCEEDED','FAILED') AND reported=FALSE
+                AND report_count>=? AND (last_report_outcome_number=report_count OR next_report_at<=?)
+                """, Long.class, maxAttempts, ts(unknownBefore));
+    }
     private void appendReportEvent(UUID id, int number, String type, Instant now) {
         jdbc.update("""
                 INSERT INTO worker_attempt_event

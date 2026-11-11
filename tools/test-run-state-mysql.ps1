@@ -1,5 +1,5 @@
 param([ValidateRange(1024,65535)][int]$Port = 13387, [switch]$IncludeDispatchFairness, [switch]$IncludeExecutionLease,
-    [switch]$IncludeWorkerCluster, [switch]$IncludeWorkerResultRecovery)
+    [switch]$IncludeWorkerCluster, [switch]$IncludeWorkerResultRecovery, [switch]$IncludeDispatchFailures)
 $ErrorActionPreference = 'Stop'
 $repoPath = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoPath
@@ -45,6 +45,7 @@ try {
     $testClasses = if ($IncludeDispatchFairness) { 'RunStateConcurrencyTests,DispatchFairnessTests' } else { 'RunStateConcurrencyTests' }
     if ($IncludeExecutionLease) { $testClasses += ',ExecutionLeaseTests' }
     if ($IncludeWorkerCluster) { $testClasses += ',WorkerClusterDispatchTests' }
+    if ($IncludeDispatchFailures) { $testClasses += ',DispatchFailureMysqlTests' }
     & (Join-Path $repoPath 'mvnw.cmd') -B -l (Join-Path $runPath 'tests.log') -pl taskflow-scheduler ("-Dtest=" + $testClasses) test
     if ($LASTEXITCODE -ne 0) { throw ('Scheduler MySQL tests failed. Evidence: ' + $runPath) }
     Write-Output ('Scheduler MySQL tests passed. Evidence: ' + $runPath)

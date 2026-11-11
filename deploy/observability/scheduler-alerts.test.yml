@@ -2,6 +2,49 @@ rule_files: [scheduler-alerts.yml]
 evaluation_interval: 15s
 
 tests:
+  - name: P02 alerts fire for fresh unresolved failures and resolve after clearance or stale sampling
+    interval: 15s
+    input_series:
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '5+0x12'
+      - series: 'taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '1+0x8 0+0x3'
+      - series: 'taskflow_dispatch_outbox_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '1+0x8 0+0x3'
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-worker",instance="worker-1"}'
+        values: '5+0x8 100+0x3'
+      - series: 'taskflow_worker_result_report_exhausted{job="taskflow-worker",instance="worker-1"}'
+        values: '1+0x12'
+      - series: 'up{job="rabbitmq-dead-letter",instance="rabbit1"}'
+        values: '1+0x8 0+0x3'
+      - series: 'rabbitmq_detailed_queue_messages{job="rabbitmq-dead-letter",instance="rabbit1",queue="taskflow.worker.default.dead.v1",vhost="taskflow"}'
+        values: '2+0x12'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: TaskFlowDeadLetterUnresolved
+        exp_alerts:
+          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
+            exp_annotations: {summary: Dispatch dead letters require review}
+      - eval_time: 2m
+        alertname: TaskFlowDispatchOutboxExhausted
+        exp_alerts:
+          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
+            exp_annotations: {summary: Dispatch Outbox publications exhausted}
+      - eval_time: 2m
+        alertname: TaskFlowWorkerReportExhausted
+        exp_alerts:
+          - exp_labels: {job: taskflow-worker, instance: worker-1, severity: warning}
+            exp_annotations: {summary: Worker result reports exhausted}
+      - eval_time: 2m
+        alertname: TaskFlowBrokerDeadLetterBacklog
+        exp_alerts:
+          - exp_labels: {job: rabbitmq-dead-letter, instance: rabbit1, queue: taskflow.worker.default.dead.v1, vhost: taskflow, severity: warning}
+            exp_annotations: {summary: RabbitMQ dead-letter queue has pending deliveries}
+      - {eval_time: 2m15s, alertname: TaskFlowDeadLetterUnresolved, exp_alerts: []}
+      - {eval_time: 2m15s, alertname: TaskFlowDispatchOutboxExhausted, exp_alerts: []}
+      - {eval_time: 2m15s, alertname: TaskFlowWorkerReportExhausted, exp_alerts: []}
+      - {eval_time: 2m15s, alertname: TaskFlowBrokerDeadLetterBacklog, exp_alerts: []}
+
   - name: A short spike is ignored and sustained dispatch delay fires then resolves
     interval: 15s
     input_series:

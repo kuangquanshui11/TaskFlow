@@ -21,7 +21,8 @@ class MetricsConfigurationTests {
         try {
             var mapper = mock(ExecutionMapper.class);
             when(mapper.countAccepted()).thenThrow(new IllegalStateException("injected"));
-            var sampler = new MetricsSamplerImpl(mapper, registry, Clock.systemUTC());
+            var sampler = new MetricsSamplerImpl(mapper, mock(com.taskflow.worker.execution.config.ExecutionProperties.class),
+                    registry, Clock.systemUTC());
             registry.getMeters().stream().filter(m -> m instanceof Gauge).forEach(m -> assertThat(((Gauge)m).value()).isEqualTo(-1));
             sampler.sample();
             registry.getMeters().stream().filter(m -> m instanceof Gauge).forEach(m -> assertThat(((Gauge)m).value()).isEqualTo(-1));

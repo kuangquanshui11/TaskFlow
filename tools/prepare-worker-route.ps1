@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory=$true)][ValidatePattern('^[a-z0-9][a-z0-9_.-]{0,99}$')][string]$WorkerId,
     [ValidatePattern('^[a-zA-Z0-9_.-]{1,100}$')][string]$VirtualHost = 'taskflow',
-    [switch]$LegacyBroker
+    [switch]$LegacyBroker,
+    [switch]$SkipCollectorPolicy
 )
 $ErrorActionPreference = 'Stop'
 $repoPath = Split-Path -Parent $PSScriptRoot
@@ -28,8 +29,15 @@ $definitions = @{
     )
     policies = @($policy)
 }
+if (!$LegacyBroker -and !$SkipCollectorPolicy) {
+    $retention = New-MqDeadLetterRetentionPolicy ('^' + [regex]::Escape($deadQueue) + '$')
+    $retention['name'] = 'dead-letter-retention-' + $WorkerId
+    $retention['vhost'] = $VirtualHost
+    $definitions.policies += $retention
+}
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 [IO.File]::WriteAllText($outputPath, ($definitions | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
 Write-Output "Prepared topology: $outputPath"
 Write-Output "Worker: $WorkerId; queue: $queue; routing key: $routingKey; dead queue: $deadQueue"
+Write-Output "Add only this dead queue to the dedicated collector read permissions and Scheduler queue list when enabling collection."
 Write-Output 'Review and import with a Broker administrator. This command does not connect to RabbitMQ or change credentials.'

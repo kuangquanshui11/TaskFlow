@@ -245,15 +245,18 @@ public class ExecutionServiceImpl implements IExecutionService {
             try { outcome = reports.report(result); }
             catch (RuntimeException ignored) { outcome = Outcome.UNCONFIRMED; }
             int number = row.reportCount() + 1;
-            boolean exhausted = outcome == Outcome.UNCONFIRMED && number >= properties.maxReportAttempts();
+            boolean settled = outcome == Outcome.ACKNOWLEDGED || outcome == Outcome.STALE;
+            boolean exhausted = !settled && number >= properties.maxReportAttempts();
             String eventType = switch (outcome) {
                 case ACKNOWLEDGED -> "REPORT_ACKNOWLEDGED";
                 case STALE -> "REPORT_STALE";
-                case UNCONFIRMED -> exhausted ? "REPORT_EXHAUSTED" : "REPORT_UNCONFIRMED";
+                default -> exhausted ? "REPORT_EXHAUSTED" : "REPORT_UNCONFIRMED";
             };
-            boolean settled = outcome != Outcome.UNCONFIRMED;
-            transactions.executeWithoutResult(status ->
-                    mapper.recordReportOutcome(row.attemptId(), number, eventType, settled, Instant.now()));
+            String failureCode = settled ? null : outcome == Outcome.UNCONFIRMED ? "REPORT_UNCONFIRMED" : outcome.name();
+            transactions.executeWithoutResult(status -> {
+                if (failureCode != null) mapper.recordReportFailure(row.attemptId(), number, failureCode);
+                mapper.recordReportOutcome(row.attemptId(), number, eventType, settled, Instant.now());
+            });
             if (exhausted)
                 org.slf4j.LoggerFactory.getLogger(getClass()).error("Result reporting exhausted. attemptId={}", row.attemptId());
         }

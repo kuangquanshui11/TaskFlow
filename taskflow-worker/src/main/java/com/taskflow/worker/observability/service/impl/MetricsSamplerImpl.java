@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 import com.taskflow.worker.execution.mapper.ExecutionMapper;
+import com.taskflow.worker.execution.config.ExecutionProperties;
 import com.taskflow.worker.observability.service.IMetricsSampler;
 import io.micrometer.core.instrument.*;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -17,19 +18,22 @@ import org.springframework.transaction.annotation.*;
 public class MetricsSamplerImpl implements IMetricsSampler {
     private final ExecutionMapper executions;
     private final Clock clock;
+    private final ExecutionProperties execution;
     private final List<AtomicLong> values = new ArrayList<>();
     private final AtomicLong lastSuccess = new AtomicLong(-1);
     private final Counter ok;
     private final Counter failed;
 
 
-    public MetricsSamplerImpl(ExecutionMapper executions,
+    public MetricsSamplerImpl(ExecutionMapper executions, ExecutionProperties execution,
             MeterRegistry registry, @Qualifier("metricsClock") Clock clock) {
         this.executions = executions;
+        this.execution = execution;
         this.clock = clock;
 
         register(registry, "taskflow.worker.result.unreported", null);
         register(registry, "taskflow.worker.execution.backlog", null);
+        register(registry, "taskflow.worker.result.report.exhausted", null);
         // 回调只读取内存时间戳；失败期间 age 继续增加，不查询数据库。
         Gauge.builder("taskflow.metrics.sample.age", lastSuccess,
                 value -> value.get() < 0 ? -1 : Math.max(0, (clock.millis() - value.get()) / 1000.0))
@@ -50,7 +54,9 @@ public class MetricsSamplerImpl implements IMetricsSampler {
         try {
             long unreported = executions.countUnreported();
             long accepted = executions.countAccepted();
-            long[] sampled = {unreported, accepted};
+            long exhausted = executions.countExhaustedReports(execution.maxReportAttempts(),
+                    now.minus(execution.connectTimeout()).minus(execution.requestTimeout()));
+            long[] sampled = {unreported, accepted, exhausted};
             for (int i = 0; i < sampled.length; i++) values.get(i).set(sampled[i]);
             lastSuccess.set(now.toEpochMilli());
             ok.increment();

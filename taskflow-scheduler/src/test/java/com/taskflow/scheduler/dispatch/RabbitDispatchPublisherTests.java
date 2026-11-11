@@ -4,6 +4,8 @@ import java.time.*;
 import java.util.UUID;
 import com.taskflow.scheduler.dispatch.config.DispatchProperties;
 import com.taskflow.scheduler.dispatch.model.OutboxEvent;
+import com.taskflow.scheduler.dispatch.model.DispatchPublishException;
+import com.taskflow.scheduler.dispatch.model.DispatchPublishException.Reason;
 import com.taskflow.scheduler.dispatch.service.impl.RabbitDispatchPublisher;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.*;
@@ -35,12 +37,14 @@ class RabbitDispatchPublisherTests {
                 if (returned) data.setReturned(new ReturnedMessage(call.getArgument(2),312,"NO_ROUTE","dispatch","worker"));
                 data.getFuture().complete(new CorrelationData.Confirm(returned,"injected")); return null;
             }).when(rabbit).send(anyString(),anyString(),any(Message.class),any(CorrelationData.class));
-            assertThatThrownBy(() -> new RabbitDispatchPublisher(rabbit,properties()).publish(event())).isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> new RabbitDispatchPublisher(rabbit,properties()).publish(event()))
+                    .isInstanceOfSatisfying(DispatchPublishException.class, error ->
+                            assertThat(error.reason()).isEqualTo(returned ? Reason.MQ_UNROUTABLE : Reason.MQ_BROKER_NACK));
         }
     }
     @Test void missingConfirmationIsFailureInsteadOfAssumingDelivery() {
         assertThatThrownBy(() -> new RabbitDispatchPublisher(mock(RabbitTemplate.class),properties()).publish(event()))
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("unconfirmed");
+                .isInstanceOfSatisfying(DispatchPublishException.class, error -> assertThat(error.reason()).isEqualTo(Reason.MQ_CONFIRM_TIMEOUT));
     }
     private DispatchProperties properties() {
         return new DispatchProperties("rabbitmq","dispatch","queue","worker","dead","dead-queue","dead-worker",

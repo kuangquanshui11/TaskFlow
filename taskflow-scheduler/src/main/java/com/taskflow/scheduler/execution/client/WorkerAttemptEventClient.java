@@ -5,6 +5,7 @@ import java.util.UUID;
 import com.taskflow.scheduler.execution.config.RunProperties;
 import com.taskflow.scheduler.execution.dto.AttemptEvents.Batch;
 import com.taskflow.scheduler.execution.dto.AttemptEvents.WorkerEvent;
+import com.taskflow.scheduler.execution.dto.AttemptEvents.WorkerEvents;
 import com.taskflow.scheduler.remote.client.WorkerAttemptEventsRemote;
 import com.taskflow.scheduler.remote.model.RemoteErrors;
 import org.springframework.stereotype.Component;
@@ -21,6 +22,10 @@ public class WorkerAttemptEventClient {
     }
 
     public Optional<Batch<WorkerEvent>> select(UUID runId, UUID attemptId, String workerId, int limit) {
+        return snapshot(runId, attemptId, workerId, limit).map(response -> new Batch<>(response.events(), response.truncated()));
+    }
+
+    public Optional<WorkerEvents> snapshot(UUID runId, UUID attemptId, String workerId, int limit) {
         if (TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("Worker event query inside SQL transaction");
         if (properties.dispatchToken().isBlank()) return Optional.empty();
@@ -32,7 +37,10 @@ public class WorkerAttemptEventClient {
                     || response.events() == null || response.events().size() > limit
                     || response.events().stream().anyMatch(event -> event == null
                         || event.id() <= 0 || event.eventType() == null || event.occurredAt() == null)) return Optional.empty();
-            return Optional.of(new Batch<>(response.events(), response.truncated()));
+            var failure = response.reportFailure();
+            if (failure != null && (failure.observedAt() == null || failure.attempts() < 1
+                    || failure.code() == null || !failure.code().matches("REPORT_[A-Z_]{1,56}"))) return Optional.empty();
+            return Optional.of(response);
         } catch (feign.FeignException | org.springframework.cloud.client.circuitbreaker.NoFallbackAvailableException unavailable) {
             return Optional.empty();
         }

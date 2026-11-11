@@ -21,13 +21,20 @@ try {
     $definitions = Get-Content -LiteralPath (Join-Path $runtimePath 'definitions.json') -Raw | ConvertFrom-Json
     $topology = Get-Content -LiteralPath (Join-Path $runtimePath 'topology.json') -Raw | ConvertFrom-Json
     $requiredUsers = @('taskflow_mq_admin','taskflow_scheduler','taskflow_worker')
+    $allowedUsers = $requiredUsers + 'taskflow_dead_letter'
+    $definedUsers = @($definitions.users.name)
     $users = @(Invoke-MqManagement $client $baseUrl 'GET' 'users')
-    if (@($users | Where-Object { $_.name -in $requiredUsers }).Count -gt 0) { throw 'A TaskFlow role already exists; its credentials were preserved.' }
-    if (@($definitions.users).Count -ne 3 -or @($definitions.users | Where-Object { $_.name -notin $requiredUsers }).Count -gt 0 -or
+    if (@($users | Where-Object { $_.name -in $definedUsers }).Count -gt 0) { throw 'A TaskFlow role already exists; its credentials were preserved.' }
+    if (@($requiredUsers | Where-Object { $_ -notin $definedUsers }).Count -gt 0 -or
+        @($definedUsers | Where-Object { $_ -notin $allowedUsers }).Count -gt 0 -or
+        @($definedUsers | Sort-Object -Unique).Count -ne $definedUsers.Count -or
         @($definitions.vhosts).Count -ne 1 -or $definitions.vhosts[0].name -ne 'taskflow') { throw 'Unexpected local bootstrap definitions.' }
     $policy = New-MqDispatchSafetyPolicy $capability.legacy
     $definitions.policies[0].definition = $policy.definition
     $definitions.policies[0].'apply-to' = $policy['apply-to']
+    if (!$capability.collectorCompatible) {
+        $definitions.policies = @($definitions.policies | Where-Object name -ne 'dead-letter-retention')
+    }
     $definitions.queues = $topology.queues
     $definitions.bindings = $topology.bindings
     $null = Invoke-MqManagement $client $baseUrl 'POST' 'definitions' $definitions
@@ -35,6 +42,9 @@ try {
     if ($queues.Count -ne 2) { throw 'Expected exactly two TaskFlow queues.' }
     foreach ($queue in $queues) {
         if ($queue.type -ne 'quorum' -or @($queue.members).Count -ne 3 -or @($queue.online).Count -ne 3) { throw 'TaskFlow queue does not have three online quorum replicas.' }
+    }
+    if ($capability.collectorCompatible -and $definitions.policies.name -contains 'dead-letter-retention') {
+        Assert-MqDeadLetterPolicies $client $baseUrl 'taskflow' 'taskflow.worker.default.v1' 'taskflow.worker.default.dead.v1'
     }
     $addresses = '${TASKFLOW_MQ_ADDRESSES:' + $settings.addresses + '}'
     $yaml = @"

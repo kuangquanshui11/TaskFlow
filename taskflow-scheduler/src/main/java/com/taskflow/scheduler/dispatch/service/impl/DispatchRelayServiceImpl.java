@@ -6,6 +6,7 @@ import com.taskflow.scheduler.dispatch.config.DispatchProperties;
 import com.taskflow.scheduler.dispatch.dto.DispatchEvent;
 import com.taskflow.scheduler.dispatch.mapper.DispatchOutboxMapper;
 import com.taskflow.scheduler.dispatch.model.OutboxEvent;
+import com.taskflow.scheduler.dispatch.model.DispatchPublishException;
 import com.taskflow.scheduler.dispatch.service.*;
 import com.taskflow.scheduler.execution.dto.ExecutionProtocol.Dispatch;
 import com.taskflow.scheduler.execution.mapper.RunDataMapper;
@@ -53,10 +54,12 @@ public class DispatchRelayServiceImpl implements IDispatchRelayService {
                     if (delay.compareTo(properties.maxRetryDelay()) > 0) delay = properties.maxRetryDelay();
                     var next = now.plus(delay);
                     boolean exhausted = event.publishAttempts() >= properties.maxPublishAttempts();
+                    String code = failed instanceof DispatchPublishException failure
+                            ? failure.reason().name() : "MQ_PUBLISH_UNCONFIRMED";
                     transactions.executeWithoutResult(status -> {
-                        if (mapper.failed(event, exhausted, "MQ_PUBLISH_UNCONFIRMED", next, now))
-                            appendEvent(claimed, "MQ_PUBLISH_UNCONFIRMED", now,
-                                    exhausted ? "FAILED" : "READY", "MQ_PUBLISH_UNCONFIRMED");
+                        if (mapper.failed(event, exhausted, code, next, now))
+                            appendEvent(claimed, exhausted ? "MQ_PUBLISH_EXHAUSTED" : "MQ_PUBLISH_UNCONFIRMED", now,
+                                    exhausted ? "FAILED" : "READY", code);
                     });
                     org.slf4j.LoggerFactory.getLogger(getClass()).warn("MQ publish not confirmed. eventId={}, attempt={}, type={}",
                             id, event.publishAttempts(), failed.getClass().getSimpleName());

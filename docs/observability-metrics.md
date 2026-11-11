@@ -8,7 +8,7 @@
 
 我将各服务采样编排放在 observability 包，经 IMetricsSampler.sample() 调用本服务既有 Mapper。metricsSampleScheduler 使用独立单线程、metrics-sample- 前缀，初始延迟和完成后固定延迟均取采样周期，不占用默认调度器。测试直接调用 sample()，可控 UTC Clock 推进时间，无须等待定时器。
 
-每轮只读取一次当前 Instant。Scheduler 执行 7 条独立 SELECT：Outbox GROUP BY、5 条 COUNT、在线节点 MIN(last_heartbeat_at)；Worker 执行 2 条 COUNT。心跳在 Java 中用同一观察时间相减，SQL 不计算时间差。各语句独立释放连接，无包围事务、无重试、无写入，查询耗时受已有数据源连接和 Socket 超时约束。sample() 的 Propagation.NEVER 拒绝带事务调用，不借用长事务连接。没有新增表、迁移或索引。
+每轮只读取一次当前 Instant。Scheduler 执行 9 条独立 SELECT，包含 Outbox 状态分组、7 条计数和在线节点最早心跳。Worker 执行 3 条计数。心跳在 Java 中用同一观察时间相减。各语句独立释放连接，查询耗时受已有数据源连接和 Socket 超时约束。`sample()` 使用 `Propagation.NEVER`。
 
 我先收集整轮结果，全部查询成功才更新 AtomicLong、最近成功时间及 ok Counter。任一查询异常保留整轮旧值并递增 failed Counter，等待下一周期；不以 0 冒充未知。AtomicLong 依次更新，抓取可能跨过更新边界，不承诺跨指标原子快照；独立 SELECT 也不构成数据库一致性快照。Gauge 注册一次，只读内存；sample.age 读取内存成功时间戳，与当前时钟相减，故障期间仍增加。
 
@@ -25,6 +25,9 @@
 | taskflow.dispatch.attempt.lease.expired | Gauge / 条 | 无 | run_attempt：READY/DISPATCHING/RUNNING 且 expires_at<=now | 保值；首次 -1 |
 | taskflow.dispatch.attempt.lease.expiring | Gauge / 条 | 无 | run_attempt：上述非终态，expires_at 在 (now,now+60s] | 保值；首次 -1 |
 | taskflow.worker.result.unreported | Gauge / 条 | 无 | Worker worker_execution：reported=FALSE 且 SUCCEEDED/FAILED，含重报耗尽和退避中的记录 | 保值；首次 -1 |
+| taskflow.worker.result.report.exhausted | Gauge / 条 | 无 | Worker 本地已耗尽且尚未确认的结果上报，含超过观察窗口的最后一次领取 | 保值，首次 -1 |
+| taskflow.dispatch.dead.letter.unresolved | Gauge / 条 | 无 | Scheduler 已入库且尚未结案的死信 | 保值，首次 -1 |
+| taskflow.dispatch.outbox.unresolved | Gauge / 条 | 无 | Scheduler 发布耗尽且尚未结案的派发 Outbox | 保值，首次 -1 |
 | taskflow.worker.result.recovery.pending | Gauge / 条 | 无 | 当前 Worker 进程内已移交后台扫描的原结果数量，受 `parallelism` 约束 | 内存实时值 |
 | taskflow.worker.result.recovery | Counter / 次 | outcome=`original` 或 `unknown` | 在线扫描确认原结果，或成功落库副作用未知的收尾记录 | 内存累计值 |
 | taskflow.worker.execution.backlog | Gauge / 条 | 无 | worker_execution：ACCEPTED；不计 RUNNING | 保值；首次 -1 |

@@ -127,7 +127,7 @@ class DispatchOutboxTests {
         assertThat(failed.resultCode()).isEqualTo("MQ_PUBLISH_UNCONFIRMED");
         assertThat(failed.attempts()).hasSize(1);
         verify(publisher, times(3)).publish(any());
-        assertThat(eventTypes(run.id())).endsWith("MQ_PUBLISH_UNCONFIRMED", "ATTEMPT_FINISHED", "RUN_FINISHED");
+        assertThat(eventTypes(run.id())).endsWith("MQ_PUBLISH_EXHAUSTED", "ATTEMPT_FINISHED", "RUN_FINISHED");
     }
     private java.util.List<String> eventTypes(UUID runId) {
         return jdbc.queryForList("SELECT event_type FROM scheduler_attempt_event WHERE run_id=? ORDER BY id",

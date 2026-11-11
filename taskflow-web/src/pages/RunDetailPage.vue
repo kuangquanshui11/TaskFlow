@@ -5,6 +5,7 @@ import { runsApi } from '../api/runs.js';
 import { can } from '../auth/access.js';
 import AppIcon from '../components/AppIcon.vue';
 import RunAttemptTimeline from '../components/RunAttemptTimeline.vue';
+import RunDispatchFailures from '../components/RunDispatchFailures.vue';
 import RunRerunAction from '../components/RunRerunAction.vue';
 import RunStatusBadge from '../components/RunStatusBadge.vue';
 import { fullDate } from '../lib/format.js';
@@ -127,6 +128,8 @@ onBeforeUnmount(() => controller?.abort());
           </li>
         </ol>
       </section>
+
+      <RunDispatchFailures :key="run.id" :run="run" :timezone="timezone" />
 
       <section class="panel" aria-labelledby="run-snapshot-title">
         <div class="panel-heading">

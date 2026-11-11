@@ -5,9 +5,12 @@ import java.nio.charset.StandardCharsets;
 public final class RemoteErrors {
     private RemoteErrors() { }
     public static int status(Throwable error) {
+        return status(error, 503);
+    }
+    public static int status(Throwable error, int unavailable) {
         for (int i=0; error!=null && i<16; i++,error=error.getCause())
             if (error instanceof feign.FeignException remote && remote.status()>=400) return remote.status();
-        return 503;
+        return unavailable;
     }
     public static Map<String,String> headers(String token,String fallbackId) {
         var id=org.slf4j.MDC.get("requestId");

@@ -11,6 +11,8 @@ public interface RunSchedulerRemote {
     String insert(@RequestBody Object body,@RequestHeader Map<String,String> headers);
     @PostMapping("/internal/v1/runs/insertRerun")
     String insertRerun(@RequestBody Object body,@RequestHeader Map<String,String> headers);
+    @PostMapping("/internal/v1/runs/updateDispatchFailure")
+    String updateDispatchFailure(@RequestBody Object body,@RequestHeader Map<String,String> headers);
     // 仅由 Feign 子上下文装配，避免某个调用方的超时覆盖所有客户端。
     class Timeouts {
         @org.springframework.context.annotation.Bean

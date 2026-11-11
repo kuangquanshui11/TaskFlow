@@ -108,6 +108,14 @@ taskflow:
     offline-timeout: 30s
     dispatch-gating-enabled: true
   dispatch:
+    dead-letter:
+      enabled: "${TASKFLOW_DEAD_LETTER_ENABLED:false}"
+      addresses: "${TASKFLOW_DEAD_LETTER_ADDRESSES:${spring.rabbitmq.addresses}}"
+      virtual-host: "${TASKFLOW_DEAD_LETTER_VHOST:${spring.rabbitmq.virtual-host}}"
+      username: "${TASKFLOW_DEAD_LETTER_USERNAME:}"
+      password: "${TASKFLOW_DEAD_LETTER_PASSWORD:}"
+      queues: "${TASKFLOW_DEAD_LETTER_QUEUES:taskflow.worker.default.dead.v1}"
+      retry-delay-ms: 1000
     transport: "${TASKFLOW_DISPATCH_TRANSPORT:rabbitmq}"
     exchange: "${TASKFLOW_MQ_EXCHANGE:taskflow.dispatch.v1}"
     queue: "${TASKFLOW_MQ_QUEUE:taskflow.worker.default.v1}"

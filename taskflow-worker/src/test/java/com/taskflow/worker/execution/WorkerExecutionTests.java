@@ -50,6 +50,7 @@ class WorkerExecutionTests {
     @Autowired PlatformTransactionManager transactions;
     @Autowired IExecutionResultService results;
     @Autowired IExecutionRecoveryService recovery;
+    @Autowired IAttemptEventService attemptEvents;
     @Autowired IExecutionLeaseService leases;
     @Autowired ResultPersistenceProperties resultProperties;
     @Autowired MeterRegistry metrics;
@@ -460,11 +461,26 @@ class WorkerExecutionTests {
     @Test void resultReportingHasAFiniteAttemptBudget() {
         var command = command("demoSuccess", 1, 30, "{}");
         executions.insert(command); executions.executePending(); finished(command);
-        when(reports.report(any())).thenReturn(Outcome.UNCONFIRMED);
-        for (int i = 0; i < 5; i++) { reportDue(); executions.reportPending(); }
+        when(reports.report(any())).thenReturn(Outcome.REPORT_AUTH_FAILED);
+        for (int i = 0; i < 3; i++) { reportDue(); executions.reportPending(); }
+        for (int i = 0; i < 2; i++) executions.reportPending();
         assertThat(mapper.find(command.attemptId()).orElseThrow().reportCount()).isEqualTo(3);
         verify(reports, times(3)).report(any());
         assertThat(eventTypes(command)).endsWith("REPORT_CLAIMED", "REPORT_EXHAUSTED");
+        var diagnosis = attemptEvents.select(command.runId(), command.attemptId(), leases.owner().workerId()).reportFailure();
+        assertThat(diagnosis.code()).isEqualTo("REPORT_AUTH_FAILED");
+        assertThat(diagnosis.attempts()).isEqualTo(3);
+    }
+    @Test void finalReportClaimWithoutOutcomeIsDiagnosedAfterItsRequestWindow() {
+        var command = command("demoSuccess", 1, 30, "{}");
+        executions.insert(command); executions.executePending(); finished(command);
+        jdbc.update("UPDATE worker_execution SET report_count=3,next_report_at=? WHERE attempt_id=?",
+                Timestamp.from(Instant.now().plusSeconds(10)), command.attemptId().toString());
+        assertThat(attemptEvents.select(command.runId(), command.attemptId(), leases.owner().workerId()).reportFailure()).isNull();
+        jdbc.update("UPDATE worker_execution SET next_report_at=? WHERE attempt_id=?",
+                Timestamp.from(Instant.now().minusSeconds(30)), command.attemptId().toString());
+        assertThat(attemptEvents.select(command.runId(), command.attemptId(), leases.owner().workerId()).reportFailure().code())
+                .isEqualTo("REPORT_CONFIRMATION_UNKNOWN");
     }
 
     private java.util.List<String> eventTypes(Dispatch command) {

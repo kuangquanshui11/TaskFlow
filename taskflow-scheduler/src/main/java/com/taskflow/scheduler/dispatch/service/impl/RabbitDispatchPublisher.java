@@ -3,6 +3,8 @@ package com.taskflow.scheduler.dispatch.service.impl;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 import com.taskflow.scheduler.dispatch.config.DispatchProperties;
+import com.taskflow.scheduler.dispatch.model.DispatchPublishException;
+import com.taskflow.scheduler.dispatch.model.DispatchPublishException.Reason;
 import com.taskflow.scheduler.dispatch.model.OutboxEvent;
 import com.taskflow.scheduler.dispatch.service.IDispatchPublisher;
 import org.springframework.amqp.core.*;
@@ -32,11 +34,15 @@ public class RabbitDispatchPublisher implements IDispatchPublisher {
             rabbit.send(event.target().exchange(), event.target().routingKey(), message, correlation);
             var confirm = correlation.getFuture().get(properties.confirmTimeout().toMillis(), TimeUnit.MILLISECONDS);
             // mandatory return 先于对应 confirm 完成；ack 但不可路由也必须保留重发。
-            if (!confirm.ack() || correlation.getReturned() != null) throw new IllegalStateException("MQ publish rejected or unroutable");
+            if (correlation.getReturned() != null) throw new DispatchPublishException(Reason.MQ_UNROUTABLE);
+            if (!confirm.ack()) throw new DispatchPublishException(Reason.MQ_BROKER_NACK);
         } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt(); throw new IllegalStateException("MQ publish interrupted", interrupted);
-        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException failed) {
-            throw new IllegalStateException("MQ publish unconfirmed", failed);
+            Thread.currentThread().interrupt();
+            throw new DispatchPublishException(Reason.MQ_PUBLISH_UNCONFIRMED, interrupted);
+        } catch (java.util.concurrent.TimeoutException failed) {
+            throw new DispatchPublishException(Reason.MQ_CONFIRM_TIMEOUT, failed);
+        } catch (java.util.concurrent.ExecutionException failed) {
+            throw new DispatchPublishException(Reason.MQ_PUBLISH_UNCONFIRMED, failed);
         }
     }
 }

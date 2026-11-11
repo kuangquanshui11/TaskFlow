@@ -32,3 +32,44 @@ groups:
         annotations:
           summary: "Scheduler metrics are unavailable"
           description: "Dispatch metrics are missing, unknown or stale. Check Scheduler sampling and OTLP export."
+  - name: taskflow-dispatch-failures
+    rules:
+      - alert: TaskFlowBrokerDeadLetterBacklog
+        expr: |
+          (rabbitmq_detailed_queue_messages{job="rabbitmq-dead-letter",queue=~"taskflow[.].*[.]dead[.]v1"} > 0)
+          and on (job, instance) (up{job="rabbitmq-dead-letter"} == 1)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RabbitMQ dead-letter queue has pending deliveries"
+      - alert: TaskFlowDeadLetterUnresolved
+        expr: |
+          (taskflow_dispatch_dead_letter_unresolved > 0)
+          and on (job, instance) (taskflow_metrics_sample_age_seconds >= 0)
+          and on (job, instance) (taskflow_metrics_sample_age_seconds + time() - timestamp(taskflow_metrics_sample_age_seconds) <= 90)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dispatch dead letters require review"
+      - alert: TaskFlowDispatchOutboxExhausted
+        expr: |
+          (taskflow_dispatch_outbox_unresolved > 0)
+          and on (job, instance) (taskflow_metrics_sample_age_seconds >= 0)
+          and on (job, instance) (taskflow_metrics_sample_age_seconds + time() - timestamp(taskflow_metrics_sample_age_seconds) <= 90)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dispatch Outbox publications exhausted"
+      - alert: TaskFlowWorkerReportExhausted
+        expr: |
+          (taskflow_worker_result_report_exhausted > 0)
+          and on (job, instance) (taskflow_metrics_sample_age_seconds >= 0)
+          and on (job, instance) (taskflow_metrics_sample_age_seconds + time() - timestamp(taskflow_metrics_sample_age_seconds) <= 90)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker result reports exhausted"

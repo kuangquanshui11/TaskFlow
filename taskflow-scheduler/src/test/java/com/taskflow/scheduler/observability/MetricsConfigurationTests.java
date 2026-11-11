@@ -7,6 +7,7 @@ import com.taskflow.scheduler.observability.config.*;
 import com.taskflow.scheduler.observability.service.IMetricsSampler;
 import com.taskflow.scheduler.observability.service.impl.MetricsSamplerImpl;
 import com.taskflow.scheduler.dispatch.mapper.DispatchOutboxMapper;
+import com.taskflow.scheduler.dispatch.mapper.DispatchFailureMapper;
 import com.taskflow.scheduler.execution.mapper.RunDataMapper;
 import com.taskflow.scheduler.node.mapper.WorkerNodeMapper;
 import io.micrometer.core.instrument.Gauge;
@@ -23,7 +24,8 @@ class MetricsConfigurationTests {
         try {
             var mapper = mock(WorkerNodeMapper.class);
             when(mapper.oldestOnlineHeartbeat(any())).thenThrow(new IllegalStateException("injected"));
-            var sampler = new MetricsSamplerImpl(mock(DispatchOutboxMapper.class), mock(RunDataMapper.class), mapper, registry, Clock.systemUTC());
+            var sampler = new MetricsSamplerImpl(mock(DispatchOutboxMapper.class), mock(DispatchFailureMapper.class),
+                    mock(RunDataMapper.class), mapper, registry, Clock.systemUTC());
             registry.getMeters().stream().filter(m -> m instanceof Gauge).forEach(m -> assertThat(((Gauge)m).value()).isEqualTo(-1));
             sampler.sample();
             registry.getMeters().stream().filter(m -> m instanceof Gauge).forEach(m -> assertThat(((Gauge)m).value()).isEqualTo(-1));

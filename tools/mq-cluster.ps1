@@ -5,6 +5,7 @@ $clusterPath = Join-Path $repoPath 'infra/rabbitmq'
 $envPath = Join-Path $clusterPath '.env'
 $runtimePath = Join-Path $clusterPath 'runtime'
 $utf8 = [Text.UTF8Encoding]::new($false)
+. (Join-Path $PSScriptRoot 'lib/mq-management.ps1')
 
 function New-MqSecret {
     $bytes = New-Object byte[] 32
@@ -34,11 +35,13 @@ if ($Action -eq 'init') {
     New-Item -ItemType Directory -Path $runtimePath -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $repoPath 'config') -Force | Out-Null
     $adminPassword = New-MqSecret; $schedulerPassword = New-MqSecret; $workerPassword = New-MqSecret
+    $deadReaderPassword = New-MqSecret
     $cookie = New-MqSecret
     $users = @(
         @{name='taskflow_mq_admin';password_hash=(Get-RabbitPasswordHash $adminPassword);hashing_algorithm='rabbit_password_hashing_sha256';tags='administrator'},
         @{name='taskflow_scheduler';password_hash=(Get-RabbitPasswordHash $schedulerPassword);hashing_algorithm='rabbit_password_hashing_sha256';tags=''},
-        @{name='taskflow_worker';password_hash=(Get-RabbitPasswordHash $workerPassword);hashing_algorithm='rabbit_password_hashing_sha256';tags=''}
+        @{name='taskflow_worker';password_hash=(Get-RabbitPasswordHash $workerPassword);hashing_algorithm='rabbit_password_hashing_sha256';tags=''},
+        @{name='taskflow_dead_letter';password_hash=(Get-RabbitPasswordHash $deadReaderPassword);hashing_algorithm='rabbit_password_hashing_sha256';tags=''}
     )
     # 账号与 vhost 可在首节点引导；队列必须等三个节点在线后再导入，确保初始即有三个副本。
     $definitions = @{
@@ -46,7 +49,8 @@ if ($Action -eq 'init') {
         permissions=@(
             @{user='taskflow_mq_admin';vhost='taskflow';configure='.*';write='.*';read='.*'},
             @{user='taskflow_scheduler';vhost='taskflow';configure='^$';write='^taskflow\.dispatch\.v1$';read='^$'},
-            @{user='taskflow_worker';vhost='taskflow';configure='^$';write='^$';read='^taskflow\.worker\.default\.v1$'}
+            @{user='taskflow_worker';vhost='taskflow';configure='^$';write='^$';read='^taskflow\.worker\.default\.v1$'},
+            @{user='taskflow_dead_letter';vhost='taskflow';configure='^$';write='^$';read='^taskflow\.worker\.default\.dead\.v1$'}
         )
         exchanges=@(
             @{name='taskflow.dispatch.v1';vhost='taskflow';type='direct';durable=$true;auto_delete=$false;internal=$false;arguments=@{}},
@@ -64,6 +68,9 @@ if ($Action -eq 'init') {
             definition=@{'dead-letter-exchange'='taskflow.dispatch.dead.v1';'dead-letter-routing-key'='worker.default.dead';
                 'dead-letter-strategy'='at-least-once';'overflow'='reject-publish';'delivery-limit'=20}})
     }
+    $deadRetention = New-MqDeadLetterRetentionPolicy '^taskflow\.worker\.default\.dead\.v1$'
+    $deadRetention['name'] = 'dead-letter-retention'; $deadRetention['vhost'] = 'taskflow'
+    $definitions.policies += $deadRetention
     $topology = @{queues=$definitions.queues;bindings=$definitions.bindings}
     $definitions.queues = @(); $definitions.bindings = @()
     [IO.File]::WriteAllText((Join-Path $runtimePath 'definitions.json'), ($definitions | ConvertTo-Json -Depth 20), $utf8)
@@ -86,6 +93,11 @@ taskflow:
   dispatch:
     transport: "$mqTransport"
 "@
+        if ($entry.user -eq 'taskflow_scheduler') {
+            $yaml += [Environment]::NewLine + "    dead-letter:" + [Environment]::NewLine
+            $yaml += "      username: taskflow_dead_letter" + [Environment]::NewLine
+            $yaml += "      password: $deadReaderPassword" + [Environment]::NewLine
+        }
         [IO.File]::WriteAllText($entry.path, $yaml, $utf8)
     }
     Write-Output 'Created ignored local MQ credentials, definitions and service YAML. No broker has been started.'

@@ -9,5 +9,7 @@ export const runsApi = {
   select: (jobId, page = 1, signal) => request('/api/v1/runs/select?' + new URLSearchParams({ jobId, page, pageSize: 10 }), { signal }),
   selectById: (id, signal) => request('/api/v1/runs/selectById?' + new URLSearchParams({ id }), { signal }),
   selectAttemptEvents: (runId, attemptId, signal) => request('/api/v1/runs/selectAttemptEvents?' + new URLSearchParams({ runId, attemptId }), { signal }),
+  selectDispatchFailures: (query, signal) => request('/api/v1/runs/selectDispatchFailures?' + new URLSearchParams(query), { signal }),
+  updateDispatchFailure: (body) => request('/api/v1/runs/updateDispatchFailure', { method: 'POST', body }),
   selectByRequestKey: (requestKey, signal) => request('/api/v1/runs/selectByRequestKey?' + new URLSearchParams({ requestKey }), { signal }),
 };

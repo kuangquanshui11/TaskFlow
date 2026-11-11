@@ -39,6 +39,9 @@ public class DispatchConsumerServiceImpl implements IDispatchConsumerService {
                     || !event.eventId().toString().equals(message.getMessageProperties().getMessageId()))
                 throw new IllegalArgumentException("Invalid dispatch event");
         } catch (IllegalArgumentException | tools.jackson.core.JacksonException invalid) {
+            String id = message.getMessageProperties().getMessageId();
+            org.slf4j.LoggerFactory.getLogger(getClass()).warn("Dispatch rejected. eventId={}, reason=INVALID_DISPATCH_ENVELOPE",
+                    id != null && id.matches("[a-f0-9-]{36}") ? id : "unknown");
             channel.basicReject(tag, false); return;
         }
         int failures = 0;
@@ -61,8 +64,9 @@ public class DispatchConsumerServiceImpl implements IDispatchConsumerService {
                     channel.basicAck(tag, false); return;
                 }
                 if (permanent || (!busy && ++failures >= properties.maxConsumeAttempts())) {
-                    org.slf4j.LoggerFactory.getLogger(getClass()).warn("Dispatch sent to dead letter queue. eventId={}, type={}",
-                            event.eventId(), failed.getClass().getSimpleName());
+                    String reason = failed instanceof ExecutionException error ? error.code() : "INBOX_RETRY_EXHAUSTED";
+                    org.slf4j.LoggerFactory.getLogger(getClass()).warn("Dispatch rejected. eventId={}, runId={}, reason={}",
+                            event.eventId(), event.command().runId(), reason);
                     channel.basicReject(tag, false); return;
                 }
                 if (busy && !waitingForCapacity) {

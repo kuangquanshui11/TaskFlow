@@ -168,6 +168,57 @@ MQ 未部署时可显式用 http，并设置 `TASKFLOW_MQ_HEALTH_ENABLED=false`�
 
 真实发布后未标记时退出、执行中退出、旧 Inbox 恢复后迟到结果及发布连接故障使用独立专项；步骤、数据库最终状态、证据和后续节点/死信演练见 [进程故障窗口验证](dispatch-fault-verification.md)。
 
+## 死信采集与人工处置
+
+我用 Scheduler 自有的 `dispatch_dead_letter` 保存死信元数据。采集器以独立 AMQP 连接消费显式配置的死信队列，先提交记录再 ACK。唯一键由目标队列、规范化消息 ID 和正文哈希派生。关联 Run 和 Attempt 时校验源队列、原 Outbox 正文、原租约版本与标识。无法关联的消息仍可通过事件 ID 或最近死信列表查看。原始消息正文只用于校验和哈希，业务参数不会进入诊断表。
+
+部署到 RabbitMQ 4.3+ 时，先核对源 quorum policy 的 `dead-letter-strategy=at-least-once`、`overflow=reject-publish` 和 DLX 路由。目标 quorum 采用专用的 `delivery-limit=-1` policy，避免采集器断线或落库故障期间累计重投达到上限后删除审计证据。采集器并发为 1、prefetch 为 1，数据库写失败时延迟后 requeue。源队列保留等待目标确认的死信，这些消息占用源队列容量。上线前核对容量预算和实际生效的策略，已有待确认死信时保持可靠策略直至排空。 [RabbitMQ 4.3 quorum](https://www.rabbitmq.com/docs/4.3/quorum-queues#dead-lettering)
+
+新环境通过 `mq-cluster.ps1 -Action init` 生成专用读账号。已有环境由 Broker 管理员给独立账号配置精确死信队列读权限，configure 和 write 均为空，再在被忽略的 Scheduler YAML 或环境变量配置 `TASKFLOW_DEAD_LETTER_USERNAME`、`TASKFLOW_DEAD_LETTER_PASSWORD`、`TASKFLOW_DEAD_LETTER_QUEUES`。若使用独立连接入口，同时配置 `TASKFLOW_DEAD_LETTER_ADDRESSES` 与 `TASKFLOW_DEAD_LETTER_VHOST`。核对每条源队列和目标队列后设置 `TASKFLOW_DEAD_LETTER_ENABLED=true` 并重启 Scheduler。新增 Worker 路由时扩展读账号的精确队列清单及 Scheduler 白名单。
+
+上线前备份各自数据库，核实 Scheduler Flyway V12 和 Worker Flyway V4 已应用，再启用采集和控制台入口。对仍部署在 RabbitMQ 3.10–4.2 的环境生成 Worker 路由时可用 `-SkipCollectorPolicy`，保留原有源队列可靠策略。正式采集部署按上述 4.3+ 方案核对目标 policy。
+
+我在运行详情统一显示死信、Outbox 发布耗尽和 Worker 结果上报耗尽。Worker 自己持久化上报失败原因。最后一次上报仅留下领取、响应未知时，查询以 `REPORT_CONFIRMATION_UNKNOWN` 表示。Dead-letter `x-death.reason` 是 Broker 观察到的原因，应用拒收的细分代码从 Worker 结构化日志按事件 ID 对照。结案先核对业务结果、幂等键及原租约，保留证据引用。现有受控重跑按原资格创建新 Run。 [查询与处置 API](api.md#派发故障查询与处置)
+
+死信告警分为 Broker 队列待消费和 Scheduler 已入库待结案。部署 Prometheus 时，可启用 RabbitMQ 自带的 exporter，配置受限网络内的 `rabbitmq-dead-letter` 抓取任务，路径为 `/metrics/detailed`，参数 `family=queue_coarse_metrics`、`vhost=taskflow`，并按部署的队列前缀筛选。未开启抓取的环境仍可通过管理界面观察 Broker 队列深度。Worker 上报耗尽告警反映 Worker 本地未获确认的记录，人工结案不会修改该记录。 [RabbitMQ Prometheus 指标](https://www.rabbitmq.com/docs/prometheus#aggregated-and-per-object-metrics)
+
+以下配置可加入目标环境的 `scrape_configs`。将目标替换为可从 Prometheus 访问的受限监控地址。
+
+```yaml
+- job_name: rabbitmq-dead-letter
+  metrics_path: /metrics/detailed
+  params:
+    family: [queue_coarse_metrics]
+    vhost: [taskflow]
+    queue: ['^taskflow[.].*[.]dead[.]v1$']
+  static_configs:
+    - targets: ['rabbit1:15692', 'rabbit2:15692', 'rabbit3:15692']
+```
+
+### 隔离验收
+
+```powershell
+.\mvnw.cmd verify
+.\tools\test-run-state-mysql.ps1 -IncludeDispatchFailures
+.\tools\test-mq.ps1 -DeadLetterOnly -ClusterSettingsPath .tools/mq-43-cluster-settings.json
+```
+
+可靠转移验收在随机 vhost 填满目标 quorum 队列，确认它实际拒收，随后向源队列发送并拒绝一条原始消息。脚本释放目标队列容量后验证原消息到达，模拟 ACK 丢失并启动只读账号的 Scheduler 采集器，最终核对重复投递只生成一条数据库记录。测试命令成功后清理本轮 vhost，故障时保留 vhost 和证据。对 3.8/3.9 传 `-AllowLegacyBroker` 仅运行目标可用时的采集兼容回归。
+
+### 2026-11-11 P02 验证记录
+
+环境为 Windows、Java 21、H2 2.4、隔离 MySQL 8.0.34、RabbitMQ 3.8.34 三节点以及 Prometheus 3.13.5。兼容回归使用随机 vhost、专用 Broker 读账号和独立 Scheduler 文件数据库。
+
+| 命令 | 结果 | 证据 |
+| --- | --- | --- |
+| `.\mvnw.cmd -B -o -l .tools/p02-release-verify.log verify` | 397 项通过，52 项按条件跳过。 | `.tools/p02-release-verify.log` |
+| `.\tools\test-run-state-mysql.ps1 -IncludeDispatchFailures` | 17 项通过，含死信去重、事务回滚、处置幂等、终态保护和 Worker 不可用回归。 | `.tools/run-state-mysql/20261111-153821-393/tests.log` |
+| `.\tools\test-mq.ps1 -DeadLetterOnly -AllowLegacyBroker -ClusterSettingsPath .tools/mq-cluster-settings.json` | 7 项检查通过。断开未 ACK 的 channel 后收到同一死信，Scheduler 对两个相同投递只保存一条诊断，Broker 确认两次 ACK 且队列排空。 | `.tools/mq-dead-letter/taskflow_it_0564f9952d3a4cee87496eb25cab7e6d/` 中的 `probe.log`、`collector-result.json` 和队列快照 |
+| `promtool test rules deploy/observability/scheduler-alerts.test.yml` | 规则通过，覆盖告警触发、清除和采样陈旧。 | 终端输出 |
+| 在 `taskflow-web` 执行 `npm.cmd test` 和 `npm.cmd run build` | 29 项通过，前端构建成功。 | 终端输出 |
+
+本轮已验证 3.8.34 目标可用时的真实采集和去重。4.3+ 目标拒收期间的源保留和恢复转移仍待隔离环境验收。浏览器交互和 Broker 指标到真实通知接收端的联调尚未执行。
+
 ```powershell
 .\mvnw.cmd verify
 # 独立三进程、隔离文件 H2，复测真实 Cron；默认显式 HTTP

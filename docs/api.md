@@ -59,6 +59,8 @@ Gateway 保留以下 API 路径，只路由 `/api/v1/**`；`/internal/v1/**`、�
 | GET | /api/v1/runs/selectById?id=UUID | run:read；运行详情、配置快照与 Attempt 历史 |
 | GET | /api/v1/runs/selectByRequestKey?requestKey=UUID | 按原提交标识确认接收结果 |
 | GET | /api/v1/runs/selectAttemptEvents?runId=UUID&attemptId=UUID | run:read；单次 Attempt 的执行事件 |
+| GET | /api/v1/runs/selectDispatchFailures | run:read，查询派发故障 |
+| POST | /api/v1/runs/updateDispatchFailure | dispatch:resolve，确认或结案 |
 
 成功响应：
 
@@ -315,6 +317,12 @@ POST `/api/v1/runs/insertRerun` 接收 `sourceRunId`、`configVersion` 和 UUID 
 - `NOT_ASSIGNED` 表示 Attempt 尚无可定位的 Worker，`worker.events` 为空。
 
 内部 GET `/internal/v1/runs/selectAttemptEvents` 使用控制密钥，返回裸 JSON。Scheduler 调用 Worker 的 GET `/internal/v1/executions/selectAttemptEvents` 时使用派发密钥和 `X-Taskflow-Worker-Id`，由 Worker 独立验证目标标识。两个内部入口均由服务之间直接调用。
+
+### 派发故障查询与处置
+
+`GET /api/v1/runs/selectDispatchFailures` 接收可选 UUID `runId`、`attemptId`、`eventId`。仅传 Run 时返回最新 Attempt，指定 Attempt 时可同时用 Run 校验归属。v1 派发事件 ID 等于 Attempt ID。按事件 ID 可查到无法关联的死信。无筛选时返回最近死信，每次最多 25 条并标注 `truncated`。有 Attempt 时额外返回派发 Outbox 耗尽和目标 Worker 的结果上报诊断。响应包含权威 Attempt 状态、租约版本与截止时间、Worker 查询状态以及每条记录的处置历史。Worker 暂不可读时为 `UNAVAILABLE`。
+
+`POST /api/v1/runs/updateDispatchFailure` 需要 `dispatch:resolve`，由 ADMIN 角色获得。请求传 `requestKey`（UUID）、`source`（`DEAD_LETTER`、`OUTBOX`、`RESULT_REPORT`）、查询返回的 `id`、`action`（`ACKNOWLEDGE` 或 `RESOLVE`）、`conclusion` 和 `evidence`（均为非空且最多 250 字）。Admin 从认证身份取得操作者。已关联的 Attempt 必须进入终态才可结案，结案前须先确认收到。相同请求键及内容返回原处置结果，动作已记录或条件冲突返回 409。处置只写审计记录，Run、Attempt 和 Broker 消息继续由原流程管理。内部同名路径使用 Scheduler 控制密钥。
 
 ## 运行统计语义
 

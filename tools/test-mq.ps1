@@ -1,6 +1,13 @@
-param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$SkipFailover, [switch]$IncludeWorkerCluster, [switch]$CleanupOnly,
+param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$SkipFailover, [switch]$IncludeWorkerCluster, [switch]$CleanupOnly, [switch]$DeadLetterOnly,
     [string]$ClusterSettingsPath, [switch]$ManualFailover, [switch]$AllowLegacyBroker)
 $ErrorActionPreference = 'Stop'
+if ($DeadLetterOnly) {
+    if (!$ClusterSettingsPath -or $ManualFailover -or $CleanupOnly -or $IncludeWorkerCluster) {
+        throw '-DeadLetterOnly requires ClusterSettingsPath and its own test mode.'
+    }
+    & (Join-Path $PSScriptRoot 'test-mq-dead-letter.ps1') -ClusterSettingsPath $ClusterSettingsPath -AllowLegacyBroker:$AllowLegacyBroker
+    return
+}
 if ($CleanupOnly -and (!$SkipFailover -or $IncludeWorkerCluster)) {
     throw '-CleanupOnly requires -SkipFailover and a single isolated Worker.'
 }

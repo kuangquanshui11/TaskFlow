@@ -26,14 +26,19 @@ public class SchedulerClient {
             throw new RunException(503, "SERVICE_NOT_CONFIGURED", "手动执行服务尚未配置");
         var params = RemoteErrors.query(path);
         boolean rerun = path.equals("/internal/v1/runs/insertRerun");
+        boolean disposition = path.equals("/internal/v1/runs/updateDispatchFailure");
+        boolean failures = RemoteErrors.action(path).equals("selectDispatchFailures");
         String response;
         try {
             var headers=RemoteErrors.headers(properties.controlToken(),java.util.UUID.randomUUID().toString());
             if (body == null) response = remote.get(RemoteErrors.action(path), params, headers);
             else if (rerun) response = remote.insertRerun(body, headers);
+            else if (disposition) response = remote.updateDispatchFailure(body, headers);
             else response = remote.insert(body, headers);
         } catch (RuntimeException failure) {
             int status=RemoteErrors.status(failure);
+            if ((disposition || failures) && (status == 400 || status == 404 || status == 409))
+                throw dispatchFailure(status, failure);
             if (status == 404 && path.startsWith("/internal/v1/runs/selectAttemptEvents?"))
                 throw new RunException(404, "ATTEMPT_NOT_FOUND", "该运行中未找到此 Attempt");
             if (status==404) throw new RunException(404,"RUN_NOT_FOUND","运行记录尚未找到");
@@ -44,6 +49,14 @@ public class SchedulerClient {
         }
         try {
             var data = json.readTree(response);
+            if (disposition || failures) {
+                if (data == null || !data.isObject() || (disposition
+                        ? !data.path("requestKey").isString() || !data.path("action").isString()
+                        : !data.path("records").isArray() || data.path("records").size() > 27
+                          || !data.path("truncated").isBoolean() || !data.path("workerStatus").isString()))
+                    throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "派发故障返回格式不合法");
+                return data;
+            }
             if (path.startsWith("/internal/v1/runs/selectAttemptEvents?")) {
                 validateAttemptEvents(data, params);
                 return data;
@@ -63,6 +76,27 @@ public class SchedulerClient {
         } catch (tools.jackson.core.JacksonException | IllegalArgumentException malformed) {
             throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "调度服务返回格式不合法");
         }
+    }
+
+    private RunException dispatchFailure(int status, RuntimeException error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof feign.FeignException feignError) {
+                try {
+                    String code = json.readTree(feignError.contentUTF8()).path("code").asString("");
+                    String message = switch (code) {
+                        case "ATTEMPT_ACTIVE" -> "结案前需确认 Attempt 已进入终态";
+                        case "DISPOSITION_NOT_ACKNOWLEDGED" -> "请先确认收到故障";
+                        case "DISPOSITION_EXISTS" -> "该处置动作已记录，请刷新";
+                        case "IDEMPOTENCY_CONFLICT" -> "处置请求键已绑定其他内容";
+                        case "DISPATCH_FAILURE_NOT_FOUND", "ATTEMPT_NOT_FOUND" -> "未找到对应的故障或 Attempt";
+                        default -> "派发故障请求无法处理";
+                    };
+                    if (code.matches("[A-Z_]{1,64}")) return new RunException(status, code, message);
+                } catch (tools.jackson.core.JacksonException invalid) { break; }
+                break;
+            }
+        }
+        return new RunException(status, "DISPATCH_FAILURE_REQUEST_REJECTED", "派发故障请求无法处理");
     }
 
     private static void validateAttemptEvents(JsonNode data, java.util.Map<String, String> query) {
