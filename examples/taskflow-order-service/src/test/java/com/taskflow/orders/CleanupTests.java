@@ -238,6 +238,7 @@ class CleanupTests {
         inventory.insert(760004, 8);
         var eventId = db.queryForObject("SELECT id FROM stock_outbox WHERE sku_id = 760004", String.class);
         db.update("UPDATE stock_outbox SET attempts = 9 WHERE id = ?", eventId);
+        makePublishable(760004);
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         doAnswer(invocation -> {
@@ -262,6 +263,7 @@ class CleanupTests {
         assertThat(db.queryForObject("SELECT generation FROM stock_outbox WHERE id = ?", Long.class, eventId))
                 .isEqualTo(1L);
         reset(cache);
+        makePublishable(760004);
         inventory.publishPending();
         assertThat(historyIds()).containsExactly(eventId);
     }
