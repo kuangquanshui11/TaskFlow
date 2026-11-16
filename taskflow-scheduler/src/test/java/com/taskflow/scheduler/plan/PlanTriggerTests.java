@@ -83,7 +83,7 @@ class PlanTriggerTests {
         assertThat(count("run_attempt")).isEqualTo(1);
         var row = runMapper.bySchedule(7,due).orElseThrow();
         var duplicate = new RunRow(UUID.randomUUID(),7,99,UUID.randomUUID(),row.fingerprint(),"READY",row.snapshotJson(),1,
-                null,null,row.createdAt(),row.updatedAt(),"CRON",due,null,null,null, row.traceContext());
+                null,null,row.createdAt(),row.updatedAt(),"CRON",due,null,null,null, row.traceContext(), null);
         assertThatThrownBy(() -> runMapper.insert(duplicate)).isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
         jdbc.update("UPDATE schedule_plan SET next_fire_time=? WHERE job_id=7",Timestamp.from(due));
         triggers.scanDue();

@@ -354,7 +354,7 @@ GET /api/v1/runs/selectSummary?from=2026-10-30T00:00:00Z&to=2026-10-31T00:00:00Z
 - Run 耗时 = `run_execution.finished_at - started_at`，包含首次进入 RUNNING 后的等待、派发与重试间隔。
 - `p95` 用 nearest-rank。为控制查询量，只取窗口内按 `created_at, id` 升序的前 10,000 个已完成 Run 作为样本；`sampled` 返回实际样本数，`truncated` 表示样本已截断（此时 p95 为近似值，文档必须写明）。
 - 失败列表按 `(jobId, resultCode)` 聚合，`resultCode` 为空时记作 `UNKNOWN`，按 `runCount` 倒序，最多 5 条。
-- 四个统计查询是同一 Scheduler 数据库上的多次读取，**不是一致性快照**；`observedAt` 只表示观察时刻。
+- 统计由同一 Scheduler 数据库上的多次读取组成，**不是一致性快照**；`observedAt` 只表示观察时刻。
 
 我将四次读取划分为状态与完整窗口平均耗时、Attempt 总量与重试 Run 数、耗时样本、失败分组。attemptTotal 统计窗口内 Run 的所有 Attempt，retriedRunCount 为存在 attempt_number > 1 的不同 Run 数；不按 Attempt 自身时间过滤。stateCounts 始终补齐五个状态键。失败组同数量时按 jobId、resultCode 排序，lastFailedAt 取组内 Run 的最大 finished_at，null 和空字符串均归 UNKNOWN。
 
@@ -362,7 +362,20 @@ GET /api/v1/runs/selectSummary?from=2026-10-30T00:00:00Z&to=2026-10-31T00:00:00Z
 
 avgMillis 使用整个窗口内具有开始及结束时间的终态 Run 算术平均，四舍五入到整数毫秒；p95Millis 使用同样有效的耗时样本，按 nearest-rank 取值。没有可用耗时样本时平均和 P95 均为 null，sampled 为 0。采样超过 10,000 时只保留最早样本，不作随机抽样。有效耗时记录总数超过上限时 truncated=true。由于读取间状态可能变化，计数和样本数可能短暂不一致。
 
-started_at 首次进入 RUNNING 时写入，故耗时仅涵盖此后发生的等待、派发与重试间隔，不含初始排队；历史回填以 Attempt 最早开始为准。快速回调先于 RUNNING 完成时开始时间可能为空，此类 Run 计入结果，不进入耗时统计。总览另提供 `endToEndLatency`，结构与 `latency` 相同，使用 Run 创建到终态的毫秒数。Run 详情新增可空字段 `timing`（`endToEndMillis`、`scheduleDelayMillis`、`initialQueueMillis`）。Attempt 时间线新增 `dispatchMillis` 与 `workerTiming`（`handlerMillis`、`resultReportMillis`），缺少有效起止点时返回 null。详见 [运行统计设计](run-reporting.md) 与 [验证记录](p05-verification.md)。
+started_at 首次进入 RUNNING 时写入，故耗时仅涵盖此后发生的等待、派发与重试间隔，不含初始排队；历史回填以 Attempt 最早开始为准。快速回调先于 RUNNING 完成时开始时间可能为空，此类 Run 计入结果和端到端耗时统计。总览另提供 `endToEndLatency`，结构与 `latency` 相同，使用 Run 创建到终态的毫秒数。Run 详情新增可空字段 `timing`（`endToEndMillis`、`scheduleDelayMillis`、`initialQueueMillis`）。Attempt 时间线新增 `dispatchMillis` 与 `workerTiming`（`handlerMillis`、`resultReportMillis`），缺少有效起止点时返回 null。详见 [运行统计设计](run-reporting.md) 与 [验证记录](p05-verification.md)。
+
+## 操作审计
+
+`GET /api/v1/audits/select` 要求 `audit:read`。查询参数均可选。
+
+| 参数 | 约定 |
+| --- | --- |
+| `from`, `to` | 同时提供的 ISO-8601 时间，起点包含、终点排除，最长 31 天。省略时默认最近 24 小时，精确查询 `runId` 或 `requestKey` 可跨历史 |
+| `actor`, `action` | 已认证主体和动作，动作可选 `JOB_INSERT`、`JOB_UPDATE`、`JOB_ENABLE`、`JOB_DISABLE`、`JOB_DELETE`、`RUN_TRIGGER` |
+| `jobId`, `runId`, `requestKey` | 按目标任务、已确认 Run 或手动请求键筛选，多个条件取交集 |
+| `page`, `pageSize` | 默认 1 和 25，最多 10000 页，每页最多 100 条 |
+
+响应 `data` 包含 `records`、`page`、`pageSize`、`hasMore`。每条记录包含 `actor`、`action`、对象标识及版本、`occurredAt`、`updatedAt`、`status`、`resultCode` 和可用的关联 ID。手动触发 `APPLIED` 表示已确认创建 Run，运行结果由 Run 详情提供。状态与确认边界见 [操作审计设计](operation-audit.md)。
 
 ## 代码分层
 

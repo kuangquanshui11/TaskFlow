@@ -27,6 +27,7 @@ import static org.mockito.ArgumentMatchers.*;
 @org.springframework.context.annotation.Import(com.taskflow.admin.support.TestSessionConfiguration.class)
 class RunApiTests {
     @Autowired IJobService jobs;
+    @Autowired com.taskflow.admin.audit.service.IOperationAuditService audit;
     @Autowired JdbcTemplate jdbc;
     @Autowired JsonMapper json;
     @Value("${local.server.port}") int port;
@@ -35,6 +36,7 @@ class RunApiTests {
         try (var connection = jdbc.getDataSource().getConnection()) {
             assertThat(connection.getMetaData().getURL()).startsWith("jdbc:h2:mem:taskflow-admin-");
         }
+        jdbc.update("DELETE FROM operation_audit");
         jdbc.update("DELETE FROM job_definition");
     }
     @Test void newRunUsesAuthoritativeSnapshotOutsideTheDatabaseTransaction() throws Exception {
@@ -151,6 +153,79 @@ class RunApiTests {
             var response = client.send(allowed, HttpResponse.BodyHandlers.ofString());
             assertThat(response.statusCode()).isEqualTo(200);
             assertThat(json.readTree(response.body()).path("data").path("workerStatus").asString()).isEqualTo("UNAVAILABLE");
+        }
+    }
+
+    @Test void timedOutTriggerReconcilesByReadAndKeepsTheAuthenticatedActor() throws Exception {
+        var job = job("audit-run");
+        var key = UUID.randomUUID();
+        var runId = UUID.randomUUID();
+        var lookup = "/internal/v1/runs/selectByRequestKey?requestKey=" + key;
+        when(scheduler.get(lookup)).thenThrow(new RunException(404, "RUN_NOT_FOUND", "missing"));
+        when(scheduler.post(anyString(), any())).thenAnswer(call -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            Map<?, ?> command = call.getArgument(1);
+            assertThat(command.get("actor")).isEqualTo("test-admin");
+            throw new RunException(503, "SCHEDULER_UNAVAILABLE", "response lost");
+        });
+        assertThat(post(Map.of("jobId", job.id(), "configVersion", 1, "requestKey", key, "actor", "forged")).statusCode()).isEqualTo(503);
+        assertThat(jdbc.queryForObject("SELECT status FROM operation_audit WHERE request_key=?", String.class, key.toString())).isEqualTo("PENDING");
+
+        var evidence = json.createObjectNode().put("id", runId.toString()).put("state", "READY")
+                .put("jobId", job.id()).put("configVersion", 1).put("triggerActor", "other-actor").put("requestKey", key.toString());
+        doReturn(evidence).when(scheduler).get(lookup);
+        jdbc.update("UPDATE operation_audit SET next_check_at=? WHERE request_key=?",
+                java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(1)), key.toString());
+        audit.reconcile();
+        assertThat(jdbc.queryForObject("SELECT status FROM operation_audit WHERE request_key=?", String.class, key.toString())).isEqualTo("PENDING");
+        evidence.put("triggerActor", "test-admin");
+        jdbc.update("UPDATE operation_audit SET next_check_at=? WHERE request_key=?",
+                java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(1)), key.toString());
+        audit.reconcile();
+
+        String administrator = com.taskflow.admin.support.TestTokens.admin();
+        String viewer = com.taskflow.admin.support.TestTokens.token(Map.of("resource_access",
+                Map.of("taskflow-api", Map.of("roles", java.util.List.of("VIEWER")))));
+        com.taskflow.admin.support.TestSessionConfiguration.register(viewer);
+        var auditUrl = "/api/v1/audits/select?requestKey=" + key;
+        assertThat(call(auditUrl, viewer, null).statusCode()).isEqualTo(403);
+        var response = call(auditUrl, administrator, null);
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        var records = json.readTree(response.body()).path("data").path("records");
+        assertThat(records.size()).isEqualTo(1);
+        assertThat(records.get(0).path("runId").asString()).isEqualTo(runId.toString());
+        assertThat(records.get(0).path("actor").asString()).isEqualTo("test-admin");
+        assertThat(records.get(0).path("status").asString()).isEqualTo("APPLIED");
+        var replay = post(Map.of("jobId", job.id(), "configVersion", 1, "requestKey", key));
+        assertThat(replay.statusCode()).isEqualTo(202);
+        assertThat(json.readTree(replay.body()).path("data").has("triggerActor")).isFalse();
+        verify(scheduler, times(1)).post(anyString(), any());
+    }
+
+    @Test void jobAuditsIncludeAllMutationsAndKeepRejectionsOutOfTheJobTransaction() throws Exception {
+        var job = job("job-audit");
+        job = jobs.update(job.id(), 1L, job.configuration());
+        jobs.changeEnabled(job.id(), 2L, true);
+        jobs.changeEnabled(job.id(), 3L, false);
+        var response = call("/api/v1/jobs/delete", com.taskflow.admin.support.TestTokens.admin(),
+                Map.of("id", job.id(), "configVersion", 3));
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(409);
+        jobs.delete(job.id(), 4L);
+
+        assertThat(jdbc.queryForList("SELECT action FROM operation_audit WHERE job_id=? AND status='APPLIED'", String.class, job.id()))
+                .containsExactlyInAnyOrder("JOB_INSERT", "JOB_UPDATE", "JOB_ENABLE", "JOB_DISABLE", "JOB_DELETE");
+        assertThat(jdbc.queryForObject("SELECT result_code FROM operation_audit WHERE job_id=? AND status='REJECTED'", String.class, job.id()))
+                .isEqualTo("JOB_VERSION_CONFLICT");
+    }
+
+    private HttpResponse<String> call(String path, String token, Object body) throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                .header("Authorization", "Bearer " + token);
+        if (body == null) request.GET();
+        else request.header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
+        try (var client = HttpClient.newHttpClient()) {
+            return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
         }
     }
 

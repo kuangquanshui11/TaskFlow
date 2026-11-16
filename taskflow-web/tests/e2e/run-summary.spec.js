@@ -79,6 +79,8 @@ test('工作台运行概览：真实统计、窗口切换、失败隔离与空�
   const panel = page.getByRole('region', { name: '运行概览' });
   await expect(panel.getByText('运行总数', { exact: true })).toBeVisible();
   await expect(panel.getByText('成功率', { exact: true })).toBeVisible();
+  await expect(panel.getByText('端到端 P95', { exact: true })).toBeVisible();
+  await expect(panel).toContainText('端到端耗时从 Run 创建算到终态');
   await expect(panel.locator('.metric-number').first()).toHaveText(new Intl.NumberFormat('zh-CN').format(first.total));
   await expect(panel.getByRole('heading', { name: '失败 Top 5' })).toBeVisible();
   for (const days of [7, 1]) {
@@ -103,7 +105,7 @@ test('工作台运行概览：真实统计、窗口切换、失败隔离与空�
   await page.route('**/api/v1/runs/selectSummary?*', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ code: 'OK', data: {
     ...first, total: 0, failed: 0, succeeded: 0, finished: 0, successRate: null,
     stateCounts: { READY: 0, RUNNING: 0, RETRY_WAIT: 0, SUCCEEDED: 0, FAILED: 0 },
-    latency: { avgMillis: null, p95Millis: null, sampled: 0, truncated: false }, failures: [],
+    endToEndLatency: { avgMillis: null, p95Millis: null, sampled: 0, truncated: false }, failures: [],
   } }) }));
   await panel.getByRole('button', { name: '重试运行统计', exact: true }).click();
   await expect(panel.getByRole('status')).toContainText('暂无数据');

@@ -78,7 +78,7 @@ onBeforeUnmount(() => { controller?.abort(); summaryController?.abort(); });
         <div class="run-distribution-bar" aria-hidden="true"><span v-for="item in runStates" :key="item.state" :class="item.state.toLowerCase()" :style="{ width: item.percent + '%' }"></span></div>
         <ul class="run-state-legend"><li v-for="item in runStates" :key="item.state"><span class="run-state-dot" :class="item.state.toLowerCase()" aria-hidden="true"></span><span class="run-state">{{ item.label }}</span><strong>{{ formatCount(item.count) }}</strong><span>{{ item.percent.toFixed(1) }}%</span></li></ul>
       </div>
-      <p class="run-summary-note">耗时包含首次进入执行中之后的等待与重试间隔，不代表 Handler 执行时间。{{ runSummary.latency.truncated ? 'P95 仅取最早 10,000 个有效已完成样本，为近似值。' : '' }}</p>
+      <p class="run-summary-note">端到端耗时从 Run 创建算到终态，包含初始排队和重试间隔。{{ runSummary.endToEndLatency?.truncated ? 'P95 仅取最早 10,000 个有效已完成样本，为近似值。' : '' }}</p>
       <h3>失败 Top 5</h3>
       <div v-if="runSummary.failures.length" class="run-failure-list">
         <article v-for="failure in runSummary.failures" :key="(failure.jobIdText ?? failure.jobId) + ':' + failure.resultCode">

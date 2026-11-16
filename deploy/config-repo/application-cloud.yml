@@ -9,6 +9,7 @@ spring:
     circuitbreaker:
       resilience4j:
         disable-time-limiter: true
+        disable-thread-pool: true
       bulkhead:
         resilience4j:
           enabled: false

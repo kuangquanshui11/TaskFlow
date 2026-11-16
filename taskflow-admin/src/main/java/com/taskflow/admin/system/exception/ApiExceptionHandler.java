@@ -57,13 +57,8 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
             case NOT_FOUND -> HttpStatus.NOT_FOUND;
             case CONFLICT -> HttpStatus.CONFLICT;
         };
-        String code = switch (exception.kind()) {
-            case INVALID -> "INVALID_ARGUMENT";
-            case NOT_FOUND -> "JOB_NOT_FOUND";
-            case CONFLICT -> "JOB_VERSION_CONFLICT";
-        };
         return ResponseEntity.status(status)
-                .body(ApiResponse.failure(code, exception.getMessage(), null));
+                .body(ApiResponse.failure(exception.code(), exception.getMessage(), null));
     }
 
     @ExceptionHandler({CannotGetJdbcConnectionException.class, CannotCreateTransactionException.class,

@@ -270,9 +270,9 @@ function New-TestJob([string]$Handler, [int]$Attempts = 1, [int]$Timeout = 10, [
     if ($result.status -ne 201) { throw 'Test Job creation failed.' }
     return $result.body.data
 }
-function New-TestRun($Job) {
+function New-TestRun($Job, [string]$TraceParent = '') {
     $body = @{ jobId = $Job.id; configVersion = $Job.configVersion; requestKey = [Guid]::NewGuid().ToString() }
-    $result = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/runs/insert' $body
+    $result = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/runs/insert' $body '' '' $TraceParent
     if ($result.status -ne 202) { throw 'Test Run creation failed.' }
     return [pscustomobject]@{ request = $body; run = $result.body.data }
 }
@@ -582,7 +582,15 @@ info:
             Start-Sleep -Milliseconds 250
         }
         Assert-Check $registered 'Gateway and all three business services actually register with Eureka'
-        foreach($role in @('admin','scheduler','worker')) {
+        # Admin's public allowlist exposes health. Verify the fetched configuration at its authenticated source.
+        $adminInfo = Call-Api 'GET' ('http://127.0.0.1:'+$ports['admin']+'/actuator/info')
+        $configAuth = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($platform.configUser+':'+$platform.configPassword))
+        $adminConfiguration = Call-Api 'GET' ($platform.configUrl+'/taskflow-admin/cloud') $null '' $configAuth
+        $adminLoaded = Select-String -Path $processes['admin'].log -SimpleMatch 'Located environment: name=taskflow-admin, profiles=[cloud]' -Quiet
+        $revision = @($adminConfiguration.body.propertySources | ForEach-Object { $_.source.'taskflow.platform.config-revision' })
+        Assert-Check ($adminInfo.status -in @(401,403) -and $adminConfiguration.status -eq 200 -and
+            $adminLoaded -and 'governance-v1' -in $revision) 'Admin fetches cloud configuration and keeps Actuator info behind the public allowlist'
+        foreach($role in @('scheduler','worker')) {
             $info=Call-Api 'GET' ('http://127.0.0.1:'+$ports[$role]+'/actuator/info')
             Assert-Check ($info.status -eq 200 -and $info.body.taskflow.configRevision -eq 'governance-v1') ("$role loads actual settings from Config Server")
         }
@@ -607,10 +615,35 @@ info:
     }
 
     $successJob = New-TestJob 'demoSuccess'
-    $success = New-TestRun $successJob
+    $executionTraceId = [Guid]::NewGuid().ToString('N')
+    $success = New-TestRun $successJob ('00-' + $executionTraceId + '-1111111111111111-01')
     $duplicate = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/runs/insert' $success.request
     Assert-Check ($duplicate.body.data.id -eq $success.run.id) 'Same request key creates one logical Run'
     $successResult = Wait-TestRun $success.run.id
+    Assert-Check ($successResult.traceId -eq $executionTraceId -and $null -ne $successResult.timing.endToEndMillis -and
+        $null -ne $successResult.timing.initialQueueMillis) 'Run retains ingress Trace ID and end-to-end timing'
+    $attemptTimelineUrl = "http://127.0.0.1:19080/api/v1/runs/selectAttemptEvents?runId=$($successResult.id)&attemptId=$($successResult.attempts[0].id)"
+    $attemptTimeline = $null
+    for ($i = 0; $i -lt 15; $i++) {
+        $attemptTimeline = (Call-Api 'GET' $attemptTimelineUrl).body.data
+        if ($null -ne $attemptTimeline.workerTiming.resultReportMillis) { break }
+        Start-Sleep -Milliseconds 150
+    }
+    Assert-Check ($null -ne $attemptTimeline.dispatchMillis -and $null -ne $attemptTimeline.workerTiming.handlerMillis -and
+        $null -ne $attemptTimeline.workerTiming.resultReportMillis -and 'INBOX_ACCEPTED' -in $attemptTimeline.worker.events.eventType) 'Attempt timeline records Inbox acceptance, dispatch, Handler and report timing'
+    $triggerAudit = Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/audits/select?runId=" + $successResult.id)
+    Assert-Check ($triggerAudit.status -eq 200 -and @($triggerAudit.body.data.records).Count -eq 1 -and
+        $triggerAudit.body.data.records[0].status -eq 'APPLIED' -and $triggerAudit.body.data.records[0].traceId -eq $executionTraceId -and
+        $triggerAudit.body.data.records[0].actor) 'Authenticated manual trigger audit is queryable by Run ID'
+    if ($platform) {
+        & (Join-Path $PSScriptRoot 'check-trace-evidence.ps1') -TraceDirectory $platform.traceDirectory -TraceId $executionTraceId -IncludeWorker
+        Assert-Check $true 'OTLP collector receives the manual trigger and async dispatch execution trace from all four applications'
+    }
+    if ($Transport -eq 'rabbitmq') {
+        $runEvents = @(Read-TestWorkerLog -split '\r?\n' | Where-Object { $_.StartsWith('{') } |
+            ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.runId -eq $successResult.id -and $_.traceId -eq $executionTraceId })
+        Assert-Check ('attempt.execute' -in $runEvents.event -and 'attempt.report' -in $runEvents.event) 'RabbitMQ delivery preserves trace context across Inbox, execution and reporting'
+    }
     Assert-Check ($successResult.state -eq 'SUCCEEDED' -and @($successResult.attempts).Count -eq 1) 'Success handler completes via three real services'
     if ($IncludeExecutionLease) {
         $leaseJob = New-TestJob 'demoSlow' -Timeout 20 -Delay 12000
@@ -803,6 +836,8 @@ info:
     Assert-Check ($automaticHistory.Count -gt 0 -and $automaticHistory[0].scheduledAt) 'Due scan creates Cron Run and Worker completes it without manual trigger'
     $automaticDetails = Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/runs/selectById?id=" + $automaticHistory[0].id)
     Assert-Check (@($automaticDetails.body.data.attempts).Count -eq 1 -and $automaticDetails.body.data.snapshot.configVersion -eq 1) 'Automatic Run uses persisted snapshot and first Attempt'
+    Assert-Check ($automaticDetails.body.data.traceId -match '^[a-f0-9]{32}$' -and
+        $null -ne $automaticDetails.body.data.timing.scheduleDelayMillis) 'Cron Run records its own trace and schedule delay'
     if ($IncludeConfigRecovery) { Invoke-TestConfigRecovery $syncJob $oldEvent $automaticJob $automaticHistory[0] }
     $null = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/jobs/disable' @{ id = $automaticJob.id; configVersion = 1 }
     $null = Wait-TestSync $automaticJob.id 'SYNCED' 2

@@ -2,6 +2,9 @@ package com.taskflow.admin.job.service.impl;
 
 import java.nio.charset.StandardCharsets;
 
+import com.taskflow.admin.audit.model.OperationAudit.Action;
+import com.taskflow.admin.audit.service.IOperationAuditService;
+
 import com.taskflow.admin.job.event.JobDefinitionChanged;
 import com.taskflow.admin.job.exception.JobException;
 import com.taskflow.admin.job.model.JobDefinition;
@@ -28,16 +31,19 @@ public class JobServiceImpl implements IJobService {
     private final ISchedulePreviewService schedules;
     private final ApplicationEventPublisher events;
     private final IJobSyncService sync;
+    private final IOperationAuditService audit;
     private final boolean recoveryMode;
 
     public JobServiceImpl(JobDataMapper repository, IHandlerService handlers,
                           ISchedulePreviewService schedules, ApplicationEventPublisher events, IJobSyncService sync,
+                          IOperationAuditService audit,
                           @Value("${taskflow.reconciliation.recovery.enabled:false}") boolean recoveryMode) {
         this.repository = repository;
         this.handlers = handlers;
         this.schedules = schedules;
         this.events = events;
         this.sync = sync;
+        this.audit = audit;
         this.recoveryMode = recoveryMode;
     }
 
@@ -48,6 +54,7 @@ public class JobServiceImpl implements IJobService {
         var configuration = validate(input);
         var job = selectById(repository.insert(configuration));
         sync.enqueue(job, false);
+        audit.jobApplied(Action.JOB_INSERT, job.id(), job.configVersion());
         events.publishEvent(new JobDefinitionChanged(job.id()));
         return job;
     }
@@ -81,6 +88,7 @@ public class JobServiceImpl implements IJobService {
         requireUpdated(repository.update(id, configVersion, configuration));
         var job = selectById(id);
         sync.enqueue(job, false);
+        audit.jobApplied(Action.JOB_UPDATE, id, job.configVersion());
         events.publishEvent(new JobDefinitionChanged(id));
         return job;
     }
@@ -93,6 +101,7 @@ public class JobServiceImpl implements IJobService {
         requireUpdated(repository.changeEnabled(id, configVersion, enabled));
         var job = selectById(id);
         sync.enqueue(job, false);
+        audit.jobApplied(enabled ? Action.JOB_ENABLE : Action.JOB_DISABLE, id, job.configVersion());
         events.publishEvent(new JobDefinitionChanged(id));
         return job;
     }
@@ -105,6 +114,7 @@ public class JobServiceImpl implements IJobService {
         requireUpdated(repository.softDelete(id, configVersion));
         // 删除墓碑也携带最后一份快照，版本随软删除递增；接收端以 deleted 优先停用计划。
         sync.enqueue(new JobDefinition(id, job.configuration(), configVersion + 1, job.createdAt(), job.updatedAt()), true);
+        audit.jobApplied(Action.JOB_DELETE, id, configVersion + 1);
         events.publishEvent(new JobDefinitionChanged(id));
     }
 

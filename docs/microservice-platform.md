@@ -112,6 +112,8 @@ Gateway、MVC 入口和 Feign 通过 Micrometer Observation 传播 W3C `tracepar
 
 我沿用 Micrometer Tracing、W3C 上下文和 OTLP。手动请求沿用入口 Trace，Cron 创建 Run 时开启 Trace。Scheduler 持久化 Run 与派发 Outbox 的上下文，RabbitMQ v1 消息通过头部携带原创建上下文。Worker 在 Inbox 提交时保存接收 Span 的上下文，执行及结果上报分别恢复并创建 Span。配置同步 Outbox 独立传播 Job 修改请求的上下文。旧记录缺少上下文时，各后台阶段可建立自己的 Trace。
 
+我让这三个业务服务的同步 Feign 调用在当前线程运行，保留熔断、Micrometer 观测和连接及读取超时。Outbox、派发和结果上报恢复的 Trace 上下文会在该线程参与 Feign 的 HTTP 传播。
+
 我使用 Spring Boot JSON 日志统一执行标识。可以按 `runId` 找到 `traceId`，以 `attemptId`、`eventId` 和发布或上报序号追踪重投。结构化日志默认使用 `logstash`，可通过 `TASKFLOW_LOG_FORMAT` 配置。采样策略和 OTLP 导出配置见上表，持久化的 Attempt 事件也可以在执行详情读取。
 
 可选基础设施容器：

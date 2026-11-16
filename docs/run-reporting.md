@@ -14,9 +14,9 @@
 - Run 耗时 = `run_execution.finished_at - started_at`，**包含排队、派发与重试间隔，不等于 Handler 执行时间**。
 - `p95` 用 nearest-rank。为控制查询量，只取窗口内按 `created_at, id` 升序的前 10,000 个已完成 Run 作为样本；`sampled` 返回实际样本数，`truncated` 表示样本已截断（此时 p95 为近似值，文档必须写明）。
 - 失败列表按 `(jobId, resultCode)` 聚合，`resultCode` 为空时记作 `UNKNOWN`，按 `runCount` 倒序，最多 5 条。
-- 四个统计查询是同一 Scheduler 数据库上的多次读取，**不是一致性快照**；`observedAt` 只表示观察时刻。
+- 统计由同一 Scheduler 数据库上的多次读取组成，**不是一致性快照**；`observedAt` 只表示观察时刻。
 
-我将四次读取划分为状态与完整窗口平均耗时、Attempt 总量与重试 Run 数、耗时样本、失败分组。attemptTotal 统计窗口内 Run 的所有 Attempt，retriedRunCount 为存在 attempt_number > 1 的不同 Run 数；不按 Attempt 自身时间过滤。stateCounts 始终补齐五个状态键。失败组同数量时按 jobId、resultCode 排序，lastFailedAt 取组内 Run 的最大 finished_at，null 和空字符串均归 UNKNOWN。
+我分别读取状态和完整窗口平均耗时、Attempt 总量与重试 Run 数、两个口径的耗时样本，以及失败分组。attemptTotal 统计窗口内 Run 的所有 Attempt，retriedRunCount 为存在 attempt_number > 1 的不同 Run 数；不按 Attempt 自身时间过滤。stateCounts 始终补齐五个状态键。失败组同数量时按 jobId、resultCode 排序，lastFailedAt 取组内 Run 的最大 finished_at，null 和空字符串均归 UNKNOWN。
 
 avgMillis 使用整个窗口内具有开始及结束时间的终态 Run 算术平均，四舍五入到整数毫秒；p95Millis 使用同样有效的耗时样本，按 nearest-rank 取值。没有可用耗时样本时平均和 P95 均为 null，sampled 为 0。采样超过 10,000 时只保留最早样本，不作随机抽样。有效耗时记录总数超过上限时 truncated=true。由于读取间状态可能变化，计数和样本数可能短暂不一致。
 

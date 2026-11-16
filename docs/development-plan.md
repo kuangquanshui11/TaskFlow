@@ -95,6 +95,8 @@ Worker 节点管理已实现：独立注册/心跳协议与密钥、Scheduler �
 
 运行详情支持对各次 Attempt 均确定未启动 Handler 的失败 Run 进行受控重跑。Admin 校验操作权限和当前 Job 版本，Scheduler 创建新 Run 并在同一事务记录原 Run、操作者及受理时间。控制台可用原请求键重试未确认的提交。见 [失败 Run 的受控重跑](global-run-query.md#失败-run-的受控重跑)。
 
+我在运行详情提供持久化的 Trace ID 和阶段耗时，在工作台使用端到端 P95。Admin 提供受权限控制的 Job 操作与普通手动触发审计查询。见 [运行统计](run-reporting.md)、[操作审计](operation-audit.md) 与 [P05 验证记录](p05-verification.md)。
+
 平台治理包含：Nginx → Gateway → Admin，内部服务名发现与 Feign 调用、熔断及同步 HTTP 链路追踪；注册/配置中心独立认证、非秘密策略仓库及可选 Jaeger Compose 已提供。默认配置变更重启生效，不提供完整热刷新；Eureka/Config 单实例，HA 和真实 Jaeger 容器验收仍未完成。
 
 - S1 提供 Scheduler 时间窗统计、Admin `run:read` 代理、工作台运行概览和失败 Top 5，见 [统计设计](run-reporting.md) 与 [统计验证](run-reporting-verification.md)。S2 提供待发布积压、Attempt 派发逾期与租约到期、心跳年龄、Worker 待上报与执行积压的瞬时采样，见 [指标字典](observability-metrics.md) 与 [采样验证](observability-metrics-verification.md)。

@@ -44,7 +44,7 @@ class DispatchOutboxTests {
         var event = outbox.find(run.attempts().getFirst().id(), false).orElseThrow();
         assertThat(event.state()).isEqualTo("WAITING");
         assertThat(event.messageJson()).isNull();
-        doThrow(new IllegalStateException("injected Outbox write failure")).when(outbox).insert(any(), any());
+        doThrow(new IllegalStateException("injected Outbox write failure")).when(outbox).insert(any(), any(), any());
         assertThatThrownBy(() -> runs.insert(request())).isInstanceOf(IllegalStateException.class);
         assertThat(count("run_execution")).isEqualTo(1);
         assertThat(count("run_attempt")).isEqualTo(1);

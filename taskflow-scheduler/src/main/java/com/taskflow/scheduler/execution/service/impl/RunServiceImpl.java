@@ -59,20 +59,20 @@ public class RunServiceImpl implements IRunService {
 
     @Override
     public RunView insert(Create request) {
-        return insertManual(request.requestKey(), request.snapshot(), null, null);
+        return insertManual(request.requestKey(), request.snapshot(), null, null, request.actor());
     }
 
     @Override
     public RunView insertRerun(Rerun request) {
-        return insertManual(request.requestKey(), request.snapshot(), request.sourceRunId(), request.actor());
+        return insertManual(request.requestKey(), request.snapshot(), request.sourceRunId(), request.actor(), null);
     }
 
-    private RunView insertManual(UUID requestKey, Snapshot snapshot, UUID sourceRunId, String actor) {
+    private RunView insertManual(UUID requestKey, Snapshot snapshot, UUID sourceRunId, String actor, String triggerActor) {
         validate(snapshot);
         String encoded = json.writeValueAsString(snapshot);
         String fingerprint = fingerprint(encoded);
         var existing = mapper.byKey(requestKey);
-        if (existing.isPresent()) return requireSame(existing.get(), fingerprint, sourceRunId, actor);
+        if (existing.isPresent()) return requireSame(existing.get(), fingerprint, sourceRunId, actor, triggerActor);
         try {
             UUID id = transactions.execute(status -> {
                 if (sourceRunId != null) {
@@ -83,19 +83,19 @@ public class RunServiceImpl implements IRunService {
                 }
                 var now = Instant.now();
                 var run = new RunRow(UUID.randomUUID(), snapshot.jobId(), snapshot.configVersion(),
-                        requestKey, fingerprint, "READY", encoded, 1, null, null, now, now, "MANUAL", null, sourceRunId, actor, null, tracing.capture());
-                tracing.tag("runId", run.id());
-                tracing.tag("requestKey", requestKey);
-                log.atInfo().addKeyValue("event", "RUN_CREATED").addKeyValue("runId", run.id())
-                        .addKeyValue("requestKey", requestKey).log("Manual Run created");
+                        requestKey, fingerprint, "READY", encoded, 1, null, null, now, now, "MANUAL", null, sourceRunId, actor, null, tracing.capture(), triggerActor);
                 mapper.insert(run);
                 insertAttempt(run, 1, now);
                 return run.id();
             });
+            tracing.tag("runId", id);
+            tracing.tag("requestKey", requestKey);
+            log.atInfo().addKeyValue("event", "RUN_CREATED").addKeyValue("runId", id)
+                    .addKeyValue("requestKey", requestKey).log("Manual Run created");
             return selectById(id);
         } catch (DuplicateKeyException concurrentInsert) {
             var winner = mapper.byKey(requestKey).orElseThrow(() -> concurrentInsert);
-            return requireSame(winner, fingerprint, sourceRunId, actor);
+            return requireSame(winner, fingerprint, sourceRunId, actor, triggerActor);
         }
     }
 
@@ -113,7 +113,7 @@ public class RunServiceImpl implements IRunService {
         try (var trace = tracing.start("run.schedule", Context.EMPTY, Map.of("runId", runId, "jobId", snapshot.jobId()))) {
             var run = new RunRow(runId, snapshot.jobId(), snapshot.configVersion(), UUID.randomUUID(),
                     fingerprint(encoded), "READY", encoded, 1, null, null, createdAt, createdAt, "CRON", scheduledAt,
-                    null, null, null, tracing.capture());
+                    null, null, null, tracing.capture(), null);
             mapper.insert(run);
             insertAttempt(run, 1, createdAt);
             return runId;
@@ -400,7 +400,7 @@ public class RunServiceImpl implements IRunService {
                 row.message(), row.createdAt(), row.updatedAt(), row.triggerType(), row.scheduledAt(),
                 row.sourceRunId(), row.rerunActor(), canRerun(row, attempts), row.traceContext().traceId(),
                 new RunTiming(elapsedMillis(row.createdAt(), row.finishedAt()), elapsedMillis(row.scheduledAt(), row.createdAt()),
-                        elapsedMillis(row.createdAt(), attempts.isEmpty() ? null : attempts.getFirst().startedAt())));
+                        elapsedMillis(row.createdAt(), attempts.isEmpty() ? null : attempts.getFirst().startedAt())), row.triggerActor());
     }
 
     static Long elapsedMillis(Instant from, Instant to) {
@@ -412,9 +412,10 @@ public class RunServiceImpl implements IRunService {
                 && attempts.stream().allMatch(attempt -> "FAILED".equals(attempt.state()) && attempt.ownerWorkerId() == null
                     && ("EXECUTOR_REJECTED".equals(attempt.resultCode()) || "EXECUTION_PREPARATION_FAILED".equals(attempt.resultCode())));
     }
-    private RunView requireSame(RunRow row, String fingerprint, UUID sourceRunId, String actor) {
+    private RunView requireSame(RunRow row, String fingerprint, UUID sourceRunId, String actor, String triggerActor) {
         if (!row.fingerprint().equals(fingerprint) || !Objects.equals(row.sourceRunId(), sourceRunId)
-                || !Objects.equals(row.rerunActor(), actor))
+                || !Objects.equals(row.rerunActor(), actor)
+                || row.triggerActor() != null && !Objects.equals(row.triggerActor(), triggerActor))
             throw new RunException(409, "IDEMPOTENCY_CONFLICT", "相同请求标识对应不同配置或运行来源");
         return view(row);
     }

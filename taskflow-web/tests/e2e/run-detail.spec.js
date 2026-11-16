@@ -104,6 +104,10 @@ test('独立运行详情保留已删除任务的快照并展示真实重试历�
     const snapshot = page.getByRole('region', { name: '配置快照' });
     const history = page.getByRole('region', { name: 'Attempt 历史' });
     await expect(overview).toContainText(id);
+    expect(detail.traceId).toMatch(/^[a-f0-9]{32}$/);
+    await expect(overview).toContainText(detail.traceId);
+    await expect(overview).toContainText('端到端耗时');
+    await expect(overview).toContainText('首次排队');
     await expect(overview).toContainText('成功');
     await expect(snapshot).toContainText(name);
     await expect(snapshot).toContainText('版本 v' + job.configVersion);

@@ -14,6 +14,14 @@ public class JobException extends RuntimeException {
         return kind;
     }
 
+    public String code() {
+        return switch (kind) {
+            case INVALID -> "INVALID_ARGUMENT";
+            case NOT_FOUND -> "JOB_NOT_FOUND";
+            case CONFLICT -> "JOB_VERSION_CONFLICT";
+        };
+    }
+
     public static JobException invalid(String message) {
         return new JobException(Kind.INVALID, message);
     }

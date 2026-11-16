@@ -15,7 +15,10 @@ public final class ExecutionProtocol {
             @Min(1) @Max(86400) int retryIntervalSeconds, @NotBlank String scheduleType,
             String cronExpression, @NotBlank String timeZone, @NotBlank String misfirePolicy,
             boolean enabled, @Size(max = 500) String description) { }
-    public record Create(@NotNull UUID requestKey, @NotNull @Valid Snapshot snapshot) { }
+    public record Create(@NotNull UUID requestKey, @NotNull @Valid Snapshot snapshot,
+            @Size(max = 255) @Pattern(regexp = "(?s).*\\S.*") String actor) {
+        public Create(UUID requestKey, Snapshot snapshot) { this(requestKey, snapshot, null); }
+    }
     public record Rerun(@NotNull UUID requestKey, @NotNull UUID sourceRunId,
                         @NotBlank @Size(max = 255) String actor, @NotNull @Valid Snapshot snapshot) { }
     public record Dispatch(@NotNull UUID attemptId, @NotNull UUID runId, @Min(1) int attemptNumber,

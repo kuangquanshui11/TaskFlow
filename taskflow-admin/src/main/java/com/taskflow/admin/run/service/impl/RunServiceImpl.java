@@ -5,6 +5,8 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Map;
 import java.util.UUID;
+import com.taskflow.admin.audit.service.IOperationAuditService;
+import com.taskflow.admin.job.exception.JobException;
 import com.taskflow.admin.job.model.JobDefinition;
 import com.taskflow.admin.job.service.IJobService;
 import com.taskflow.admin.run.client.SchedulerClient;
@@ -28,19 +30,37 @@ public class RunServiceImpl implements IRunService {
     private final IJobService jobs;
     private final SchedulerClient scheduler;
     private final JsonMapper json;
-    public RunServiceImpl(IJobService jobs, SchedulerClient scheduler, JsonMapper json) {
+    private final IOperationAuditService audit;
+    public RunServiceImpl(IJobService jobs, SchedulerClient scheduler, JsonMapper json, IOperationAuditService audit) {
         this.jobs = jobs; this.scheduler = scheduler; this.json = json;
+        this.audit = audit;
     }
     @Override
     public JsonNode insert(Insert request) {
-        var previous = priorSubmission(request.requestKey());
-        if (previous != null) {
-            if (previous.hasNonNull("sourceRunId") || previous.path("jobId").longValue() != request.jobId()
-                    || previous.path("configVersion").longValue() != request.configVersion()) throw idempotencyConflict();
-            return previous;
+        var operation = audit.beginManual(request.requestKey(), request.jobId(), request.configVersion());
+        JsonNode result;
+        try {
+            var previous = priorSubmission(request.requestKey());
+            if (previous != null) {
+                if (previous.hasNonNull("sourceRunId") || previous.path("jobId").longValue() != request.jobId()
+                        || previous.path("configVersion").longValue() != request.configVersion()
+                        || previous.hasNonNull("triggerActor") && !operation.actor().equals(previous.path("triggerActor").asString()))
+                    throw idempotencyConflict();
+                result = previous;
+            } else {
+                var snapshot = snapshot(jobs.selectById(request.jobId()), request.configVersion());
+                result = scheduler.post("/internal/v1/runs/insert", Map.of("requestKey", request.requestKey(),
+                        "snapshot", snapshot, "actor", operation.actor()));
+            }
+        } catch (JobException rejected) {
+            audit.rejectManual(operation, rejected.code());
+            throw rejected;
+        } catch (RunException resultError) {
+            if (resultError.status() < 500) audit.rejectManual(operation, resultError.code());
+            throw resultError;
         }
-        var snapshot = snapshot(jobs.selectById(request.jobId()), request.configVersion());
-        return scheduler.post("/internal/v1/runs/insert", Map.of("requestKey", request.requestKey(), "snapshot", snapshot));
+        audit.observeRun(operation, result);
+        return publicRun(result);
     }
 
     @Override
@@ -67,7 +87,7 @@ public class RunServiceImpl implements IRunService {
 
     private JsonNode priorSubmission(UUID requestKey) {
         try {
-            return selectByRequestKey(requestKey);
+            return scheduler.get("/internal/v1/runs/selectByRequestKey?requestKey=" + requestKey);
         } catch (RunException missing) {
             if (missing.status() != 404) throw missing;
             return null;
@@ -110,7 +130,7 @@ public class RunServiceImpl implements IRunService {
             throw new RunException(400, "INVALID_ARGUMENT", "运行分页参数不合法");
         return scheduler.get("/internal/v1/runs/select?jobId=" + jobId + "&page=" + page + "&pageSize=" + pageSize);
     }
-    @Override public JsonNode selectById(UUID id) { return scheduler.get("/internal/v1/runs/selectById?id=" + id); }
+    @Override public JsonNode selectById(UUID id) { return publicRun(scheduler.get("/internal/v1/runs/selectById?id=" + id)); }
     @Override
     public JsonNode selectAttemptEvents(UUID runId, UUID attemptId) {
         return scheduler.get("/internal/v1/runs/selectAttemptEvents?runId=" + runId + "&attemptId=" + attemptId);
@@ -169,5 +189,14 @@ public class RunServiceImpl implements IRunService {
                 .collect(java.util.stream.Collectors.joining("&"));
     }
 
-    @Override public JsonNode selectByRequestKey(UUID key) { return scheduler.get("/internal/v1/runs/selectByRequestKey?requestKey=" + key); }
+    @Override public JsonNode selectByRequestKey(UUID key) {
+        return publicRun(scheduler.get("/internal/v1/runs/selectByRequestKey?requestKey=" + key));
+    }
+
+    private JsonNode publicRun(JsonNode run) {
+        if (!(run instanceof ObjectNode object) || !object.has("triggerActor")) return run;
+        var copy = object.deepCopy();
+        copy.remove("triggerActor");
+        return copy;
+    }
 }

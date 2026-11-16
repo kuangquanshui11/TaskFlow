@@ -22,6 +22,8 @@ management:
       enabled: false
 
 taskflow:
+  audit:
+    scan-enabled: false
   sales:
     token: ""
   access:
