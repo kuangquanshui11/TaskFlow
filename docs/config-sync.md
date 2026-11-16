@@ -70,6 +70,8 @@ Scheduler 在自己的本地事务中写入 `schedule_sync_inbox` 和 `schedule_
 
 `GET /internal/v1/plans/selectVersions?ids=7,8` 返回指定 ID 的版本、删除/启用标志和实际快照 SHA-256 指纹。`GET /internal/v1/plans/selectReplicaPage?afterJobId=0&batchSize=100` 返回 `upperJobId/hasMore/replicas`，每页 1..100 条，下一页携带首批返回的 `upperJobId` 和最后一条记录的 `jobId` 作为 `afterJobId`。两者均包含当前存在的墓碑，使用控制密钥，仅供内部对账调用。
 
+`POST /internal/v1/plans/updateRecovery` 使用与常规配置更新相同的原事件和控制密钥，仅在关闭 Cron 的恢复模式开放。成功回执要求版本精确匹配。恢复模式暂停常规接收，持久化版本超前或同版本内容不一致返回 409。部署顺序及旧事件核实见 [恢复流程](config-reconciliation.md#计划副本与-inbox-双丢失恢复)。
+
 ## 失败、重试与恢复
 
 | 状态 | 含义 |
@@ -88,7 +90,7 @@ Scheduler 在自己的本地事务中写入 `schedule_sync_inbox` 和 `schedule_
 
 人工重试只允许最新配置的 `FAILED` 事件，沿用事件 ID 与快照，重置重试周期的尝试次数。与 Job 写入使用同一行锁串行化；不会重新创建配置版本或生成 Run。若最新版本仍在发送，返回 409。
 
-最新同步状态直接查询 Admin 数据库，不放入 Redis 详情缓存，不依赖缓存失效才能看到确认。`SYNCED` 是历史接收确认，不能当作 Scheduler 实时健康状态或数据丢失后的重建证明。Outbox/Inbox 保留全部事件；Admin 已提供包含删除墓碑的分批对账及受控补发，匹配原事件可恢复缺失/落后的副本，见 [配置对账](config-reconciliation.md)。自动归档及整库灾难恢复不在此能力范围。
+最新同步状态直接查询 Admin 数据库，不放入 Redis 详情缓存，不依赖缓存失效才能看到确认。`SYNCED` 是历史接收确认，不能当作 Scheduler 实时健康状态或数据丢失后的重建证明。Outbox/Inbox 保留全部事件。Admin 支持自动双向对账、受控补发，以及完整权威配置下的副本与 Inbox 恢复，见 [配置对账](config-reconciliation.md)。
 
 ## 管理 API 与控制台
 

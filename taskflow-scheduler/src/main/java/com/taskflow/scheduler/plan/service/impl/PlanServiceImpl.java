@@ -15,7 +15,9 @@ import com.taskflow.scheduler.plan.model.PlanRecords.*;
 import com.taskflow.scheduler.plan.service.IPlanService;
 import com.taskflow.scheduler.plan.service.IPlanCalculationService;
 import com.taskflow.scheduler.plan.config.PlanProperties;
+import com.taskflow.scheduler.plan.config.PlanTriggerProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.scheduling.support.CronExpression;
@@ -32,54 +34,92 @@ public class PlanServiceImpl implements IPlanService {
     private final IPlanCalculationService calculations;
     private final PlanProperties properties;
     private final Clock clock;
+    private final Instant resumeAt;
 
     public PlanServiceImpl(PlanMapper mapper, JsonMapper json, PlatformTransactionManager manager,
-                           IPlanCalculationService calculations, PlanProperties properties, @Qualifier("planClock") Clock clock) {
+                           IPlanCalculationService calculations, PlanProperties properties, @Qualifier("planClock") Clock clock,
+                           PlanTriggerProperties trigger, @Value("${taskflow.plans.recovery.resume-at:}") String recoveryResumeAt) {
         this.mapper = mapper; this.json = json; this.transaction = new TransactionTemplate(manager);
         this.calculations = calculations; this.properties = properties; this.clock = clock;
+        this.resumeAt = recoveryResumeAt.isBlank() ? null : Instant.parse(recoveryResumeAt);
+        if (resumeAt != null && trigger.enabled())
+            throw new IllegalStateException("配置恢复期间必须关闭本节点 Cron 扫描");
     }
 
     @Override
     public Acknowledgement update(PlanSyncRequest request) {
+        if (resumeAt != null)
+            throw new RunException(409, "PLAN_RECOVERY_ACTIVE", "计划副本恢复期间暂停常规配置接收");
+        return applyWithRetry(request, null);
+    }
+
+    @Override
+    public Acknowledgement updateRecovery(PlanSyncRequest request) {
+        if (resumeAt == null)
+            throw new RunException(409, "PLAN_RECOVERY_DISABLED", "调度节点未进入配置恢复模式");
+        if (!resumeAt.isAfter(clock.instant()))
+            throw new RunException(409, "PLAN_RECOVERY_WINDOW_EXPIRED", "请设置新的恢复时刻并重新核对全部批次");
+        return applyWithRetry(request, resumeAt);
+    }
+
+    private Acknowledgement applyWithRetry(PlanSyncRequest request, Instant recoveryFrom) {
         validate(request);
         String snapshot = json.writeValueAsString(request.configuration());
         String fingerprint = fingerprint(request, snapshot);
         // 首次插入和同版本并发可能争用唯一键或发生死锁。每次重新开启事务后再检查幂等记录。
         for (int attempt = 0; ; attempt++) {
-            try { return transaction.execute(status -> apply(request, snapshot, fingerprint)); }
+            try { return transaction.execute(status -> apply(request, snapshot, fingerprint, recoveryFrom)); }
             catch (DuplicateKeyException | TransientDataAccessException race) { if (attempt >= 2) throw race; }
         }
     }
 
-    private Acknowledgement apply(PlanSyncRequest input, String snapshot, String fingerprint) {
+    private Acknowledgement apply(PlanSyncRequest input, String snapshot, String fingerprint, Instant recoveryFrom) {
         var receipts = mapper.receipts(input.eventId(), input.jobId(), input.configVersion());
         if (!receipts.isEmpty()) {
             if (receipts.size() != 1 || !receipts.getFirst().equals(
                     new Receipt(input.eventId(), input.jobId(), input.configVersion(), fingerprint)))
                 throw new RunException(409, "PLAN_SYNC_CONFLICT", "事件标识或配置版本对应不同配置");
-            var current = mapper.find(input.jobId(), true);
-            // Inbox 证明历史接收，不能证明副本仍在。匹配原事件才允许恢复缺失或落后的副本。
-            if (current.isPresent() && current.get().configVersion() >= input.configVersion())
-                return ack(input, current.get().configVersion(), "DUPLICATE");
         } else {
             mapper.insertReceipt(new Receipt(input.eventId(), input.jobId(), input.configVersion(), fingerprint), Instant.now());
         }
         var current = mapper.find(input.jobId(), true);
+        if (recoveryFrom != null) {
+            // 恢复模式要求明确核实已有副本，普通重复确认不足以证明实际快照一致。
+            if (current.isPresent()) requireCompatibleRecovery(current.get(), input, snapshot);
+        } else if (!receipts.isEmpty() && current.isPresent() && current.get().configVersion() >= input.configVersion()) {
+            return ack(input, current.get().configVersion(), "DUPLICATE");
+        }
         if (current.isPresent() && current.get().configVersion() > input.configVersion())
             return ack(input, current.get().configVersion(), "SUPERSEDED");
         // 副本丢失后仍以 Inbox 保留的最高版本为恢复下界，防止迟到旧事件抢先重建并重新启用已删除任务。
         if (mapper.highestReceivedVersion(input.jobId()) > input.configVersion())
             throw new RunException(409, "PLAN_RESTORE_REQUIRES_LATEST", "副本恢复需要最高已接收版本的原事件");
         var now = clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
-        var calculation = current.filter(plan -> preserveCalculation(plan, input))
-                .map(plan -> new Calculation(plan.nextFireTime(), plan.calculatedAt(), plan.calculationState()))
-                .orElseGet(() -> calculations.calculate(input.configuration(), input.deleted(), now));
+        if (recoveryFrom != null && current.isPresent() && current.get().configVersion() == input.configVersion()) {
+            var calculation = calculations.calculate(input.configuration(), input.deleted(), recoveryFrom);
+            mapper.rebase(current.get(), calculation);
+            return ack(input, input.configVersion(), "DUPLICATE");
+        }
+        var calculation = recoveryFrom != null
+                ? calculations.calculate(input.configuration(), input.deleted(), recoveryFrom)
+                : current.filter(plan -> preserveCalculation(plan, input))
+                    .map(plan -> new Calculation(plan.nextFireTime(), plan.calculatedAt(), plan.calculationState()))
+                    .orElseGet(() -> calculations.calculate(input.configuration(), input.deleted(), now));
         var plan = new Plan(input.jobId(), input.configVersion(), input.deleted(),
                 !input.deleted() && input.configuration().enabled(), snapshot, now,
                 calculation.nextFireTime(), calculation.calculatedAt(), calculation.state());
         if (current.isEmpty()) mapper.insert(plan);
         else mapper.update(plan);
         return ack(input, input.configVersion(), "APPLIED");
+    }
+
+    private void requireCompatibleRecovery(Plan plan, PlanSyncRequest input, String snapshot) {
+        if (plan.configVersion() > input.configVersion())
+            throw new RunException(409, "PLAN_RECOVERY_AHEAD", "当前计划副本版本超前，请核实恢复来源");
+        if (plan.configVersion() == input.configVersion()
+                && (plan.deleted() != input.deleted() || plan.enabled() != (!input.deleted() && input.configuration().enabled())
+                || !ConfigFingerprint.calculate(json, snapshot).equals(ConfigFingerprint.calculate(json, plan.snapshotJson()))))
+            throw new RunException(409, "PLAN_SYNC_CONFLICT", "同版本的计划副本内容不一致，请人工排查");
     }
 
     @Override

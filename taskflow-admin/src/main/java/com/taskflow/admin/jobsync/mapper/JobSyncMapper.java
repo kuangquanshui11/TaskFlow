@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.util.*;
 import com.taskflow.admin.jobsync.model.JobSyncRecords.*;
 import com.taskflow.admin.job.model.JobDefinition.Configuration;
+import com.taskflow.admin.job.exception.JobException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import tools.jackson.databind.json.JsonMapper;
@@ -27,6 +28,28 @@ public class JobSyncMapper {
     public Optional<Status> latest(long jobId) {
         return jdbc.query("SELECT * FROM job_sync_outbox WHERE job_id=? ORDER BY config_version DESC LIMIT 1",
                 this::readStatus, jobId).stream().findFirst();
+    }
+
+    public List<Event> recoveryEvents(long afterJobId, long upperJobId, int limit) {
+        return jdbc.query("""
+                SELECT j.id,j.config_version,j.deleted_at,j.enabled,o.event_id,o.deleted,o.snapshot_json
+                FROM job_definition j LEFT JOIN job_sync_outbox o ON o.job_id=j.id AND o.config_version=j.config_version
+                WHERE j.id>? AND j.id<=? ORDER BY j.id LIMIT ?
+                """, (rs, index) -> {
+            long jobId = rs.getLong("id");
+            String eventId = rs.getString("event_id");
+            boolean deleted = rs.getTimestamp("deleted_at") != null;
+            if (eventId == null || deleted != rs.getBoolean("deleted"))
+                throw new JobException(JobException.Kind.CONFLICT, "任务 #" + jobId + " 缺少匹配的权威 Outbox 事件");
+            try {
+                var configuration = json.readValue(rs.getString("snapshot_json"), Configuration.class);
+                if (configuration == null || (!deleted && configuration.enabled() != rs.getBoolean("enabled")))
+                    throw new IllegalArgumentException();
+                return new Event(UUID.fromString(eventId), jobId, rs.getLong("config_version"), deleted, configuration);
+            } catch (tools.jackson.core.JacksonException | IllegalArgumentException invalid) {
+                throw new JobException(JobException.Kind.CONFLICT, "任务 #" + jobId + " 的权威 Outbox 快照无效");
+            }
+        }, afterJobId, upperJobId, limit);
     }
 
     public List<UUID> due(Instant now, int limit) {

@@ -6,6 +6,20 @@ Java 21，Maven 3.10.0，Admin 与 Scheduler 独立 H2 库。执行根目录 Mav
 
 控制台 `npm.cmd run build` 成功，`npm.cmd test` 通过 29 项。本轮环境使用 H2 和本机 HTTP，真实 MySQL 与 cloud 注册发现仍待验证。
 
+## 2026-11-16 双丢失恢复演练
+
+Java 21，使用最终服务 JAR、新建的独立 H2 文件库、本机 HTTP 派发、Gateway、Keycloak、Redis 和 Nginx。执行以下命令：
+
+```powershell
+.\tools\test-execution.ps1 -SkipBuild -IncludeConfigReconciliation -IncludeConfigRecovery -IdentityPort 19290
+```
+
+退出码 0，报告 67 项断言全部通过，另有 5 项 Playwright 测试通过。演练清空隔离 Scheduler 的计划副本和 Inbox，保留原 Run 和 Admin 的权威数据。恢复期间 Job 写入和常规配置接收均被拒绝。同一恢复批次可重放，墓碑和 Cron 计划通过多个批次重建。重建后启动的双向轮次差异为零。保持 Cron 暂停时重放旧启用事件，确认墓碑有效。重新启用 Cron 后，Worker 完成了恢复时刻以后的新 Run。浏览器覆盖配置对账、补发、复查、移动端和只读权限。根据桌面及移动端截图调整停用时的状态文案后，前端重新构建并通过 29 项单测。
+
+根目录 Maven `verify` 完成六个核心服务的测试及打包，Scheduler 配置协议测试 18 项通过。订单示例的库存补偿测试在根构建中再次报告 `NoSuchElementException`。单独重跑该项通过。用 `-rf :taskflow-order-service verify` 续跑整个示例模块，通过 46 项并按环境条件跳过 40 项。
+
+本地证据位于 `.tools/execution-e2e/20261116-100404-920/report.json`、`.tools/p03-recovery-process.log`、`.tools/p03-recovery-verify.log` 和 `.tools/p03-order-verify.log`。恢复演练使用本机 H2、HTTP 和静态路由，真实 MySQL、RabbitMQ 及 Eureka 注册发现下的恢复留待环境专项。
+
 ## 环境与隔离
 
 日期：2026-10-30（Asia/Shanghai）。环境：Windows、PowerShell 7.6.5、Temurin JDK 21.0.12.1、Spring Boot 4.1.1，使用项目 Maven Wrapper。

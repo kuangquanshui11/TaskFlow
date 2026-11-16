@@ -25,12 +25,21 @@ public class PlanSyncClient {
     }
 
     public Acknowledgement send(Event event) {
+        return send(event, false);
+    }
+
+    public Acknowledgement restore(Event event) {
+        return send(event, true);
+    }
+
+    private Acknowledgement send(Event event, boolean recovery) {
         if (TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("Plan sync inside SQL transaction");
         if (properties.controlToken().isBlank()) throw new DeliveryException("SERVICE_NOT_CONFIGURED", false);
         String response;
         try {
-            response=remote.update(event,RemoteErrors.headers(properties.controlToken(),event.eventId().toString()));
+            var headers = RemoteErrors.headers(properties.controlToken(), event.eventId().toString());
+            response = recovery ? remote.restore(event, headers) : remote.update(event, headers);
         } catch (RuntimeException failed) {
             int code=RemoteErrors.status(failed);
             throw new DeliveryException("SCHEDULER_HTTP_"+code,code>=500 || code==408 || code==429);
@@ -39,7 +48,8 @@ public class PlanSyncClient {
             var ack = json.readValue(response, Acknowledgement.class);
             if (ack == null || !event.eventId().equals(ack.eventId()) || event.jobId() != ack.jobId()
                     || event.configVersion() != ack.configVersion() || ack.acceptedVersion() < event.configVersion()
-                    || !java.util.Set.of("APPLIED", "DUPLICATE", "SUPERSEDED").contains(ack.result()))
+                    || !java.util.Set.of("APPLIED", "DUPLICATE", "SUPERSEDED").contains(ack.result())
+                    || (recovery && (ack.acceptedVersion() != event.configVersion() || "SUPERSEDED".equals(ack.result()))))
                 throw new DeliveryException("SCHEDULER_PROTOCOL_ERROR", true);
             return ack;
         } catch (tools.jackson.core.JacksonException | NullPointerException error) {

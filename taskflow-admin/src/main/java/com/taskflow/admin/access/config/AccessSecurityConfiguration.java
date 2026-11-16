@@ -80,6 +80,8 @@ public class AccessSecurityConfiguration {
                                 "/api/v1/config-reconciliation/selectRepairById").hasAuthority("job:read")
                         .requestMatchers(HttpMethod.POST, "/api/v1/config-reconciliation/insert").hasAuthority("job-sync:reconcile")
                         .requestMatchers(HttpMethod.POST, "/api/v1/config-reconciliation/updateRepair").hasAuthority("job-sync:repair")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/config-reconciliation/selectRecoveryBounds").hasAuthority("job-sync:recover")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/config-reconciliation/updateRecovery").hasAuthority("job-sync:recover")
                         .requestMatchers(HttpMethod.GET, "/api/v1/workers/select", "/api/v1/workers/selectById").hasAuthority("worker:read")
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.jwtAuthenticationConverter(converter))

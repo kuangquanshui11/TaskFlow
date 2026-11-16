@@ -25,7 +25,7 @@ const automatic = ref(null);
 const automaticError = ref('');
 const automaticPage = ref(null);
 const automaticOffset = ref(0);
-const phaseLabels = { ADMIN: '扫描 Admin 配置', SCHEDULER: '检查 Scheduler 独有副本', COMPLETED: '已完成' };
+const phaseLabels = { ADMIN: 'Admin 配置扫描', SCHEDULER: 'Scheduler 副本扫描' };
 const lookupId = ref('');
 const pendingScan = ref(null);
 const busy = ref(false);
@@ -154,11 +154,16 @@ onBeforeUnmount(() => controller.abort());
       <p v-if="automaticError" role="alert">{{ automaticError }}</p>
       <p v-if="automatic" role="status">
         {{ automatic.enabled ? '已开启' : '已关闭' }} ·
-        {{ automatic.round ? phaseLabels[automatic.round.phase] : '暂无轮次' }}
+        <template v-if="automatic.round?.phase === 'COMPLETED'">最近一轮已完成</template>
+        <template v-else-if="automatic.round">{{ automatic.enabled ? '当前阶段' : '上次阶段' }} · {{ phaseLabels[automatic.round.phase] }}</template>
+        <template v-else>暂无轮次</template>
       </p>
       <template v-if="automatic?.round">
         <p>{{ fullDate(automatic.round.startedAt) }} · 两侧累计扫描 {{ automatic.round.scannedCount }} 项，发现 {{ automatic.round.differenceCount }} 项差异。</p>
-        <p v-if="automatic.round.lastErrorCode" role="status">Scheduler 暂不可核实，将从当前进度重试。<code>{{ automatic.round.lastErrorCode }}</code></p>
+        <p v-if="automatic.round.lastErrorCode" role="status">
+          上次未能核实 Scheduler 副本。{{ automatic.enabled ? '稍后从当前进度重试。' : '重新开启后继续扫描。' }}
+          <code>{{ automatic.round.lastErrorCode }}</code>
+        </p>
       </template>
       <div class="actions">
         <button type="button" class="button secondary" :disabled="busy" @click="refreshAutomatic">刷新自动进度</button>

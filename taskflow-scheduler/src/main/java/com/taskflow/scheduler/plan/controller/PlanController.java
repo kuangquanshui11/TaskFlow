@@ -20,6 +20,9 @@ public class PlanController {
     @PostMapping("/update")
     public Acknowledgement update(@Valid @RequestBody PlanSyncRequest request) { return plans.update(request); }
 
+    @PostMapping("/updateRecovery")
+    public Acknowledgement updateRecovery(@Valid @RequestBody PlanSyncRequest request) { return plans.updateRecovery(request); }
+
     @GetMapping("/selectByJobId")
     public PlanResponse selectByJobId(@RequestParam @Positive long id) {
         return PlanResponse.from(plans.selectByJobId(id), triggerProperties.enabled());

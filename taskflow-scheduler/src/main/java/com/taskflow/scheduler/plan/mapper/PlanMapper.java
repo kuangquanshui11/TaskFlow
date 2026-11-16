@@ -99,6 +99,14 @@ public class PlanMapper {
                 """, ts(calculation.nextFireTime()), ts(calculation.calculatedAt()), calculation.state().name(), plan.jobId(), plan.configVersion());
     }
 
+    public void rebase(Plan plan, Calculation calculation) {
+        jdbc.update("""
+                UPDATE schedule_plan SET next_fire_time=?,calculated_at=?,calculation_state=?
+                WHERE job_id=? AND config_version=?
+                """, ts(calculation.nextFireTime()), ts(calculation.calculatedAt()), calculation.state().name(),
+                plan.jobId(), plan.configVersion());
+    }
+
     private static Instant time(java.sql.ResultSet rs, String name) throws java.sql.SQLException {
         var timestamp = rs.getTimestamp(name); return timestamp == null ? null : timestamp.toInstant();
     }

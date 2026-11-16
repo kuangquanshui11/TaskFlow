@@ -1,4 +1,4 @@
-param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$InjectWorkerResultSaveExhaustion, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster, [switch]$IncludeConfigReconciliation, [switch]$IncludeAttemptTimeline, [switch]$IncludeRunRerun,
+param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$InjectWorkerResultSaveExhaustion, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster, [switch]$IncludeConfigReconciliation, [switch]$IncludeAttemptTimeline, [switch]$IncludeRunRerun, [switch]$IncludeConfigRecovery,
     [ValidateSet('http','rabbitmq')][string]$Transport = 'http', [string]$MqSettingsPath,[string]$PlatformSettingsPath,
     [ValidateRange(1024,65535)][int]$IdentityPort = 19190)
 $ErrorActionPreference = 'Stop'
@@ -13,6 +13,9 @@ if ($IncludeAttemptTimeline -and ($Transport -ne 'http' -or $PlatformSettingsPat
 }
 if ($IncludeRunRerun -and ($Transport -ne 'http' -or $PlatformSettingsPath -or $SkipBrowser)) {
     throw 'Run rerun acceptance requires standalone HTTP mode and browser tests.'
+}
+if ($IncludeConfigRecovery -and ($Transport -ne 'http' -or $PlatformSettingsPath)) {
+    throw 'Configuration recovery drill requires isolated standalone HTTP mode.'
 }
 $repoPath = Split-Path -Parent $PSScriptRoot
 Set-Location $repoPath
@@ -146,16 +149,119 @@ function Stop-TestService([string]$Name) {
 }
 function Remove-TestPlanReplica([long]$JobId) {
     # Only remove a plan from this run's stopped H2 database. Keep the Inbox and Admin confirmation intact.
+    if ($JobId -lt 1) { throw 'Reconciliation fault requires a specific Job.' }
+    Invoke-TestPlanDatabaseFault ("DELETE FROM schedule_plan WHERE job_id=" + $JobId)
+    Start-TestService 'scheduler'
+}
+function Invoke-TestPlanDatabaseFault([string]$Sql) {
     Stop-TestService 'scheduler'
     $schedulerYaml = Get-Content -LiteralPath $serviceFiles.scheduler.yaml -Raw
     $dbUrl = [regex]::Match($schedulerYaml, '(?m)^    url: "(jdbc:h2:file:[^"]+)"').Groups[1].Value
     $dbUser = [regex]::Match($schedulerYaml, '(?m)^    username: ([^\r\n]+)').Groups[1].Value
     $dbPassword = [regex]::Match($schedulerYaml, '(?m)^    password: "([^"]*)"').Groups[1].Value
     $expectedPrefix = 'jdbc:h2:file:' + $runRoot.Replace('\','/') + '/scheduler-db;'
-    if (!$dbUrl.StartsWith($expectedPrefix) -or !$dbUser -or $JobId -lt 1) { throw 'Reconciliation fault database guard failed.' }
-    & $javaExe -cp $h2Jar.FullName org.h2.tools.Shell -url $dbUrl -user $dbUser -password $dbPassword -sql ("DELETE FROM schedule_plan WHERE job_id=" + $JobId)
+    if (!$dbUrl.StartsWith($expectedPrefix) -or !$dbUser) { throw 'Reconciliation fault database guard failed.' }
+    & $javaExe -cp $h2Jar.FullName org.h2.tools.Shell -url $dbUrl -user $dbUser -password $dbPassword -sql $Sql
     if ($LASTEXITCODE -ne 0) { throw 'Replica fault injection failed.' }
+}
+function Invoke-TestConfigRecovery($DeletedJob, $OldEvent, $CronJob, $ExistingRun) {
+    $adminPath = $serviceFiles.admin.yaml
+    $schedulerPath = $serviceFiles.scheduler.yaml
+    $originalAdmin = [IO.File]::ReadAllText($adminPath)
+    $originalScheduler = [IO.File]::ReadAllText($schedulerPath)
+    Stop-TestService 'admin'
+    Invoke-TestPlanDatabaseFault 'DELETE FROM schedule_sync_inbox; DELETE FROM schedule_plan'
+
+    $adminRecovery = [regex]::Replace($originalAdmin, '(?m)^  job-sync:\r?\n    enabled: true', "  job-sync:`n    enabled: false")
+    $adminRecovery = [regex]::Replace($adminRecovery, '(?m)^taskflow:\r?$', @'
+taskflow:
+  reconciliation:
+    recovery:
+      enabled: true
+    automatic:
+      enabled: true
+      batch-size: 3
+      tick-interval: 1s
+      retry-interval: 1s
+      round-interval: 2s
+'@)
+    [IO.File]::WriteAllText($adminPath, $adminRecovery, $utf8)
+    Start-TestService 'admin'
+    $resumeAt = [DateTimeOffset]::UtcNow.AddSeconds(75)
+    $pausedScheduler = [regex]::Replace($originalScheduler, '(?m)^taskflow:\r?$', @'
+taskflow:
+  plans:
+    trigger:
+      enabled: false
+'@)
+    $recoveringScheduler = [regex]::Replace($pausedScheduler, '(?m)^  plans:\r?$', "  plans:`n    recovery:`n      resume-at: '$($resumeAt.ToString('O'))'")
+    [IO.File]::WriteAllText($schedulerPath, $recoveringScheduler, $utf8)
     Start-TestService 'scheduler'
+
+    $base = 'http://127.0.0.1:19080/api/v1/config-reconciliation/'
+    $planUrl = 'http://127.0.0.1:19081/internal/v1/plans/selectByJobId?id='
+    $updateUrl = 'http://127.0.0.1:19081/internal/v1/plans/update'
+    $lost = Call-Api 'GET' ($planUrl + $DeletedJob.id) $null $controlToken
+    $frozen = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/jobs/disable' @{ id = $CronJob.id; configVersion = 1 }
+    $blocked = Call-Api 'POST' $updateUrl $OldEvent $controlToken
+    Assert-Check ($lost.status -eq 404 -and $frozen.status -eq 409 -and $frozen.body.code -eq 'CONFIG_RECOVERY_ACTIVE' -and $blocked.body.code -eq 'PLAN_RECOVERY_ACTIVE') 'Double loss is isolated from old events and concurrent Admin changes'
+
+    $bounds = Call-Api 'GET' ($base + 'selectRecoveryBounds')
+    Assert-Check ($bounds.status -eq 200 -and $bounds.body.data.upperJobId -ge $CronJob.id) 'Admin reports a frozen recovery range'
+    $batch = @{ afterJobId = 0; upperJobId = $bounds.body.data.upperJobId; batchSize = 3 }
+    $restoredCount = 0
+    do {
+        $result = Call-Api 'POST' ($base + 'updateRecovery') $batch
+        if ($result.status -ne 200) { throw "Restore failed: $($result.body.code) $($result.body.message)" }
+        if ($batch.afterJobId -eq 0) {
+            $repeat = Call-Api 'POST' ($base + 'updateRecovery') $batch
+            Assert-Check ($repeat.status -eq 200 -and $repeat.body.data.nextAfterJobId -eq $result.body.data.nextAfterJobId) 'The same restore page can be replayed'
+        }
+        if ($result.body.data.hasMore -and $result.body.data.nextAfterJobId -le $batch.afterJobId) { throw 'Restore cursor did not advance.' }
+        $restoredCount += $result.body.data.processed
+        $batch.afterJobId = $result.body.data.nextAfterJobId
+    } while ($result.body.data.hasMore)
+    $rebuiltAt = [DateTimeOffset]::UtcNow
+    Assert-Check ($restoredCount -gt 3) 'Recovery applies multiple bounded pages'
+
+    $plan = Call-Api 'GET' ($planUrl + $CronJob.id) $null $controlToken
+    $tombstone = Call-Api 'GET' ($planUrl + $DeletedJob.id) $null $controlToken
+    $oldRun = Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/runs/selectById?id=" + $ExistingRun.id)
+    Assert-Check ($plan.status -eq 200 -and !$plan.body.automaticTriggerEnabled -and [DateTimeOffset]$plan.body.nextFireTime -gt $resumeAt -and
+        $tombstone.body.deleted -and $tombstone.body.configVersion -eq 4 -and $oldRun.status -eq 200 -and $oldRun.body.data.id -eq $ExistingRun.id) 'Recovery restores Cron and tombstones while keeping existing Run history'
+
+    $verified = $false
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    do {
+        $round = (Call-Api 'GET' ($base + 'selectLatestRound')).body.data.round
+        $verified = $round.phase -eq 'COMPLETED' -and [DateTimeOffset]$round.startedAt -ge $rebuiltAt -and $round.differenceCount -eq 0
+        if (!$verified) { Start-Sleep -Milliseconds 400 }
+    } while (!$verified -and [DateTimeOffset]::UtcNow -lt $deadline)
+    Assert-Check $verified 'A fresh post-restore automatic round verifies both sides'
+
+    Stop-TestService 'scheduler'
+    [IO.File]::WriteAllText($schedulerPath, $pausedScheduler, $utf8)
+    Start-TestService 'scheduler'
+    $late = Call-Api 'POST' $updateUrl $OldEvent $controlToken
+    $tombstone = Call-Api 'GET' ($planUrl + $DeletedJob.id) $null $controlToken
+    Assert-Check ($late.status -eq 200 -and $late.body.acceptedVersion -eq 4 -and $tombstone.body.deleted -and !$tombstone.body.automaticTriggerEnabled) 'An old enable event cannot overwrite the recovered tombstone'
+
+    Stop-TestService 'scheduler'
+    [IO.File]::WriteAllText($schedulerPath, $originalScheduler, $utf8)
+    Start-TestService 'scheduler'
+    Stop-TestService 'admin'
+    [IO.File]::WriteAllText($adminPath, $originalAdmin, $utf8)
+    Start-TestService 'admin'
+    $afterResume = @()
+    $deadline = $resumeAt.AddSeconds(30)
+    do {
+        $history = Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/runs/select?jobId=" + $CronJob.id)
+        $afterResume = @($history.body.data.records | Where-Object {
+            $_.triggerType -eq 'CRON' -and $_.state -eq 'SUCCEEDED' -and [DateTimeOffset]$_.scheduledAt -gt $resumeAt
+        })
+        if (!$afterResume.Count) { Start-Sleep -Milliseconds 500 }
+    } while (!$afterResume.Count -and [DateTimeOffset]::UtcNow -lt $deadline)
+    Assert-Check ($afterResume.Count -gt 0) 'Cron resumes beyond the recovery cutoff and Worker completes the Run'
 }
 function New-TestJob([string]$Handler, [int]$Attempts = 1, [int]$Timeout = 10, [int]$Delay = 50) {
     $body = @{ name = "execution-e2e-$Handler"; handlerKey = $Handler; payload = @{ durationMillis = $Delay };
@@ -697,6 +803,7 @@ info:
     Assert-Check ($automaticHistory.Count -gt 0 -and $automaticHistory[0].scheduledAt) 'Due scan creates Cron Run and Worker completes it without manual trigger'
     $automaticDetails = Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/runs/selectById?id=" + $automaticHistory[0].id)
     Assert-Check (@($automaticDetails.body.data.attempts).Count -eq 1 -and $automaticDetails.body.data.snapshot.configVersion -eq 1) 'Automatic Run uses persisted snapshot and first Attempt'
+    if ($IncludeConfigRecovery) { Invoke-TestConfigRecovery $syncJob $oldEvent $automaticJob $automaticHistory[0] }
     $null = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/jobs/disable' @{ id = $automaticJob.id; configVersion = 1 }
     $null = Wait-TestSync $automaticJob.id 'SYNCED' 2
     $beforePause = Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/runs/select?jobId=" + $automaticJob.id)

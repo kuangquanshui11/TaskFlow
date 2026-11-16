@@ -7,6 +7,8 @@ import org.springframework.web.bind.annotation.*;
 public interface PlanSchedulerRemote {
     @PostMapping("/internal/v1/plans/update")
     String update(@RequestBody Object body,@RequestHeader Map<String,String> headers);
+    @PostMapping("/internal/v1/plans/updateRecovery")
+    String restore(@RequestBody Object body, @RequestHeader Map<String,String> headers);
     @GetMapping("/internal/v1/plans/selectByJobId")
     String select(@RequestParam("id") long id,@RequestHeader Map<String,String> headers);
     @GetMapping("/internal/v1/plans/selectVersions")

@@ -52,6 +52,8 @@ Gateway 保留以下 API 路径，只路由 `/api/v1/**`；`/internal/v1/**`、�
 | GET | /api/v1/config-reconciliation/selectById?id=UUID | 查询已保存的批次和差异明细 |
 | GET | /api/v1/config-reconciliation/selectLatestRound | 查询自动对账开关、最近轮次、扫描进度及最近错误 |
 | GET | /api/v1/config-reconciliation/selectDifferences?id=UUID&afterJobId=0&batchSize=20 | 按轮次和 Job ID 分页查询差异，每页 1..100 条，返回 checks 与 nextAfterJobId |
+| GET | /api/v1/config-reconciliation/selectRecoveryBounds | ADMIN 在恢复模式下读取权威 Job ID 上界 |
+| POST | /api/v1/config-reconciliation/updateRecovery | ADMIN 在恢复模式下按 afterJobId、upperJobId、batchSize（1..10）重建原事件，返回 nextAfterJobId、hasMore、processed |
 | POST | /api/v1/config-reconciliation/updateRepair | 受控补发；JSON requestId(UUID)、checkId(UUID) |
 | GET | /api/v1/config-reconciliation/selectRepairById?id=UUID | 查询修复结果及操作者记录 |
 | GET | /api/v1/runs/selectSummary | run:read；from/to 同时省略或提供 UTC 时间窗，最长 7 天 |

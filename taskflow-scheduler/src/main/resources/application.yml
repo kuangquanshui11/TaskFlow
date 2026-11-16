@@ -132,6 +132,8 @@ taskflow:
     node-recheck-delay: "${TASKFLOW_NODE_RECHECK_DELAY:2s}"
     scan-interval: 500ms
   plans:
+    recovery:
+      resume-at: "${TASKFLOW_PLAN_RECOVERY_RESUME_AT:}"
     trigger:
       enabled: "${TASKFLOW_PLAN_TRIGGER_ENABLED:true}"
       scan-interval: 500ms

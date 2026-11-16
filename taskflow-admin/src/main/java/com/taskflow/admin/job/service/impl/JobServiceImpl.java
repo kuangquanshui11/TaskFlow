@@ -14,6 +14,8 @@ import com.taskflow.admin.job.service.IHandlerService;
 import com.taskflow.admin.job.service.IJobService;
 import com.taskflow.admin.job.service.ISchedulePreviewService;
 import com.taskflow.admin.jobsync.service.IJobSyncService;
+import com.taskflow.admin.jobsync.exception.PlanQueryException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -26,19 +28,23 @@ public class JobServiceImpl implements IJobService {
     private final ISchedulePreviewService schedules;
     private final ApplicationEventPublisher events;
     private final IJobSyncService sync;
+    private final boolean recoveryMode;
 
     public JobServiceImpl(JobDataMapper repository, IHandlerService handlers,
-                          ISchedulePreviewService schedules, ApplicationEventPublisher events, IJobSyncService sync) {
+                          ISchedulePreviewService schedules, ApplicationEventPublisher events, IJobSyncService sync,
+                          @Value("${taskflow.reconciliation.recovery.enabled:false}") boolean recoveryMode) {
         this.repository = repository;
         this.handlers = handlers;
         this.schedules = schedules;
         this.events = events;
         this.sync = sync;
+        this.recoveryMode = recoveryMode;
     }
 
     @Override
     @Transactional
     public JobDefinition insert(Configuration input) {
+        requireWritable();
         var configuration = validate(input);
         var job = selectById(repository.insert(configuration));
         sync.enqueue(job, false);
@@ -69,6 +75,7 @@ public class JobServiceImpl implements IJobService {
     @Override
     @Transactional
     public JobDefinition update(long id, long configVersion, Configuration input) {
+        requireWritable();
         var configuration = validate(input);
         selectById(id);
         requireUpdated(repository.update(id, configVersion, configuration));
@@ -81,6 +88,7 @@ public class JobServiceImpl implements IJobService {
     @Override
     @Transactional
     public JobDefinition changeEnabled(long id, long configVersion, boolean enabled) {
+        requireWritable();
         selectById(id);
         requireUpdated(repository.changeEnabled(id, configVersion, enabled));
         var job = selectById(id);
@@ -92,11 +100,16 @@ public class JobServiceImpl implements IJobService {
     @Override
     @Transactional
     public void delete(long id, long configVersion) {
+        requireWritable();
         var job = selectById(id);
         requireUpdated(repository.softDelete(id, configVersion));
         // 删除墓碑也携带最后一份快照，版本随软删除递增；接收端以 deleted 优先停用计划。
         sync.enqueue(new JobDefinition(id, job.configuration(), configVersion + 1, job.createdAt(), job.updatedAt()), true);
         events.publishEvent(new JobDefinitionChanged(id));
+    }
+
+    private void requireWritable() {
+        if (recoveryMode) throw new PlanQueryException(409, "CONFIG_RECOVERY_ACTIVE", "配置恢复期间暂停 Job 配置写入");
     }
 
     private void requireUpdated(boolean updated) {

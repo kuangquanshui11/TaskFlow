@@ -7,8 +7,13 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import com.taskflow.scheduler.plan.dto.PlanSyncRequest;
+import com.taskflow.scheduler.plan.config.PlanProperties;
+import com.taskflow.scheduler.plan.config.PlanTriggerProperties;
 import com.taskflow.scheduler.plan.mapper.PlanMapper;
 import com.taskflow.scheduler.plan.service.IPlanService;
+import com.taskflow.scheduler.plan.service.IPlanCalculationService;
+import com.taskflow.scheduler.plan.service.impl.PlanServiceImpl;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.*;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -29,6 +34,10 @@ class PlanSyncTests {
     @Autowired IPlanService plans;
     @Autowired JdbcTemplate jdbc;
     @Autowired JsonMapper json;
+    @Autowired IPlanCalculationService calculations;
+    @Autowired PlanProperties properties;
+    @Autowired PlanTriggerProperties trigger;
+    @Autowired PlatformTransactionManager transactions;
     @MockitoSpyBean PlanMapper mapper;
     @MockitoBean(name = "planClock") Clock clock;
     private static final Instant BASE = Instant.parse("2026-10-26T00:00:00Z");
@@ -179,6 +188,33 @@ class PlanSyncTests {
         var last = plans.selectReplicaPage(7, 8L, 1);
         assertThat(last.hasMore()).isFalse();
         assertThat(last.replicas()).singleElement().satisfies(replica -> assertThat(replica.deleted()).isTrue());
+    }
+
+    @Test void recoveryRejectsOldIngressAndRebuildsLostReplicaAndInboxWithoutRewritingConflicts() {
+        var original = daily(1, true, "UTC");
+        var deleted = event(3, true, false);
+        plans.update(original);
+        plans.update(deleted);
+        jdbc.update("DELETE FROM schedule_plan");
+        jdbc.update("DELETE FROM schedule_sync_inbox");
+        var cutoff = BASE.plusSeconds(36000);
+        var recovery = new PlanServiceImpl(mapper, json, transactions, calculations, properties, clock, trigger, cutoff.toString());
+
+        assertThatThrownBy(() -> recovery.update(original)).hasMessageContaining("暂停常规配置接收");
+        assertThatThrownBy(() -> plans.updateRecovery(deleted)).hasMessageContaining("未进入配置恢复模式");
+        assertThat(recovery.updateRecovery(deleted).result()).isEqualTo("APPLIED");
+        assertThat(recovery.updateRecovery(deleted).result()).isEqualTo("DUPLICATE");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM schedule_sync_inbox", Long.class)).isEqualTo(1);
+        assertThatThrownBy(() -> recovery.updateRecovery(original)).hasMessageContaining("版本超前");
+        assertThat(plans.update(original).acceptedVersion()).isEqualTo(3);
+        assertThat(recovery.selectByJobId(7).deleted()).isTrue();
+
+        var active = new PlanSyncRequest(UUID.randomUUID(), 8, 1, false, original.configuration());
+        recovery.updateRecovery(active);
+        assertThat(recovery.selectByJobId(8).nextFireTime()).isEqualTo(Instant.parse("2026-10-27T09:00:00Z"));
+        jdbc.update("UPDATE schedule_plan SET snapshot_json=? WHERE job_id=8", "{\"name\":\"wrong\"}");
+        assertThatThrownBy(() -> recovery.updateRecovery(active)).hasMessageContaining("计划副本内容不一致");
+        assertThat(recovery.selectByJobId(8).snapshotJson()).contains("wrong");
     }
 
     @Test void receiptAndPlanAreAtomicAndCanBeRetriedAfterRollback() {

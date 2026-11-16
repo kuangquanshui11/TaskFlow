@@ -87,9 +87,9 @@ Admin Job ID 在 Scheduler 中是逻辑引用，不建立跨 schema 外键。Wor
 
 手动触发接口返回 HTTP 202 与运行 id，接收成功不代表任务成功。Scheduler 扫描已提交但尚未成功派发的 Attempt，恢复进程退出留下的待执行工作。Worker 重启将之前 RUNNING 的记录标为未知副作用失败，不盲目重做；ACCEPTED 记录可继续执行。
 
-配置同步已采用 Admin 事务 Outbox 推送版本化 HTTP 事件，不依赖分页拉取或全局游标。保存只提交本地事务；后台专用线程领取持久化发送租约，在事务外调用 Scheduler。Scheduler 用 Inbox 和版本检查处理重复、乱序与删除墓碑。失败有限重试，最新失败版本可人工重试。Admin V4 额外持久化对账批次、观察、修复记录及限速闸门，对账不替代正常事件推送。管理台区分保存、副本已同步、节点触发开关及 Run 结果。完整协议、恢复边界和验证见 [异步配置同步](config-sync.md) 与 [配置对账](config-reconciliation.md)。
+我用 Admin 事务 Outbox 推送版本化 HTTP 事件。保存只提交本地事务，后台线程取得持久化租约后在事务外调用 Scheduler。Scheduler 以 Inbox 和单 Job 版本检查处理重复、乱序与删除墓碑。Admin V4 持久化手工对账和补发记录，V5 持久化自动轮次和双向分页进度。自动扫描比较实际副本指纹并定位孤立副本，操作员确认后可补发缺失和落后。计划副本及 Inbox 同时丢失时，在维护窗口从 Admin 的当前快照和墓碑恢复。完整协议和恢复边界见 [配置同步](config-sync.md) 与 [配置对账](config-reconciliation.md)。
 
-Scheduler 的 dispatch 模块维护自己的 Outbox、领取版本和有限发布重试，经 correlated confirm 与 mandatory return 判断是否交给 Broker。Worker 的 dispatch 模块校验 v1 事件，复用 execution 模块持久化去重，提交后手动 ACK，永久错误和耗尽接收重试的消息进入死信队列。三节点使用 quorum 队列，应用使用多节点连接地址。Admin 配置同步和 Worker 结果上报仍走 HTTP。Worker 有界续租及 Handler 执行上下文见 [执行租约](execution-leases.md)。Admin 已提供分批配置对账、墓碑检查和带限速/幂等记录的原 Outbox 补发，Scheduler 可在 Inbox 保留时重建缺失副本，见 [配置对账](config-reconciliation.md)。未知孤立副本发现及同一 Attempt 跨 Inbox 接管仍待实现；新增 Attempt 可重新选择 Worker。
+Scheduler 的 dispatch 模块维护自己的 Outbox、领取版本和有限发布重试，经 correlated confirm 与 mandatory return 判断是否交给 Broker。Worker 的 dispatch 模块校验 v1 事件，复用 execution 模块持久化去重，提交后手动 ACK，永久错误和耗尽接收重试的消息进入死信队列。三节点使用 quorum 队列，应用使用多节点连接地址。Admin 配置同步和 Worker 结果上报仍走 HTTP。Worker 有界续租及 Handler 执行上下文见 [执行租约](execution-leases.md)。新增 Attempt 可重新选择 Worker，同一 Attempt 跨 Inbox 接管仍待实现。
 
 节点管理使用独立 HTTP 契约及节点密钥。Scheduler V6 保存 worker_node 和不可复用的 worker_node_session，按接收时间计算有效期，较旧心跳不延长存活，新会话只能替代已过期会话。MQ 派发准备按能力/负载选择节点并绑定目标与路由，发布前仅检查原目标在线及能力/路由匹配；HTTP 保留固定目标。Worker 的独立心跳线程不会占用执行槽位，Admin 代理查询而不建节点副本或缓存。节点 generation 只约束注册和心跳，不代替执行 leaseVersion，不撤销已派发任务，详见 [节点协议](worker-nodes.md)。
 

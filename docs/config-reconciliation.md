@@ -22,8 +22,10 @@
 | MISSING | 合法成功响应未包含该 Job | 是 |
 | BEHIND | Scheduler 版本小于 Admin 版本，包括待补发墓碑 | 是 |
 | AHEAD | Scheduler 版本大于 Admin 版本 | 否，需检查恢复来源 |
-| CONFLICT | 同版本删除或启用标志不同 | 否，需人工排查 |
+| CONFLICT | 同版本删除标志、启用标志或快照内容不同 | 否，需人工排查 |
 | SOURCE_MISSING | Admin 当前版本缺少对应 Outbox 快照 | 否，需检查本服务数据 |
+| SOURCE_INVALID | Admin 当前版本的 Outbox 无法解析为快照对象 | 否，需检查本服务数据 |
+| ORPHAN | Scheduler 存在副本，Admin 缺少对应 Job 和墓碑 | 否，需人工排查 |
 | UNAVAILABLE | 无法核实 Scheduler | 否 |
 
 每条检查保存 `id/scanId/source/replica/difference/errorCode/checkedAt/repairRequestId`。源记录包含 Job ID、版本、删除/启用标志、事件 ID 和指纹，副本包含当前观察值。匹配版本下，删除、启用标志或快照指纹不同均为 CONFLICT，无法解析的源快照为 SOURCE_INVALID。手工对账连接旧版 Scheduler 时沿用版本和标志检查。
@@ -88,6 +90,16 @@ VIEWER 可查询已保存的批次与修复记录；OPERATOR/ADMIN 具有 `job-s
 
 自动对账需要先升级 Scheduler，再升级 Admin，由 Flyway 应用 Admin V5。默认关闭自动对账，升级完成后按部署需求开启。Scheduler 孤立副本保留待人工排查，Admin 已硬删除的墓碑需要通过备份或数据保留策略恢复权威来源。
 
-若 Scheduler 的副本与 Inbox 同时丢失，就不存在可验证的历史版本下界。整库恢复时应先用 `TASKFLOW_PLAN_TRIGGER_ENABLED=false` 关闭自动触发，核实权威配置重建和在途旧事件后再开启；单次受控修复不替代此恢复流程。
+## 计划副本与 Inbox 双丢失恢复
+
+我采用有维护窗口的恢复流程。前提是 Admin 的 Job、软删除墓碑和每个当前版本的原始 Outbox 事件完整，Scheduler 的 Run/Attempt 数据可以继续使用。如果 Admin 恢复到了旧时间点，或 Scheduler 的 Run 历史也丢失，应先按数据库恢复方案核实备份。孤立副本或超前版本需要人工核对来源。
+
+1. 备份当前数据及配置，停止所有正常 Admin、Scheduler 实例，等待旧进程退出，隔离旧部署的流量。在指定维护 Admin 上设置 `TASKFLOW_CONFIG_RECOVERY_ENABLED=true`、`TASKFLOW_JOB_SYNC_ENABLED=false`。恢复模式拒绝 Job 新增、修改、删除和启停。可同时开启自动对账，并临时缩短轮次间隔以便复查。
+2. 在恢复 Scheduler 上设置 `TASKFLOW_PLAN_TRIGGER_ENABLED=false`，并为所有恢复实例设置同一个未来 UTC 时刻 `TASKFLOW_PLAN_RECOVERY_RESUME_AT`，用 ISO 8601 格式并带 `Z`。恢复节点拒绝常规 `plans/update`，仅通过内部 `plans/updateRecovery` 接收恢复批次。已创建的 Run/Attempt 仍按自己的生命周期处理。
+3. 以 ADMIN 调用 `GET /api/v1/config-reconciliation/selectRecoveryBounds`，取得 `upperJobId`。从 `afterJobId=0` 开始调用 `POST /api/v1/config-reconciliation/updateRecovery`，传入 `afterJobId/upperJobId/batchSize`（1..10）。成功后以 `nextAfterJobId` 继续，直到 `hasMore=false`。Scheduler 为每条原事件在本地事务内重建副本及 Inbox，并按选定时刻计算下一次 Cron。重试保留原事件 ID 和版本。批次中断时前面已成功的条目可能已提交，应排查错误后用原分页参数重试。超前或同版本冲突会使该批次中止。若超出恢复窗口，重新设置未来时刻并从第一页执行，已核实的相同版本也会按新时刻重算。
+4. 确认重建后启动的自动轮次已完成且无差异，检查已删除 Job、已启用 Cron 的下一触发时间和既有 Run。保持 Cron 和 Admin Relay 暂停，移除 Scheduler 的 `TASKFLOW_PLAN_RECOVERY_RESUME_AT` 并重启。用隔离演练时记录的旧启用事件调用常规更新，核对确认版本为最新墓碑版本，计划仍显示已删除。实际维护同时核对 Admin 待投递事件和停机前请求记录，确认事件仍有对应权威 Job 或墓碑。发现缺口时维持暂停并排查。
+5. 核实后恢复所有 Scheduler 的 Cron 扫描，再解除 Admin 的配置写入和 Relay 暂停，检查新的 Cron Run 和正常配置同步。计划从恢复时刻之后开始，维护窗口内的 Cron 轮次跳过。若开启扫描时已超过所选时刻，所选时刻之后的轮次仍使用原有 SKIP/FIRE_ONCE 规则。
+
+恢复写入不修改 Admin Outbox 历史确认，恢复批次返回处理进度，以新一轮对账核实结果。操作员可从 Admin 日志按主体、Job ID 和事件 ID 定位失败批次。演练命令与结果见 [验证记录](config-reconciliation-verification.md)。
 
 验证命令、证据和实际边界见 [对账验证记录](config-reconciliation-verification.md)。

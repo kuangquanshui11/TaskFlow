@@ -115,6 +115,8 @@ taskflow:
     scan-interval: 10s
     repair-interval: 1s
     max-check-age: 5m
+    recovery:
+      enabled: ${TASKFLOW_CONFIG_RECOVERY_ENABLED:false}
     automatic:
       enabled: ${TASKFLOW_RECONCILIATION_AUTOMATIC_ENABLED:false}
       batch-size: 100

@@ -4,7 +4,7 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 ## 当前能力
 
-控制台「配置对账」分批比较 Admin 配置和 Scheduler 计划副本。操作员可以补发缺失或落后的配置原事件，并用新批次复查。 [操作说明](docs/config-reconciliation.md#控制台操作)
+控制台「配置对账」支持人工批次和自动双向扫描。操作员可以核实版本、同版本内容和孤立副本，对缺失或落后补发原事件并复查。 [操作说明与恢复流程](docs/config-reconciliation.md)
 
 控制台 `/runs` 提供全局运行列表，支持创建时间、Run 状态、任务 ID、触发来源组合筛选与 Run ID 精确查询；沿用 run:read 权限，查询数据由 Scheduler 管理。时间与分页边界见 [全局运行查询](docs/global-run-query.md)。
 
@@ -162,7 +162,7 @@ $env:TASKFLOW_ADMIN_DB_PASSWORD = '替换为本机数据库密码'
 
 已确认本机 MySQL 8.0.34、3306、taskflow_admin，原 V1 结构核对一致后已建立基线并迁移到 V2；任务表现有 17 个字段，当前 0 条记录。注意数据库端口 3306 与当前 Admin HTTP 端口 18080 不同。
 
-数据库需先存在。Admin 空库执行 V1..V4；V3 回填配置同步 Outbox 及墓碑，V4 建立配置对账、修复记录及持久化限速闸门。Scheduler 执行自己的迁移，建议先升级 Scheduler 以提供批量版本查询及原事件恢复，再升级 Admin。详见 [配置同步](docs/config-sync.md)、[配置对账](docs/config-reconciliation.md)、[计划计算](docs/plan-calculation.md)。
+数据库需先存在。Admin 空库执行 V1..V5；V3 回填配置同步 Outbox 及墓碑，V4 建立配置对账与修复记录，V5 增加自动对账轮次和租约。Scheduler 执行自己的迁移。先升级 Scheduler 以提供副本分页、指纹和维护恢复入口，再升级 Admin。详见 [配置同步](docs/config-sync.md)、[配置对账](docs/config-reconciliation.md)、[计划计算](docs/plan-calculation.md)。
 
 如果已经手工执行过之前的 V1 建表 SQL，先按 [数据库文档](docs/database.md) 核对结构，再仅在首次接管时设置 TASKFLOW_ADMIN_DB_BASELINE_ON_MIGRATE=true，由 Flyway 建立版本 1 基线并执行 V2。默认关闭自动基线；不要重复执行 V1，也不要在不匹配的库上开启此选项。后续启动移除该变量。
 
@@ -278,7 +278,7 @@ TaskFlow/
 
 带登录的完整任务回归入口、隔离身份与 Redis、MQ 前置条件和故障场景见 [带登录的任务链路回归](docs/authenticated-regression.md)。
 
-Relay 发布后未标记时退出、Worker 执行中退出、迟到上报与发布连接恢复的专项入口见 [进程故障窗口验证](docs/dispatch-fault-verification.md)。同一脚本提供 `-InFlightFailover` 模式，验证 Broker 单节点停机时原进程重连并处理尚未 ACK 的消息。后续工作包括发布确认期间的节点故障、可靠死信、多数派丢失、失联恢复、Jaeger 容器实测及全量配置对账。现有能力和故障保障的验证范围见 [微服务技术栈](docs/microservice-platform.md)。
+Relay 发布后未标记时退出、Worker 执行中退出、迟到上报与发布连接恢复的专项入口见 [进程故障窗口验证](docs/dispatch-fault-verification.md)。同一脚本提供 `-InFlightFailover` 模式，验证 Broker 单节点停机时原进程重连并处理尚未 ACK 的消息。后续工作包括发布确认期间的节点故障、可靠死信、多数派丢失、失联恢复及 Jaeger 容器实测。现有能力和故障保障的验证范围见 [微服务技术栈](docs/microservice-platform.md)。
 
 ## 独立订单业务示例
 

@@ -30,6 +30,7 @@ Scheduler / Worker 保持原有独立服务间密钥。Admin 发往 Scheduler �
 | job-sync:retry | 否 | 是 | 是 | job-sync/updateRetry |
 | job-sync:reconcile | 否 | 是 | 是 | config-reconciliation/insert |
 | job-sync:repair | 否 | 是 | 是 | config-reconciliation/updateRepair |
+| job-sync:recover | 否 | 否 | 是 | config-reconciliation/selectRecoveryBounds、updateRecovery，仅维护恢复模式开放 |
 | job:write | 否 | 否 | 是 | jobs/insert、update |
 | job:delete | 否 | 否 | 是 | jobs/delete |
 
