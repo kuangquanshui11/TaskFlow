@@ -68,10 +68,7 @@ public class ReconciliationServiceImpl implements IReconciliationService {
         Instant checkedAt = mapper.now();
         for (var source : sources) {
             var replica = replicas.get(source.jobId());
-            String difference = source.eventId() == null ? "SOURCE_MISSING" : error != null ? "UNAVAILABLE"
-                    : replica == null ? "MISSING" : replica.configVersion() > source.configVersion() ? "AHEAD"
-                    : replica.configVersion() < source.configVersion() ? "BEHIND"
-                    : replica.deleted() != source.deleted() || replica.enabled() != source.enabled() ? "CONFLICT" : "MATCH";
+            String difference = error == null ? source.difference(replica) : "UNAVAILABLE";
             checks.add(new Check(UUID.randomUUID(), requestId, source, replica, difference, error, checkedAt, null));
         }
         transaction.executeWithoutResult(status -> {
@@ -114,14 +111,14 @@ public class ReconciliationServiceImpl implements IReconciliationService {
             else if (!check.checkedAt().plus(properties.maxCheckAge()).isAfter(now)) outcome = "EXPIRED";
             else {
                 var current = mapper.lockSource(check.source().jobId());
-                if (current.isEmpty() || !current.get().equals(check.source())) outcome = "STALE";
+                if (current.isEmpty() || !current.get().matchesObservation(check.source())) outcome = "STALE";
                 else {
                     // 状态条件与 Relay 租约竞争原子化：不打断 PENDING/SENDING，不生成配置版本或新事件。
                     outcome = mapper.requeue(check.source().eventId(), now) ? "ENQUEUED" : "ALREADY_PENDING";
                     consumed = true;
                 }
             }
-            var repair = new Repair(requestId, checkId, check.source().eventId(), outcome, actor(), now);
+            var repair = new Repair(requestId, checkId, check.source() == null ? null : check.source().eventId(), outcome, actor(), now);
             mapper.insertRepair(repair, consumed);
             mapper.gate("repair", now.plus(properties.repairInterval()));
             return repair;

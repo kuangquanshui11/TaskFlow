@@ -5,6 +5,7 @@ import java.util.UUID;
 
 public final class PlanRecords {
     private PlanRecords() { }
+    public record ReplicaSnapshot(long jobId, long configVersion, boolean deleted, boolean enabled, String snapshotJson) { }
     public record Plan(long jobId, long configVersion, boolean deleted, boolean enabled,
                        String snapshotJson, Instant updatedAt, Instant nextFireTime,
                        Instant calculatedAt, CalculationState calculationState) { }

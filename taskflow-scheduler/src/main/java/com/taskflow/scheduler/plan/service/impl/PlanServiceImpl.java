@@ -8,6 +8,8 @@ import java.time.ZoneId;
 import java.util.HexFormat;
 import com.taskflow.scheduler.execution.exception.RunException;
 import com.taskflow.scheduler.plan.dto.PlanSyncRequest;
+import com.taskflow.scheduler.plan.dto.PlanVersion;
+import com.taskflow.scheduler.plan.model.ConfigFingerprint;
 import com.taskflow.scheduler.plan.mapper.PlanMapper;
 import com.taskflow.scheduler.plan.model.PlanRecords.*;
 import com.taskflow.scheduler.plan.service.IPlanService;
@@ -87,10 +89,25 @@ public class PlanServiceImpl implements IPlanService {
     }
 
     @Override
-    public java.util.List<com.taskflow.scheduler.plan.dto.PlanVersion> selectVersions(java.util.List<Long> ids) {
+    public java.util.List<PlanVersion> selectVersions(java.util.List<Long> ids) {
         if (ids == null || ids.isEmpty() || ids.size() > 100 || ids.stream().anyMatch(id -> id == null || id < 1))
             throw new IllegalArgumentException("1..100 positive job ids required");
-        return mapper.versions(ids);
+        return mapper.versions(ids).stream().map(this::version).toList();
+    }
+
+    @Override
+    public PlanVersion.Page selectReplicaPage(long afterJobId, Long upperJobId, int batchSize) {
+        if (afterJobId < 0 || batchSize < 1 || batchSize > 100
+                || (upperJobId == null ? afterJobId != 0 : upperJobId < afterJobId))
+            throw new IllegalArgumentException("Invalid replica cursor or batch size");
+        long upper = upperJobId == null ? mapper.replicaUpperBound() : upperJobId;
+        var page = mapper.replicas(afterJobId, upper, batchSize + 1);
+        return new PlanVersion.Page(upper, page.size() > batchSize, page.stream().limit(batchSize).map(this::version).toList());
+    }
+
+    private PlanVersion version(ReplicaSnapshot replica) {
+        return new PlanVersion(replica.jobId(), replica.configVersion(), replica.deleted(), replica.enabled(),
+                ConfigFingerprint.calculate(json, replica.snapshotJson()));
     }
 
     private boolean preserveCalculation(Plan plan, PlanSyncRequest input) {

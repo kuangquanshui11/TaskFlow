@@ -26,7 +26,17 @@
 | SOURCE_MISSING | Admin 当前版本缺少对应 Outbox 快照 | 否，需检查本服务数据 |
 | UNAVAILABLE | 无法核实 Scheduler | 否 |
 
-每条检查保存 `id/scanId/source/replica/difference/errorCode/checkedAt/repairRequestId`，source 含 `jobId/configVersion/deleted/enabled/eventId`，replica 含 Scheduler 观察值；丢失或无法查询时为 null。相同版本并不校验完整配置内容指纹；本能力不声称发现任意字段损坏。
+每条检查保存 `id/scanId/source/replica/difference/errorCode/checkedAt/repairRequestId`。源记录包含 Job ID、版本、删除/启用标志、事件 ID 和指纹，副本包含当前观察值。匹配版本下，删除、启用标志或快照指纹不同均为 CONFLICT，无法解析的源快照为 SOURCE_INVALID。手工对账连接旧版 Scheduler 时沿用版本和标志检查。
+
+## 自动全量对账
+
+我复用手工对账的差异与补发记录。开启 Admin 的 `TASKFLOW_RECONCILIATION_AUTOMATIC_ENABLED=true` 后，后台线程按 Job ID 执行双向分页：
+
+1. 每轮先记录 Admin 的 Job ID 上界，分页读 Job 和对应 Outbox，再查 Scheduler 副本。SHA-256 输入为快照对象的字段按键排序后的 UTF-8 JSON，`payloadJson` 保留协议中的字符串内容。Scheduler 每次根据实际保存的 `schedule_plan.snapshot_json` 计算指纹，兼容旧行。计划计算状态、下一触发时间和 Inbox 历史指纹不参与比较。
+2. Admin 方向结束后调用内部 `selectReplicaPage`，首批获取 Scheduler 的 Job ID 上界，后续批次沿用上界。Admin 用本地 Job 表核实返回的 ID，包括软删除记录，权威记录不存在时记录 ORPHAN。ORPHAN、AHEAD、CONFLICT 和源数据问题由操作员排查。
+3. 每次运行最多一页、一次远程请求，默认 100 条，后台 SQL 租约与随机令牌防止多实例重复提交或过期写入。差异与游标在同一事务保存。不可用、非法响应或缺少指纹时保留游标和错误码，默认 30 秒后重试。正常批次间隔默认 5 秒，轮次完成后默认 1 小时再扫。各时间都由 Admin YAML 配置。
+
+两个方向各自捕获上界，各批独立观察。并发变化可在下一轮核实。进度累计的是两个方向各自读取的条数，正常配置可能被计入两次。只保留自动轮次的差异明细。控制台可刷新最新轮次、分页查看差异，并对有效期内的 MISSING/BEHIND 使用原事件补发和手工复查。对账的 Job ID 游标用于续扫；全局事件游标留给增量追赶设计。
 
 ## 修复
 
@@ -76,7 +86,7 @@ VIEWER 可查询已保存的批次与修复记录；OPERATOR/ADMIN 具有 `job-s
 3. 从 afterJobId=0 分批对账，通过 selectById 核实返回。只对 MISSING/BEHIND 明细显式提交修复，查看记录与 job-sync/selectByJobId，然后重新对账。
 4. 查询失败先修复认证、网络或服务版本；AHEAD/CONFLICT/SOURCE_MISSING 先排查数据来源，不自动降版本或覆盖同版本内容。修复发送耗尽后排查 Outbox 错误；可重新对账后再申请有界发送周期。
 
-本能力遍历 Admin 已知配置及墓碑，不发现仅存在于 Scheduler 的未知 Job；不包含数据库整库恢复、自动定时全量扫描、孤立副本自动删除或内容任意损坏修复。Admin 已硬删除的墓碑也不在遍历范围，需要通过备份/数据保留策略恢复权威来源。
+自动对账需要先升级 Scheduler，再升级 Admin，由 Flyway 应用 Admin V5。默认关闭自动对账，升级完成后按部署需求开启。Scheduler 孤立副本保留待人工排查，Admin 已硬删除的墓碑需要通过备份或数据保留策略恢复权威来源。
 
 若 Scheduler 的副本与 Inbox 同时丢失，就不存在可验证的历史版本下界。整库恢复时应先用 `TASKFLOW_PLAN_TRIGGER_ENABLED=false` 关闭自动触发，核实权威配置重建和在途旧事件后再开启；单次受控修复不替代此恢复流程。
 

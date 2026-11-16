@@ -4,6 +4,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.*;
 import com.taskflow.admin.reconciliation.model.ReconciliationRecords.*;
+import com.taskflow.admin.reconciliation.model.ConfigFingerprint;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import tools.jackson.databind.json.JsonMapper;
@@ -22,22 +23,42 @@ public class ReconciliationMapper {
         jdbc.update("UPDATE config_reconciliation_gate SET next_allowed_at=? WHERE gate_name=?", ts(until), name);
     }
     public List<Source> sources(long afterId, int limit) {
+        return sources(afterId, Long.MAX_VALUE, limit);
+    }
+
+    public long sourceUpperBound() {
+        return jdbc.queryForObject("SELECT COALESCE(MAX(id),0) FROM job_definition", Long.class);
+    }
+
+    public List<Source> sources(long afterId, long upperId, int limit) {
         // 包含软删除记录，只读取本服务权威配置与对应版本的发送意图。
         return jdbc.query("""
-                SELECT j.id,j.config_version,j.deleted_at,j.enabled,o.event_id
+                SELECT j.id,j.config_version,j.deleted_at,j.enabled,o.event_id,o.snapshot_json
                 FROM job_definition j LEFT JOIN job_sync_outbox o ON o.job_id=j.id AND o.config_version=j.config_version
-                WHERE j.id>? ORDER BY j.id LIMIT ?
-                """, (rs, index) -> new Source(rs.getLong("id"), rs.getLong("config_version"), rs.getTimestamp("deleted_at") != null,
-                rs.getTimestamp("deleted_at") == null && rs.getBoolean("enabled"), uuid(rs.getString("event_id"))), afterId, limit);
+                WHERE j.id>? AND j.id<=? ORDER BY j.id LIMIT ?
+                """, this::source, afterId, upperId, limit);
+    }
+
+    public Set<Long> knownJobs(List<Long> ids) {
+        if (ids.isEmpty()) return Set.of();
+        String placeholders = String.join(",", Collections.nCopies(ids.size(), "?"));
+        return new HashSet<>(jdbc.queryForList("SELECT id FROM job_definition WHERE id IN (" + placeholders + ")",
+                Long.class, ids.toArray()));
     }
     public Optional<Source> lockSource(long jobId) {
         // 使用当前读，避免 MySQL REPEATABLE READ 中较早读取明细建立的快照掩盖刚提交的配置变更。
         return jdbc.query("""
-                SELECT j.id,j.config_version,j.deleted_at,j.enabled,o.event_id
+                SELECT j.id,j.config_version,j.deleted_at,j.enabled,o.event_id,o.snapshot_json
                 FROM job_definition j LEFT JOIN job_sync_outbox o ON o.job_id=j.id AND o.config_version=j.config_version
                 WHERE j.id=? FOR UPDATE
-                """, (rs, index) -> new Source(rs.getLong("id"), rs.getLong("config_version"), rs.getTimestamp("deleted_at") != null,
-                rs.getTimestamp("deleted_at") == null && rs.getBoolean("enabled"), uuid(rs.getString("event_id"))), jobId).stream().findFirst();
+                """, this::source, jobId).stream().findFirst();
+    }
+
+    private Source source(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
+        boolean deleted = rs.getTimestamp("deleted_at") != null;
+        String snapshot = rs.getString("snapshot_json");
+        return new Source(rs.getLong("id"), rs.getLong("config_version"), deleted, !deleted && rs.getBoolean("enabled"),
+                uuid(rs.getString("event_id")), snapshot == null ? null : ConfigFingerprint.calculate(json, snapshot));
     }
     public Optional<Scan> scan(UUID id) {
         return jdbc.query("SELECT * FROM config_reconciliation_scan WHERE request_id=?", (rs, index) -> new Scan(id,
@@ -48,11 +69,13 @@ public class ReconciliationMapper {
     }
     public List<Check> checks(UUID scanId) {
         return jdbc.query("SELECT record_json,repair_request_id FROM config_reconciliation_check WHERE scan_id=? ORDER BY job_id",
-                (rs, index) -> {
-                    var check = json.readValue(rs.getString("record_json"), Check.class);
-                    return new Check(check.id(), check.scanId(), check.source(), check.replica(), check.difference(), check.errorCode(),
-                            check.checkedAt(), uuid(rs.getString("repair_request_id")));
-                }, scanId.toString());
+                this::readCheck, scanId.toString());
+    }
+
+    private Check readCheck(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
+        var check = json.readValue(rs.getString("record_json"), Check.class);
+        return new Check(check.id(), check.scanId(), check.source(), check.replica(), check.difference(), check.errorCode(),
+                check.checkedAt(), uuid(rs.getString("repair_request_id")));
     }
     public Optional<Check> check(UUID id) {
         return jdbc.query("SELECT scan_id FROM config_reconciliation_check WHERE check_id=?", (rs, index) -> UUID.fromString(rs.getString(1)),
@@ -71,13 +94,61 @@ public class ReconciliationMapper {
         int changed = jdbc.update("UPDATE config_reconciliation_scan SET state='COMPLETED',finished_at=? WHERE request_id=? AND state='RUNNING' AND lease_until>?",
                 ts(now), scanId.toString(), ts(now));
         if (changed != 1) return;
-        for (var check : checks) jdbc.update("INSERT INTO config_reconciliation_check (check_id,scan_id,job_id,record_json) VALUES (?,?,?,?)",
-                check.id().toString(), scanId.toString(), check.source().jobId(), json.writeValueAsString(check));
+        insertChecks(null, checks);
+    }
+
+    public void insertChecks(UUID roundId, List<Check> checks) {
+        for (var check : checks) jdbc.update("""
+                INSERT INTO config_reconciliation_check (check_id,scan_id,job_id,record_json,round_id) VALUES (?,?,?,?,?)
+                """, check.id().toString(), check.scanId().toString(), check.jobId(), json.writeValueAsString(check), string(roundId));
+    }
+
+    public List<Check> roundChecks(UUID roundId, long afterJobId, int limit) {
+        return jdbc.query("""
+                SELECT record_json,repair_request_id FROM config_reconciliation_check
+                WHERE round_id=? AND job_id>? ORDER BY job_id LIMIT ?
+                """, this::readCheck, roundId.toString(), afterJobId, limit);
     }
     public Optional<Repair> repair(UUID requestId) {
         return jdbc.query("SELECT * FROM config_reconciliation_repair WHERE request_id=?", (rs, index) -> new Repair(requestId,
                 UUID.fromString(rs.getString("check_id")), uuid(rs.getString("event_id")), rs.getString("outcome"), rs.getString("actor"),
                 rs.getTimestamp("created_at").toInstant()), requestId.toString()).stream().findFirst();
+    }
+
+    public Optional<Round> latestRound() {
+        return jdbc.query("SELECT * FROM config_reconciliation_round ORDER BY started_at DESC,round_id DESC LIMIT 1",
+                this::readRound).stream().findFirst();
+    }
+
+    private Round readRound(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
+        Timestamp finished = rs.getTimestamp("finished_at");
+        return new Round(uuid(rs.getString("round_id")), Phase.valueOf(rs.getString("phase")), rs.getLong("after_job_id"),
+                rs.getLong("admin_upper_job_id"), rs.getObject("scheduler_upper_job_id", Long.class), rs.getLong("scanned_count"),
+                rs.getLong("difference_count"), rs.getString("last_error_code"),
+                rs.getTimestamp("started_at").toInstant(), finished == null ? null : finished.toInstant());
+    }
+
+    public void startRound(UUID id, Instant now) {
+        jdbc.update("""
+                INSERT INTO config_reconciliation_round
+                (round_id,phase,after_job_id,admin_upper_job_id,scanned_count,difference_count,started_at)
+                VALUES (?,'ADMIN',0,?,0,0,?)
+                """, id.toString(), sourceUpperBound(), ts(now));
+    }
+
+    public void claimRound(UUID id, UUID leaseId) {
+        jdbc.update("UPDATE config_reconciliation_round SET lease_id=? WHERE round_id=?", leaseId.toString(), id.toString());
+    }
+
+    public boolean advanceRound(Round current, UUID leaseId, Phase nextPhase, long afterJobId, Long schedulerUpper,
+                                int scanned, int differences, String error, Instant now) {
+        return jdbc.update("""
+                UPDATE config_reconciliation_round
+                SET phase=?,after_job_id=?,scheduler_upper_job_id=?,scanned_count=scanned_count+?,
+                    difference_count=difference_count+?,last_error_code=?,finished_at=?,lease_id=NULL
+                WHERE round_id=? AND lease_id=?
+                """, nextPhase.name(), afterJobId, schedulerUpper, scanned, differences, error,
+                nextPhase == Phase.COMPLETED ? ts(now) : null, current.id().toString(), leaseId.toString()) == 1;
     }
     public void insertRepair(Repair repair, boolean consumed) {
         jdbc.update("INSERT INTO config_reconciliation_repair (request_id,check_id,event_id,outcome,actor,created_at) VALUES (?,?,?,?,?,?)",

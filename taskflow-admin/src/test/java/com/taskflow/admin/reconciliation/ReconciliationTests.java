@@ -13,9 +13,11 @@ import com.taskflow.admin.job.model.JobDefinition.*;
 import com.taskflow.admin.job.service.IJobService;
 import com.taskflow.admin.jobsync.service.IJobSyncService;
 import com.taskflow.admin.reconciliation.client.PlanReplicaClient;
+import com.taskflow.admin.reconciliation.model.ConfigFingerprint;
 import com.taskflow.admin.reconciliation.mapper.ReconciliationMapper;
 import com.taskflow.admin.reconciliation.model.ReconciliationRecords.*;
 import com.taskflow.admin.reconciliation.service.IReconciliationService;
+import com.taskflow.admin.reconciliation.service.IAutomaticReconciliationService;
 import com.taskflow.admin.support.TestTokens;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.*;
@@ -29,7 +31,9 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+        "taskflow.reconciliation.automatic.enabled=true", "taskflow.reconciliation.automatic.tick-interval=1h",
+        "taskflow.reconciliation.automatic.retry-interval=1h", "taskflow.reconciliation.automatic.batch-size=3"})
 @ActiveProfiles("test")
 @ContextConfiguration(initializers = com.taskflow.admin.support.IsolatedH2ContextInitializer.class)
 @org.springframework.security.test.context.support.WithMockUser(username = "reconciler", authorities = {
@@ -49,17 +53,65 @@ class ReconciliationTests {
     @Autowired IJobService jobs;
     @Autowired IJobSyncService sync;
     @Autowired IReconciliationService reconciliation;
+    @Autowired IAutomaticReconciliationService automatic;
     @Autowired JdbcTemplate jdbc;
     @MockitoSpyBean ReconciliationMapper mapper;
     @MockitoSpyBean PlanReplicaClient client;
     @Value("${local.server.port}") int port;
 
     @BeforeEach void clean() {
-        for (String table : List.of("config_reconciliation_repair", "config_reconciliation_check", "config_reconciliation_scan", "job_sync_outbox", "job_definition"))
+        for (String table : List.of("config_reconciliation_repair", "config_reconciliation_check", "config_reconciliation_scan",
+                "config_reconciliation_round", "job_sync_outbox", "job_definition"))
             jdbc.update("DELETE FROM " + table);
         gates(); replicas.clear(); queries.set(0); code = 200; malformed = null; entered = null; release = null;
     }
     @AfterAll static void stop() { scheduler.stop(0); }
+
+    @Test void automaticRoundResumesAfterUnavailabilityAndFindsSameVersionCorruptionAndOrphans() {
+        var missing = jobs.insert(config("missing"));
+        var behind = jobs.insert(config("behind"));
+        jobs.changeEnabled(behind.id(), 1, true);
+        var ahead = jobs.insert(config("ahead"));
+        var conflict = jobs.insert(config("conflict"));
+        var deleted = jobs.insert(config("deleted"));
+        jobs.delete(deleted.id(), 1);
+        sync.dispatchPending();
+        replicas.remove(missing.id());
+        replicas.put(behind.id(), new Replica(behind.id(), 1, false, false, "a".repeat(64)));
+        replicas.put(ahead.id(), new Replica(ahead.id(), 2, false, false, "a".repeat(64)));
+        replicas.put(conflict.id(), new Replica(conflict.id(), 1, false, false, "a".repeat(64)));
+        replicas.put(999L, new Replica(999, 1, false, true, "a".repeat(64)));
+
+        code = 503;
+        automatic.scanNext();
+        var interrupted = automatic.selectLatest().round();
+        assertThat(interrupted.lastErrorCode()).isEqualTo("SCHEDULER_UNAVAILABLE");
+        assertThat(interrupted.afterJobId()).isZero();
+        assertThat(interrupted.differenceCount()).isZero();
+        assertThat(automatic.selectDifferences(interrupted.id(), 0, 10).checks()).isEmpty();
+        automatic.scanNext();
+        assertThat(queries).hasValue(1);
+
+        code = 200;
+        for (int i = 0; i < 4; i++) {
+            gates();
+            automatic.scanNext();
+        }
+        var round = automatic.selectLatest().round();
+        assertThat(round.id()).isEqualTo(interrupted.id());
+        assertThat(round.phase()).isEqualTo(Phase.COMPLETED);
+        assertThat(round.lastErrorCode()).isNull();
+        assertThat(round.scannedCount()).isEqualTo(10);
+        var first = automatic.selectDifferences(round.id(), 0, 3);
+        assertThat(first.checks()).extracting(Check::difference).containsExactly("MISSING", "BEHIND", "AHEAD");
+        var second = automatic.selectDifferences(round.id(), first.nextAfterJobId(), 3);
+        assertThat(second.checks()).extracting(Check::difference).containsExactly("CONFLICT", "ORPHAN");
+        assertThat(second.nextAfterJobId()).isNull();
+        gates();
+        assertThat(reconciliation.repair(UUID.randomUUID(), second.checks().getLast().id()).outcome()).isEqualTo("NOT_REPAIRABLE");
+        gates();
+        assertThat(reconciliation.repair(UUID.randomUUID(), first.checks().getFirst().id()).outcome()).isEqualTo("ENQUEUED");
+    }
 
     @Test void comparesCurrentReplicasDespiteHistoricalSuccessAndIncludesDeletionTombstones() {
         var missing = jobs.insert(config("lost"));
@@ -270,11 +322,29 @@ class ReconciliationTests {
                 var event = JSON.readTree(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
                 long jobId = event.path("jobId").asLong(), version = event.path("configVersion").asLong();
                 boolean deleted = event.path("deleted").asBoolean();
+                var configuration = event.path("configuration");
                 replicas.compute(jobId, (key, before) -> before != null && before.configVersion() >= version ? before
-                        : new Replica(jobId, version, deleted, !deleted && event.path("configuration").path("enabled").asBoolean()));
+                        : new Replica(jobId, version, deleted, !deleted && configuration.path("enabled").asBoolean(),
+                        ConfigFingerprint.calculate(JSON, JSON.writeValueAsString(configuration))));
                 byte[] bytes = JSON.writeValueAsBytes(Map.of("eventId", event.path("eventId").asString(), "jobId", jobId,
                         "configVersion", version, "acceptedVersion", replicas.get(jobId).configVersion(), "result", "APPLIED"));
                 exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
+            });
+            server.createContext("/internal/v1/plans/selectReplicaPage", exchange -> {
+                var params = new HashMap<String, String>();
+                for (String pair : exchange.getRequestURI().getQuery().split("&")) {
+                    var parts = pair.split("=");
+                    params.put(parts[0], parts[1]);
+                }
+                long after = Long.parseLong(params.get("afterJobId"));
+                long upper = params.containsKey("upperJobId") ? Long.parseLong(params.get("upperJobId"))
+                        : replicas.keySet().stream().mapToLong(Long::longValue).max().orElse(0);
+                int limit = Integer.parseInt(params.get("batchSize"));
+                var selected = replicas.values().stream().filter(r -> r.jobId() > after && r.jobId() <= upper)
+                        .sorted(Comparator.comparingLong(Replica::jobId)).limit(limit + 1L).toList();
+                byte[] body = JSON.writeValueAsBytes(new ReplicaPage(upper, selected.size() > limit,
+                        selected.stream().limit(limit).toList()));
+                exchange.sendResponseHeaders(code, body.length); exchange.getResponseBody().write(body); exchange.close();
             });
             server.start(); return server;
         } catch (Exception failure) { throw new ExceptionInInitializerError(failure); }

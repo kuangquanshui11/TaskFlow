@@ -2,6 +2,7 @@ package com.taskflow.scheduler.plan.controller;
 
 import com.taskflow.scheduler.plan.dto.PlanSyncRequest;
 import com.taskflow.scheduler.plan.dto.PlanResponse;
+import com.taskflow.scheduler.plan.dto.PlanVersion;
 import com.taskflow.scheduler.plan.config.PlanTriggerProperties;
 import com.taskflow.scheduler.plan.model.PlanRecords.*;
 import com.taskflow.scheduler.plan.service.IPlanService;
@@ -28,5 +29,11 @@ public class PlanController {
     public java.util.List<com.taskflow.scheduler.plan.dto.PlanVersion> selectVersions(
             @RequestParam @jakarta.validation.constraints.Size(min = 1, max = 100) java.util.List<@Positive Long> ids) {
         return plans.selectVersions(ids);
+    }
+
+    @GetMapping("/selectReplicaPage")
+    public PlanVersion.Page selectReplicaPage(@RequestParam(defaultValue = "0") long afterJobId,
+                                              @RequestParam(required = false) Long upperJobId, @RequestParam int batchSize) {
+        return plans.selectReplicaPage(afterJobId, upperJobId, batchSize);
     }
 }

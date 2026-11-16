@@ -12,11 +12,26 @@ public class PlanMapper {
     private final JdbcTemplate jdbc;
     public PlanMapper(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
-    public List<com.taskflow.scheduler.plan.dto.PlanVersion> versions(List<Long> ids) {
+    public List<ReplicaSnapshot> versions(List<Long> ids) {
         String placeholders = String.join(",", Collections.nCopies(ids.size(), "?"));
-        return jdbc.query("SELECT job_id,config_version,deleted,enabled FROM schedule_plan WHERE job_id IN (" + placeholders + ") ORDER BY job_id",
-                (rs, index) -> new com.taskflow.scheduler.plan.dto.PlanVersion(rs.getLong("job_id"), rs.getLong("config_version"),
-                        rs.getBoolean("deleted"), rs.getBoolean("enabled")), ids.toArray());
+        return jdbc.query("SELECT job_id,config_version,deleted,enabled,snapshot_json FROM schedule_plan WHERE job_id IN (" + placeholders + ") ORDER BY job_id",
+                PlanMapper::replicaSnapshot, ids.toArray());
+    }
+
+    public long replicaUpperBound() {
+        return jdbc.queryForObject("SELECT COALESCE(MAX(job_id),0) FROM schedule_plan", Long.class);
+    }
+
+    public List<ReplicaSnapshot> replicas(long afterJobId, long upperJobId, int limit) {
+        return jdbc.query("""
+                SELECT job_id,config_version,deleted,enabled,snapshot_json FROM schedule_plan
+                WHERE job_id>? AND job_id<=? ORDER BY job_id LIMIT ?
+                """, PlanMapper::replicaSnapshot, afterJobId, upperJobId, limit);
+    }
+
+    private static ReplicaSnapshot replicaSnapshot(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
+        return new ReplicaSnapshot(rs.getLong("job_id"), rs.getLong("config_version"), rs.getBoolean("deleted"),
+                rs.getBoolean("enabled"), rs.getString("snapshot_json"));
     }
 
     public List<Receipt> receipts(UUID eventId, long jobId, long version) {

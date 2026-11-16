@@ -68,6 +68,8 @@ Scheduler 在自己的本地事务中写入 `schedule_sync_inbox` 和 `schedule_
 
 `GET /internal/v1/plans/selectByJobId?id=7` 使用相同控制密钥，返回副本版本、删除和启用标志、`snapshotJson`、`updatedAt`。不存在返回 404 `PLAN_NOT_FOUND`。
 
+`GET /internal/v1/plans/selectVersions?ids=7,8` 返回指定 ID 的版本、删除/启用标志和实际快照 SHA-256 指纹。`GET /internal/v1/plans/selectReplicaPage?afterJobId=0&batchSize=100` 返回 `upperJobId/hasMore/replicas`，每页 1..100 条，下一页携带首批返回的 `upperJobId` 和最后一条记录的 `jobId` 作为 `afterJobId`。两者均包含当前存在的墓碑，使用控制密钥，仅供内部对账调用。
+
 ## 失败、重试与恢复
 
 | 状态 | 含义 |

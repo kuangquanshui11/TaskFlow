@@ -76,6 +76,7 @@ public class AccessSecurityConfiguration {
                         .requestMatchers(HttpMethod.POST, "/api/v1/runs/updateDispatchFailure").hasAuthority("dispatch:resolve")
                         .requestMatchers(HttpMethod.POST, "/api/v1/job-sync/updateRetry").hasAuthority("job-sync:retry")
                         .requestMatchers(HttpMethod.GET, "/api/v1/config-reconciliation/selectById",
+                                "/api/v1/config-reconciliation/selectLatestRound", "/api/v1/config-reconciliation/selectDifferences",
                                 "/api/v1/config-reconciliation/selectRepairById").hasAuthority("job:read")
                         .requestMatchers(HttpMethod.POST, "/api/v1/config-reconciliation/insert").hasAuthority("job-sync:reconcile")
                         .requestMatchers(HttpMethod.POST, "/api/v1/config-reconciliation/updateRepair").hasAuthority("job-sync:repair")

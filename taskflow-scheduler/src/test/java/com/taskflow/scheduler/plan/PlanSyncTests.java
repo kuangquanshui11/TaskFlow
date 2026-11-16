@@ -157,6 +157,30 @@ class PlanSyncTests {
         assertThat(plans.selectByJobId(7).deleted()).isTrue();
     }
 
+    @Test void replicaPageUsesAnUpperBoundAndFingerprintsTheActualStoredSnapshot() throws Exception {
+        var input = event(1, false, false);
+        plans.update(input);
+        var first = plans.selectVersions(List.of(7L)).getFirst();
+        jdbc.update("UPDATE schedule_plan SET snapshot_json=? WHERE job_id=7", "{\"name\":\"changed\"}");
+        assertThat(plans.selectVersions(List.of(7L)).getFirst().fingerprint()).isNotEqualTo(first.fingerprint());
+        plans.update(new PlanSyncRequest(UUID.randomUUID(), 8, 1, true, input.configuration()));
+        try (var client = HttpClient.newHttpClient()) {
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port
+                    + "/internal/v1/plans/selectReplicaPage?batchSize=1")).GET();
+            assertThat(client.send(request.build(), HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(401);
+            var response = client.send(request.header("X-Taskflow-Token", "test-control-token").build(), HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+            var page = json.readTree(response.body());
+            assertThat(page.path("upperJobId").asLong()).isEqualTo(8);
+            assertThat(page.path("hasMore").asBoolean()).isTrue();
+            assertThat(page.path("replicas").get(0).path("jobId").asLong()).isEqualTo(7);
+        }
+        plans.update(new PlanSyncRequest(UUID.randomUUID(), 9, 1, false, input.configuration()));
+        var last = plans.selectReplicaPage(7, 8L, 1);
+        assertThat(last.hasMore()).isFalse();
+        assertThat(last.replicas()).singleElement().satisfies(replica -> assertThat(replica.deleted()).isTrue());
+    }
+
     @Test void receiptAndPlanAreAtomicAndCanBeRetriedAfterRollback() {
         var input = event(1, false, true);
         doThrow(new IllegalStateException("injected")).when(mapper).insert(any());

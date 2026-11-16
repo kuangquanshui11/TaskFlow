@@ -115,6 +115,12 @@ taskflow:
     scan-interval: 10s
     repair-interval: 1s
     max-check-age: 5m
+    automatic:
+      enabled: ${TASKFLOW_RECONCILIATION_AUTOMATIC_ENABLED:false}
+      batch-size: 100
+      tick-interval: 5s
+      round-interval: 1h
+      retry-interval: 30s
   access:
     issuer: "${TASKFLOW_JWT_ISSUER:}"
     audience: "${TASKFLOW_JWT_AUDIENCE:taskflow-api}"

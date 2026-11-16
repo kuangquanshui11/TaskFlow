@@ -22,7 +22,7 @@ Scheduler / Worker 保持原有独立服务间密钥。Admin 发往 Scheduler �
 
 | 权限 | VIEWER | OPERATOR | ADMIN | 路径 |
 | --- | --- | --- | --- | --- |
-| job:read | 是 | 是 | 是 | jobs/select、selectById、selectSummary、preview；job-handlers/select；job-sync 两个查询；config-reconciliation 两个查询 |
+| job:read | 是 | 是 | 是 | jobs/select、selectById、selectSummary、preview；job-handlers/select；job-sync 两个查询；config-reconciliation 的批次、补发记录、自动轮次、差异查询 |
 | run:read | 是 | 是 | 是 | runs/select、selectById、selectByRequestKey |
 | worker:read | 是 | 是 | 是 | workers/select、selectById |
 | job:operate | 否 | 是 | 是 | jobs/enable、disable |

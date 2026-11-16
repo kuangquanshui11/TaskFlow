@@ -50,6 +50,8 @@ Gateway 保留以下 API 路径，只路由 `/api/v1/**`；`/internal/v1/**`、�
 | GET | /api/v1/job-handlers/select | 查询配置允许的处理器标识 |
 | POST | /api/v1/config-reconciliation/insert | 对账一批配置；JSON requestId(UUID)、afterJobId(>=0)、batchSize(1..100) |
 | GET | /api/v1/config-reconciliation/selectById?id=UUID | 查询已保存的批次和差异明细 |
+| GET | /api/v1/config-reconciliation/selectLatestRound | 查询自动对账开关、最近轮次、扫描进度及最近错误 |
+| GET | /api/v1/config-reconciliation/selectDifferences?id=UUID&afterJobId=0&batchSize=20 | 按轮次和 Job ID 分页查询差异，每页 1..100 条，返回 checks 与 nextAfterJobId |
 | POST | /api/v1/config-reconciliation/updateRepair | 受控补发；JSON requestId(UUID)、checkId(UUID) |
 | GET | /api/v1/config-reconciliation/selectRepairById?id=UUID | 查询修复结果及操作者记录 |
 | GET | /api/v1/runs/selectSummary | run:read；from/to 同时省略或提供 UTC 时间窗，最长 7 天 |

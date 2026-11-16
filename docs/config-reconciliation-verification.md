@@ -1,5 +1,11 @@
 # 配置对账与受控修复验证
 
+## 2026-11-16 自动全量对账
+
+Java 21，Maven 3.10.0，Admin 与 Scheduler 独立 H2 库。执行根目录 Maven `verify`，Admin 的 V4 → V5 迁移测试 1 项、对账测试 11 项和 Scheduler 配置协议测试 17 项均通过。新用例覆盖双向分页上界、墓碑、实际快照指纹、缺失/落后/超前/同版本冲突/孤立，以及远端不可用和退避续扫。完整构建在示例 `taskflow-order-service` 的 `CleanupTests.exhaustedDeliveryHasDiagnosisAndConcurrentCompensationReplaysOneReceipt` 遇到 `NoSuchElementException`。本地证据为 `.tools/p03-automatic-verify.log`。
+
+控制台 `npm.cmd run build` 成功，`npm.cmd test` 通过 29 项。本轮环境使用 H2 和本机 HTTP，真实 MySQL 与 cloud 注册发现仍待验证。
+
 ## 环境与隔离
 
 日期：2026-10-30（Asia/Shanghai）。环境：Windows、PowerShell 7.6.5、Temurin JDK 21.0.12.1、Spring Boot 4.1.1，使用项目 Maven Wrapper。
