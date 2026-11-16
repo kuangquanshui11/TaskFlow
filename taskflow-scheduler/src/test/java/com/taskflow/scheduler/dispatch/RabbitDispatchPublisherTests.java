@@ -25,6 +25,8 @@ class RabbitDispatchPublisherTests {
             assertThat(message.getMessageProperties().getDeliveryMode()).isEqualTo(MessageDeliveryMode.PERSISTENT);
             assertThat(message.getMessageProperties().getMessageId()).isEqualTo(event.eventId().toString());
             assertThat(message.getMessageProperties().getType()).isEqualTo("taskflow.dispatch.v1");
+            assertThat(message.getMessageProperties().getHeaders()).containsEntry("traceparent", event.traceContext().traceparent())
+                    .containsEntry("tracestate", event.traceContext().tracestate());
             data.getFuture().complete(new CorrelationData.Confirm(true,null)); return null;
         }).when(rabbit).send(anyString(),anyString(),any(Message.class),any(CorrelationData.class));
         new RabbitDispatchPublisher(rabbit,properties()).publish(event);
@@ -53,6 +55,7 @@ class RabbitDispatchPublisherTests {
     private OutboxEvent event() {
         var id=UUID.randomUUID();
         return new OutboxEvent(id,id,"SENDING","{}",Instant.now().plusSeconds(60),1,Instant.now(),1,Instant.now().plusSeconds(30),null,
-                new com.taskflow.scheduler.node.model.DispatchTarget("worker-second", "taskflow", "node-exchange", "second-queue", "worker.second"));
+                new com.taskflow.scheduler.node.model.DispatchTarget("worker-second", "taskflow", "node-exchange", "second-queue", "worker.second"), new com.taskflow.scheduler.observability.config.AsyncTracing.Context(
+                        "00-d70da05fb3a24221a7084d40075addaa-25788738c2d74f49-01", "test=example"));
     }
 }

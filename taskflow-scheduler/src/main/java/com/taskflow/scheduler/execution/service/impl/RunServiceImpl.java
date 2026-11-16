@@ -1,6 +1,9 @@
 package com.taskflow.scheduler.execution.service.impl;
 
+import com.taskflow.scheduler.observability.config.AsyncTracing;
+import com.taskflow.scheduler.observability.config.AsyncTracing.Context;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
@@ -30,10 +33,12 @@ import tools.jackson.databind.json.JsonMapper;
 
 @Service
 public class RunServiceImpl implements IRunService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RunServiceImpl.class);
     private static final Instant EARLIEST_QUERY_TIME = Instant.parse("1000-01-01T00:00:00Z");
     private static final Instant LATEST_QUERY_TIME = Instant.parse("9999-12-31T23:59:59.999Z");
     private static final Duration MAX_QUERY_WINDOW = Duration.ofDays(7);
 
+    private final AsyncTracing tracing;
     private final RunDataMapper mapper;
     private final WorkerClient worker;
     private final RunProperties properties;
@@ -44,11 +49,12 @@ public class RunServiceImpl implements IRunService {
     private final com.taskflow.scheduler.node.service.IWorkerNodeService nodes;
     public RunServiceImpl(RunDataMapper mapper, WorkerClient worker, RunProperties properties,
                           JsonMapper json, PlatformTransactionManager transactionManager,
-                          DispatchProperties dispatch, DispatchOutboxMapper outbox,com.taskflow.scheduler.node.service.IWorkerNodeService nodes) {
+                          DispatchProperties dispatch, DispatchOutboxMapper outbox,com.taskflow.scheduler.node.service.IWorkerNodeService nodes, AsyncTracing tracing) {
         this.mapper = mapper; this.worker = worker; this.properties = properties; this.json = json;
         this.transactions = new TransactionTemplate(transactionManager);
         this.dispatch = dispatch; this.outbox = outbox;
         this.nodes=nodes;
+        this.tracing = tracing;
     }
 
     @Override
@@ -77,9 +83,13 @@ public class RunServiceImpl implements IRunService {
                 }
                 var now = Instant.now();
                 var run = new RunRow(UUID.randomUUID(), snapshot.jobId(), snapshot.configVersion(),
-                        requestKey, fingerprint, "READY", encoded, 1, null, null, now, now, "MANUAL", null, sourceRunId, actor, null);
+                        requestKey, fingerprint, "READY", encoded, 1, null, null, now, now, "MANUAL", null, sourceRunId, actor, null, tracing.capture());
+                tracing.tag("runId", run.id());
+                tracing.tag("requestKey", requestKey);
+                log.atInfo().addKeyValue("event", "RUN_CREATED").addKeyValue("runId", run.id())
+                        .addKeyValue("requestKey", requestKey).log("Manual Run created");
                 mapper.insert(run);
-                insertAttempt(run.id(), 1, now);
+                insertAttempt(run, 1, now);
                 return run.id();
             });
             return selectById(id);
@@ -99,11 +109,15 @@ public class RunServiceImpl implements IRunService {
         if (existing.isPresent()) return existing.get().id();
         validate(snapshot);
         var encoded = json.writeValueAsString(snapshot);
-        var run = new RunRow(UUID.randomUUID(), snapshot.jobId(), snapshot.configVersion(), UUID.randomUUID(),
-                fingerprint(encoded), "READY", encoded, 1, null, null, createdAt, createdAt, "CRON", scheduledAt, null, null, null);
-        mapper.insert(run);
-        insertAttempt(run.id(), 1, createdAt);
-        return run.id();
+        var runId = UUID.randomUUID();
+        try (var trace = tracing.start("run.schedule", Context.EMPTY, Map.of("runId", runId, "jobId", snapshot.jobId()))) {
+            var run = new RunRow(runId, snapshot.jobId(), snapshot.configVersion(), UUID.randomUUID(),
+                    fingerprint(encoded), "READY", encoded, 1, null, null, createdAt, createdAt, "CRON", scheduledAt,
+                    null, null, null, tracing.capture());
+            mapper.insert(run);
+            insertAttempt(run, 1, createdAt);
+            return runId;
+        }
     }
 
     @Override @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
@@ -227,8 +241,10 @@ public class RunServiceImpl implements IRunService {
             var prepared = transactions.execute(status -> claim(id));
             if (prepared == null) continue;
             var command = prepared.command();
-            try {
+            try (var trace = tracing.start("dispatch.http", prepared.traceContext(), Map.of(
+                    "runId", command.runId(), "attemptId", id, "workerId", prepared.target().workerId()))) {
                 worker.dispatch(command);
+                log.info("Worker accepted dispatch");
             } catch (RuntimeException failure) {
                 boolean permanent = failure instanceof RunException remote && remote.status() >= 400
                         && remote.status() < 500 && remote.status() != 429;
@@ -285,7 +301,7 @@ public class RunServiceImpl implements IRunService {
         }
     }
 
-    private record Prepared(Dispatch command, DispatchTarget target, int dispatchNumber) { }
+    private record Prepared(Dispatch command, DispatchTarget target, int dispatchNumber, Context traceContext) { }
     private Prepared claim(UUID id) {
         var pair = locked(id); var run = pair.run(); var attempt = pair.attempt(); var now = Instant.now();
         if (attempt.terminal() || terminal(run) || !java.util.Set.of("READY", "DISPATCHING").contains(attempt.state())
@@ -318,7 +334,7 @@ public class RunServiceImpl implements IRunService {
                 dispatch.rabbitmq() ? "MQ_DISPATCH_PREPARED" : "HTTP_DISPATCH_CLAIMED", now,
                 dispatchNumber, "DISPATCHING", null, expires);
         return new Prepared(new Dispatch(id, run.id(), attempt.attemptNumber(), attempt.leaseVersion(), expires, snapshot),
-                target, dispatchNumber);
+                target, dispatchNumber, run.traceContext());
     }
 
     private void confirmAccepted(Pair pair, long leaseVersion) {
@@ -343,7 +359,7 @@ public class RunServiceImpl implements IRunService {
         var snapshot = json.readValue(run.snapshotJson(), Snapshot.class);
         if (!state.equals("SUCCEEDED") && retryable && attempt.attemptNumber() < snapshot.maxAttempts()) {
             int next = attempt.attemptNumber() + 1;
-            insertAttempt(run.id(), next, now.plusSeconds(snapshot.retryIntervalSeconds()));
+            insertAttempt(run, next, now.plusSeconds(snapshot.retryIntervalSeconds()));
             if (!mapper.runState(run, "RETRY_WAIT", next, code, message, now)) throw stale();
         } else {
             var finalState = state.equals("SUCCEEDED") ? "SUCCEEDED" : "FAILED";
@@ -355,11 +371,11 @@ public class RunServiceImpl implements IRunService {
     private Attempt freshAttempt(UUID runId, int number, Instant when) {
         return new Attempt(UUID.randomUUID(), runId, number, number, "READY", 0, when, null, null, null, null, null);
     }
-    private void insertAttempt(UUID runId, int number, Instant when) {
-        var attempt = freshAttempt(runId, number, when);
+    private void insertAttempt(RunRow run, int number, Instant when) {
+        var attempt = freshAttempt(run.id(), number, when);
         mapper.insertAttempt(attempt);
         // 与 Run/Attempt 同一事务记录发送意图，租约及不可变消息在实际派发时一起准备。
-        if (dispatch.rabbitmq()) outbox.insert(attempt.id(), when);
+        if (dispatch.rabbitmq()) outbox.insert(attempt.id(), when, run.traceContext());
     }
     private record Pair(RunRow run, Attempt attempt) { }
     private Pair locked(UUID id) {
@@ -373,7 +389,7 @@ public class RunServiceImpl implements IRunService {
         return new RunView(row.id(), row.jobId(), row.configVersion(), row.requestKey(), row.state(),
                 json.readValue(row.snapshotJson(), Snapshot.class), attempts, row.resultCode(),
                 row.message(), row.createdAt(), row.updatedAt(), row.triggerType(), row.scheduledAt(),
-                row.sourceRunId(), row.rerunActor(), canRerun(row, attempts));
+                row.sourceRunId(), row.rerunActor(), canRerun(row, attempts), row.traceContext().traceId());
     }
     private static boolean canRerun(RunRow row, List<Attempt> attempts) {
         // Worker 只在领取执行租约之前使用这两个结果码。旧记录缺少确定证据时按不可重跑处理。

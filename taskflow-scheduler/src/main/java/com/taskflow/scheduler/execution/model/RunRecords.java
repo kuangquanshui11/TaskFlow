@@ -1,5 +1,6 @@
 package com.taskflow.scheduler.execution.model;
 
+import com.taskflow.scheduler.observability.config.AsyncTracing.Context;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.List;
@@ -11,7 +12,7 @@ public final class RunRecords {
     public record RunRow(UUID id, long jobId, long configVersion, UUID requestKey, String fingerprint,
             String state, String snapshotJson, int currentAttempt, String resultCode, String message,
             Instant createdAt, Instant updatedAt, String triggerType, Instant scheduledAt,
-            UUID sourceRunId, String rerunActor, Instant finishedAt) { }
+            UUID sourceRunId, String rerunActor, Instant finishedAt, Context traceContext) { }
     public record Attempt(UUID id, UUID runId, int attemptNumber, long leaseVersion, String state,
             int dispatchCount, Instant nextDispatchAt, Instant expiresAt, Instant startedAt,
             Instant finishedAt, String resultCode, String message,
@@ -36,7 +37,7 @@ public final class RunRecords {
     public record RunView(UUID id, long jobId, long configVersion, UUID requestKey, String state,
             Snapshot snapshot, List<Attempt> attempts, String resultCode, String message,
             Instant createdAt, Instant updatedAt, String triggerType, Instant scheduledAt,
-            UUID sourceRunId, String rerunActor, boolean rerunEligible) { }
+            UUID sourceRunId, String rerunActor, boolean rerunEligible, String traceId) { }
     public record Summary(UUID id, long jobId, long configVersion, String state, int attemptCount,
             String resultCode, String message, Instant createdAt, Instant updatedAt, String triggerType,
             Instant scheduledAt, Instant finishedAt) { }

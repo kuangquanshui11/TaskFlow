@@ -36,6 +36,7 @@ import static org.mockito.ArgumentMatchers.*;
 @ActiveProfiles(resolver = DispatchFairnessTests.DatabaseProfiles.class)
 @ContextConfiguration(initializers = RunStateConcurrencyTests.DatabaseGuard.class)
 class DispatchFairnessTests {
+    @org.springframework.beans.factory.annotation.Autowired com.taskflow.scheduler.observability.config.AsyncTracing tracing;
     @Autowired JdbcTemplate jdbc;
     @Autowired JsonMapper json;
     @Autowired PlatformTransactionManager manager;
@@ -263,11 +264,11 @@ class DispatchFairnessTests {
     }
 
     private IRunService service(String transport) {
-        return new RunServiceImpl(mapper, worker, runProperties, json, manager, properties(transport), outbox, nodes);
+        return new RunServiceImpl(mapper, worker, runProperties, json, manager, properties(transport), outbox, nodes, tracing);
     }
 
     private IDispatchRelayService relay() {
-        return new DispatchRelayServiceImpl(outbox, publisher, properties("rabbitmq"), manager, mapper, nodes, json);
+        return new DispatchRelayServiceImpl(outbox, publisher, properties("rabbitmq"), manager, mapper, nodes, json, tracing);
     }
 
     private DispatchProperties properties(String transport) {

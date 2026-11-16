@@ -295,6 +295,8 @@ Worker 内部续租使用 `POST /internal/v1/attempts/updateLease`，请求含 a
 
 `nextDispatchAt` 也表示下一次派发资格检查时间。目标节点离线、Handler 或路由不匹配时，该时间延后（默认 2s）；未曾派发的 Attempt 保持 READY、dispatchCount 不增加、expiresAt 仍为空。已领取执行租约的重派发等待保留原 expiresAt，过期仍会终结。不会因等待创建额外 Attempt，也不改变本节接口路径、请求参数或响应字段。配置和验证见 [扫描公平性](dispatch-fairness-verification.md)。
 
+运行详情包含可空的 `traceId`，用于查询异步派发、执行及结果上报的 Trace。历史 Run 可能缺少该字段。
+
 Run 的 state 为 READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED。明确的 Handler 失败可按快照配置新增 Attempt 重试；人工再次执行总是新建 Run。接收/发布不确定不立即创建业务重试；Worker 已上报的超时或重启失败保持非重试。Scheduler 观察到租约失效时，默认按快照上限新增 Attempt，`TASKFLOW_RETRY_ON_LEASE_LOSS=false` 可关闭。内置 demoSlow 可用 payload.durationMillis 控制耗时，demoFailOnce 的首次尝试失败，后续尝试成功。内部认证、超时、租约和故障边界见 [执行协议](execution-protocol.md)，实际验收见 [执行验证](execution-verification.md)。
 
 Worker 本地结果保存失败会有限重试保存同一份结果，不重新执行 Handler，不增加 Run / Attempt 或业务重试次数。恢复后按原租约上报；已失效租约不会被延长或绕过。持续保存失败可能最终表现为 Scheduler 租约超时，不能据此断言业务未执行。公开路径、请求参数与响应结构不变；日志诊断和完整故障边界见 [Worker 结果保存恢复](worker-result-recovery.md)。

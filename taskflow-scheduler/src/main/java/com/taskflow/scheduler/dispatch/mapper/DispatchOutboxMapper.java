@@ -1,5 +1,6 @@
 package com.taskflow.scheduler.dispatch.mapper;
 
+import com.taskflow.scheduler.observability.config.AsyncTracing.Context;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.*;
@@ -14,8 +15,11 @@ public class DispatchOutboxMapper {
     public DispatchOutboxMapper(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
     public void insert(UUID attemptId, Instant when) {
-        jdbc.update("INSERT INTO dispatch_outbox (event_id,attempt_id,state,publish_attempts,next_publish_at,claim_version,created_at) VALUES (?,?,'WAITING',0,?,0,?)",
-                attemptId.toString(), attemptId.toString(), ts(when), ts(Instant.now()));
+        insert(attemptId, when, Context.EMPTY);
+    }
+    public void insert(UUID attemptId, Instant when, Context traceContext) {
+        jdbc.update("INSERT INTO dispatch_outbox (event_id,attempt_id,state,publish_attempts,next_publish_at,claim_version,created_at,traceparent,tracestate) VALUES (?,?,'WAITING',0,?,0,?,?,?)",
+                attemptId.toString(), attemptId.toString(), ts(when), ts(Instant.now()), traceContext.traceparent(), traceContext.tracestate());
     }
     public Optional<OutboxEvent> find(UUID id, boolean lock) {
         return jdbc.query("SELECT * FROM dispatch_outbox WHERE event_id=?" + (lock ? " FOR UPDATE" : ""), (rs, i) ->
@@ -24,7 +28,8 @@ public class DispatchOutboxMapper {
                         rs.getInt("publish_attempts"), instant(rs.getTimestamp("next_publish_at")), rs.getLong("claim_version"),
                         instant(rs.getTimestamp("claim_until")), rs.getString("last_error_code"),
                         rs.getString("target_worker_id") == null ? null : new DispatchTarget(rs.getString("target_worker_id"),
-                                rs.getString("target_vhost"), rs.getString("target_exchange"), rs.getString("target_queue"), rs.getString("target_routing_key"))), id.toString()).stream().findFirst();
+                                rs.getString("target_vhost"), rs.getString("target_exchange"), rs.getString("target_queue"), rs.getString("target_routing_key")),
+                        new Context(rs.getString("traceparent"), rs.getString("tracestate"))), id.toString()).stream().findFirst();
     }
     public void prepare(UUID id, String json, Instant expiresAt, Instant now) {
         prepare(id, json, expiresAt, now, null);

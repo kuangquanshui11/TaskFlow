@@ -110,7 +110,9 @@ Eureka 存活租约与 Scheduler 的 Worker 心跳表承担不同职责：前者
 
 Gateway、MVC 入口和 Feign 通过 Micrometer Observation 传播 W3C `traceparent`；Trace ID 进入日志及响应。默认不导出，避免未部署收集器时不断请求 localhost。OTLP 日志导出关闭；Scheduler/Worker 指标导出通过 TASKFLOW_OTLP_METRICS_ENABLED 控制，默认 false，指标 URL 从 TASKFLOW_OTLP_ENDPOINT 的 /v1/traces 推导为 /v1/metrics，HTTP 请求观测和进程内指标仍可使用，见 [积压指标](observability-metrics.md)。
 
-同步 Gateway → Admin → Scheduler 已有真实请求及 OTLP 验证。持久化 Outbox、MQ 和 Inbox 等待后尚未把原 trace 上下文持久化传播，后台调用可能开启新 trace；跨异步业务使用 requestKey、Run ID、Attempt ID 关联。整个 Cron/MQ 执行尚不能关联到同一条 trace。
+我沿用 Micrometer Tracing、W3C 上下文和 OTLP。手动请求沿用入口 Trace，Cron 创建 Run 时开启 Trace。Scheduler 持久化 Run 与派发 Outbox 的上下文，RabbitMQ v1 消息通过头部携带原创建上下文。Worker 在 Inbox 提交时保存接收 Span 的上下文，执行及结果上报分别恢复并创建 Span。配置同步 Outbox 独立传播 Job 修改请求的上下文。旧记录缺少上下文时，各后台阶段可建立自己的 Trace。
+
+我使用 Spring Boot JSON 日志统一执行标识。可以按 `runId` 找到 `traceId`，以 `attemptId`、`eventId` 和发布或上报序号追踪重投。结构化日志默认使用 `logstash`，可通过 `TASKFLOW_LOG_FORMAT` 配置。采样策略和 OTLP 导出配置见上表，持久化的 Attempt 事件也可以在执行详情读取。
 
 可选基础设施容器：
 

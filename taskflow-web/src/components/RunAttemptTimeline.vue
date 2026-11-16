@@ -14,6 +14,7 @@ const error = ref(false);
 let controller;
 
 const labels = {
+  INBOX_ACCEPTED: "Worker 收件已提交",
   HTTP_DISPATCH_CLAIMED: '已领取 HTTP 派发', HTTP_DISPATCH_ACCEPTED: 'Worker 已接收派发',
   HTTP_DISPATCH_REJECTED: 'Worker 拒绝派发', HTTP_DISPATCH_UNCONFIRMED: 'HTTP 派发未确认',
   MQ_DISPATCH_PREPARED: 'MQ 派发已准备', MQ_PUBLISH_CLAIMED: '已领取消息发布',

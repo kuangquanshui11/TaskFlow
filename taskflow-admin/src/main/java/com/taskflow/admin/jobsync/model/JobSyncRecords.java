@@ -1,5 +1,6 @@
 package com.taskflow.admin.jobsync.model;
 
+import com.taskflow.admin.observability.config.AsyncTracing.Context;
 import java.time.Instant;
 import java.util.UUID;
 import com.taskflow.admin.job.model.JobDefinition.Configuration;
@@ -10,7 +11,7 @@ public final class JobSyncRecords {
     public record Event(UUID eventId, long jobId, long configVersion, boolean deleted,
                         Configuration configuration) { }
 
-    public record Delivery(Event event, UUID leaseToken, int attempts) { }
+    public record Delivery(Event event, UUID leaseToken, int attempts, Context traceContext) { }
 
     public record Acknowledgement(UUID eventId, long jobId, long configVersion,
                                   long acceptedVersion, String result) { }

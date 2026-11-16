@@ -42,6 +42,7 @@ import static org.awaitility.Awaitility.await;
 @ExtendWith(OutputCaptureExtension.class)
 @org.springframework.test.context.ContextConfiguration(initializers = com.taskflow.worker.support.IsolatedTestDatabaseInitializer.class)
 class WorkerExecutionTests {
+    @org.springframework.beans.factory.annotation.Autowired com.taskflow.worker.observability.config.AsyncTracing tracing;
     @Autowired IExecutionService executions;
     @MockitoSpyBean ExecutionMapper mapper;
     @Autowired JdbcTemplate jdbc;
@@ -114,7 +115,7 @@ class WorkerExecutionTests {
         assertThat(mapper.find(command.attemptId()).orElseThrow().reported()).isTrue();
         verify(reports).report(argThat(result -> result.attemptId().equals(command.attemptId())
                 && result.status().equals("SUCCEEDED") && result.message().equals("执行成功")));
-        assertThat(eventTypes(command)).containsExactly("HANDLER_STARTED", "HANDLER_FINISHED", "REPORT_CLAIMED", "REPORT_ACKNOWLEDGED");
+        assertThat(eventTypes(command)).containsExactly("INBOX_ACCEPTED", "HANDLER_STARTED", "HANDLER_FINISHED", "REPORT_CLAIMED", "REPORT_ACKNOWLEDGED");
     }
     @Test void rejectedExecutorSettlesClaimWithoutCallingHandler() throws Exception {
         var command = command("demoSuccess", 1, 30, "{}");
@@ -124,7 +125,7 @@ class WorkerExecutionTests {
                 throw new org.springframework.dao.DataAccessResourceFailureException("temporary save failure");
             return call.callRealMethod();
         }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
-        var stopped = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, properties, json, transactions, results, leases, recovery);
+        var stopped = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, properties, json, transactions, results, leases, recovery, tracing);
         try {
             stopped.recover(); stopped.insert(command); stopped.shutdown();
             assertThatCode(stopped::executePending).doesNotThrowAnyException();
@@ -135,7 +136,7 @@ class WorkerExecutionTests {
             assertThat(mapper.pendingCount()).isZero();
             assertThat(saves.get()).isEqualTo(2);
             verify(handlers, never()).execute(any(), any());
-            assertThat(eventTypes(command)).containsExactly("EXECUTION_FINISHED");
+            assertThat(eventTypes(command)).containsExactly("INBOX_ACCEPTED", "EXECUTION_FINISHED");
         } finally { stopped.shutdown(); }
     }
     @Test void handlerIsNotInvokedWhenItsEntryEventCannotBeStored() throws Exception {
@@ -147,7 +148,7 @@ class WorkerExecutionTests {
         finished(command);
         verify(handlers, never()).execute(any(), any());
         assertThat(mapper.find(command.attemptId()).orElseThrow().resultCode()).isEqualTo("HANDLER_START_UNRECORDED");
-        assertThat(eventTypes(command)).containsExactly("EXECUTION_FINISHED");
+        assertThat(eventTypes(command)).containsExactly("INBOX_ACCEPTED", "EXECUTION_FINISHED");
     }
     @Test void handlerFailureRetainsOriginalResultAndRetryPolicyAfterSaveRecovery() throws Exception {
         var command = command("demoFail", 1, 30, "{}");
@@ -210,7 +211,7 @@ class WorkerExecutionTests {
         assertThat(saves.get()).isEqualTo(2);
         verify(handlers, times(1)).execute(any(), any());
         verifyNoInteractions(reports);
-        assertThat(eventTypes(command)).containsExactly("HANDLER_STARTED", "HANDLER_FINISHED", "REPORT_CLAIMED", "REPORT_ACKNOWLEDGED");
+        assertThat(eventTypes(command)).containsExactly("INBOX_ACCEPTED", "HANDLER_STARTED", "HANDLER_FINISHED", "REPORT_CLAIMED", "REPORT_ACKNOWLEDGED");
     }
     @Test void exhaustedSavingRecoversOriginalResultOnTheSameWorker(CapturedOutput output) throws Exception {
         var command = command("demoSuccess", 1, 30, "{}");
@@ -256,7 +257,7 @@ class WorkerExecutionTests {
         executions.reportPending();
         verify(reports).report(argThat(result -> result.attemptId().equals(command.attemptId())
                 && result.leaseVersion() == command.leaseVersion() && result.sessionId().equals(leases.owner().sessionId())));
-        assertThat(eventTypes(command)).containsExactly("HANDLER_STARTED", "HANDLER_FINISHED", "RESULT_RECOVERED", "REPORT_CLAIMED", "REPORT_STALE");
+        assertThat(eventTypes(command)).containsExactly("INBOX_ACCEPTED", "HANDLER_STARTED", "HANDLER_FINISHED", "RESULT_RECOVERED", "REPORT_CLAIMED", "REPORT_STALE");
         executions.executePending();
         verify(handlers, times(1)).execute(any(), any());
     }
@@ -277,7 +278,7 @@ class WorkerExecutionTests {
                 .when(mapper).appendExecutionEvent(eq(command.attemptId()), eq("RESULT_RECOVERY_UNKNOWN"), any());
         assertThatThrownBy(executions::recoverPendingResults).isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
         assertThat(mapper.find(command.attemptId()).orElseThrow().state()).isEqualTo("RUNNING");
-        assertThat(eventTypes(command)).isEmpty();
+        assertThat(eventTypes(command)).containsExactly("INBOX_ACCEPTED");
 
         doCallRealMethod().when(mapper).appendExecutionEvent(eq(command.attemptId()), eq("RESULT_RECOVERY_UNKNOWN"), any());
         executions.recoverPendingResults();
@@ -286,7 +287,7 @@ class WorkerExecutionTests {
         assertThat(row.state()).isEqualTo("FAILED");
         assertThat(row.resultCode()).isEqualTo("RESULT_OUTCOME_UNKNOWN");
         assertThat(row.retryable()).isFalse();
-        assertThat(eventTypes(command)).containsExactly("RESULT_RECOVERY_UNKNOWN");
+        assertThat(eventTypes(command)).containsExactly("INBOX_ACCEPTED", "RESULT_RECOVERY_UNKNOWN");
         assertThat(mapper.find(foreign.attemptId()).orElseThrow().state()).isEqualTo("RUNNING");
         assertThat(mapper.pendingCount()).isEqualTo(1);
         verifyNoInteractions(reports);
@@ -319,7 +320,7 @@ class WorkerExecutionTests {
         assertThat(before.reported()).isTrue();
         executions.recoverPendingResults();
         assertThat(mapper.find(command.attemptId()).orElseThrow()).isEqualTo(before);
-        assertThat(eventTypes(command)).containsExactly("HANDLER_STARTED", "HANDLER_FINISHED", "REPORT_CLAIMED", "REPORT_ACKNOWLEDGED");
+        assertThat(eventTypes(command)).containsExactly("INBOX_ACCEPTED", "HANDLER_STARTED", "HANDLER_FINISHED", "REPORT_CLAIMED", "REPORT_ACKNOWLEDGED");
         assertThat(metrics.get("taskflow.worker.result.recovery.pending").gauge().value()).isZero();
         verify(handlers, times(1)).execute(any(), any());
     }
@@ -402,7 +403,7 @@ class WorkerExecutionTests {
         when(reports.report(any())).thenReturn(Outcome.ACKNOWLEDGED); reportDue(); executions.reportPending();
         assertThat(mapper.find(command.attemptId()).orElseThrow().reported()).isTrue();
         executions.reportPending(); verify(reports, times(2)).report(any());
-        assertThat(eventTypes(command)).containsExactly("HANDLER_STARTED", "HANDLER_FINISHED",
+        assertThat(eventTypes(command)).containsExactly("INBOX_ACCEPTED", "HANDLER_STARTED", "HANDLER_FINISHED",
                 "REPORT_CLAIMED", "REPORT_UNCONFIRMED", "REPORT_CLAIMED", "REPORT_ACKNOWLEDGED");
         assertThat(jdbc.queryForList("SELECT report_number FROM worker_attempt_event WHERE attempt_id=? AND report_number IS NOT NULL ORDER BY id",
                 Integer.class, command.attemptId().toString())).containsExactly(1, 1, 2, 2);
@@ -445,7 +446,7 @@ class WorkerExecutionTests {
         assertThat(mapper.find(command.attemptId()).orElseThrow().reportSessionId()).isEqualTo(oldOwner.sessionId());
         assertThat(leases.owner().sessionId()).isNotEqualTo(oldOwner.sessionId());
         assertThat(mapper.find(command.attemptId()).orElseThrow().reported()).isTrue();
-        assertThat(eventTypes(command)).containsExactly("EXECUTION_RECOVERED", "REPORT_CLAIMED", "REPORT_STALE");
+        assertThat(eventTypes(command)).containsExactly("INBOX_ACCEPTED", "EXECUTION_RECOVERED", "REPORT_CLAIMED", "REPORT_STALE");
         assertThat(jdbc.queryForList("SELECT DISTINCT worker_id FROM worker_attempt_event WHERE attempt_id=?",
                 String.class, command.attemptId().toString())).containsExactly(oldOwner.workerId());
     }
@@ -507,7 +508,7 @@ class WorkerExecutionTests {
         var limited = new ExecutionProperties(properties.schedulerUrl(), properties.dispatchToken(), properties.reportToken(),
                 properties.connectTimeout(), properties.requestTimeout(), properties.scanInterval(), properties.parallelism(),
                 properties.maxPending(), properties.maxReportAttempts(), properties.reportRetryDelay(), false, Duration.ofMillis(1));
-        var reporting = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, limited, json, transactions, results, leases, recovery);
+        var reporting = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, limited, json, transactions, results, leases, recovery, tracing);
         try {
             reporting.recover(); reporting.reportPending();
             verify(reports, atMostOnce()).report(any());

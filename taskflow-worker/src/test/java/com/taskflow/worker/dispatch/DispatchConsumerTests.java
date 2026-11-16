@@ -61,7 +61,12 @@ class DispatchConsumerTests {
             assertThat(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
             return null;
         }).when(channel).basicAck(7,false);
-        consumer.consume(message,channel); consumer.consume(message,channel);
+        message.getMessageProperties().setHeader("traceparent", "00-d70da05fb3a24221a7084d40075addaa-25788738c2d74f49-01");
+        consumer.consume(message,channel);
+        var accepted = mapper.find(command.attemptId()).orElseThrow();
+        assertThat(accepted.traceContext().traceId()).isEqualTo("d70da05fb3a24221a7084d40075addaa");
+        consumer.consume(message,channel);
+        assertThat(mapper.find(command.attemptId()).orElseThrow().traceContext()).isEqualTo(accepted.traceContext());
         executions.executePending();
         await().untilAsserted(() -> assertThat(mapper.find(command.attemptId()).orElseThrow().state()).isEqualTo("SUCCEEDED"));
         consumer.consume(message,channel); executions.executePending();
@@ -98,15 +103,15 @@ class DispatchConsumerTests {
     }
     @Test void transientDatabaseFailureRetriesBeforeAck() throws Exception {
         doThrow(new org.springframework.dao.TransientDataAccessResourceException("database unavailable")).doCallRealMethod()
-                .when(mapper).insert(any(),any(),anyString(),anyString(),any());
+                .when(mapper).insert(any(),any(),anyString(),anyString(),any(),anyString(),any());
         consumer.consume(message(command()),channel);
         assertThat(count()).isEqualTo(1); verify(channel).basicAck(7,false); verify(channel,never()).basicReject(anyLong(),anyBoolean());
     }
     @Test void persistentDatabaseFailureHasBoundedRetriesAndNoAck() throws Exception {
         doThrow(new org.springframework.dao.TransientDataAccessResourceException("database unavailable"))
-                .when(mapper).insert(any(),any(),anyString(),anyString(),any());
+                .when(mapper).insert(any(),any(),anyString(),anyString(),any(),anyString(),any());
         consumer.consume(message(command()),channel);
-        assertThat(count()).isZero(); verify(mapper,times(4)).insert(any(),any(),anyString(),anyString(),any());
+        assertThat(count()).isZero(); verify(mapper,times(4)).insert(any(),any(),anyString(),anyString(),any(),anyString(),any());
         verify(channel).basicReject(7,false); verify(channel,never()).basicAck(anyLong(),anyBoolean());
     }
     @Test void capacityWaitsNeitherConsumeNorResetDatabaseFailureBudget() throws Exception {

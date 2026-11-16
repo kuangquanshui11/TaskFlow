@@ -84,12 +84,12 @@ class JobSyncTests {
     }
 
     @Test void outboxFailureRollsBackJobAndVersionChange() {
-        doThrow(new IllegalStateException("injected")).when(mapper).insert(any());
+        doThrow(new IllegalStateException("injected")).when(mapper).insert(any(), any());
         assertThatThrownBy(() -> jobs.insert(config("rollback", false))).isInstanceOf(IllegalStateException.class);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM job_definition", Long.class)).isZero();
         reset(mapper);
         var job = jobs.insert(config("retained", false));
-        doThrow(new IllegalStateException("injected")).when(mapper).insert(any());
+        doThrow(new IllegalStateException("injected")).when(mapper).insert(any(), any());
         assertThatThrownBy(() -> jobs.changeEnabled(job.id(), 1, true)).isInstanceOf(IllegalStateException.class);
         assertThat(jobs.selectById(job.id()).configVersion()).isEqualTo(1);
         assertThat(jobs.selectById(job.id()).configuration().enabled()).isFalse();

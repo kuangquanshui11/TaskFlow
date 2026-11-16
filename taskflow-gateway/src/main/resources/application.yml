@@ -108,8 +108,12 @@ resilience4j:
       adminGateway:
         timeout-duration: 9s
 logging:
-  pattern:
-    level: "%5p [traceId=%X{traceId:-} spanId=%X{spanId:-}]"
+  structured:
+    format:
+      console: "${TASKFLOW_LOG_FORMAT:logstash}"
+    json:
+      add:
+        serviceName: "${spring.application.name}"
 taskflow:
   access:
     issuer: "${TASKFLOW_JWT_ISSUER:}"

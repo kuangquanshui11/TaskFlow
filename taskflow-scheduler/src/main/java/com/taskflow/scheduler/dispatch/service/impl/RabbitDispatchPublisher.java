@@ -29,6 +29,11 @@ public class RabbitDispatchPublisher implements IDispatchPublisher {
                 .setContentType(MessageProperties.CONTENT_TYPE_JSON).setContentEncoding("UTF-8")
                 .setDeliveryMode(MessageDeliveryMode.PERSISTENT).setMessageId(event.eventId().toString())
                 .setType("taskflow.dispatch.v1").build();
+        var context = event.traceContext();
+        var headers = message.getMessageProperties();
+        // 重投继续传播同一创建上下文，消息体与幂等标识也保持稳定。
+        if (context.traceparent() != null) headers.setHeader("traceparent", context.traceparent());
+        if (context.tracestate() != null) headers.setHeader("tracestate", context.tracestate());
         var correlation = new CorrelationData(event.eventId() + ":" + event.claimVersion());
         try {
             rabbit.send(event.target().exchange(), event.target().routingKey(), message, correlation);

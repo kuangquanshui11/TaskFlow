@@ -1,5 +1,6 @@
 package com.taskflow.admin.jobsync.mapper;
 
+import com.taskflow.admin.observability.config.AsyncTracing.Context;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -19,10 +20,10 @@ public class JobSyncMapper {
 
     public JobSyncMapper(JdbcTemplate jdbc, JsonMapper json) { this.jdbc = jdbc; this.json = json; }
 
-    public void insert(Event event) {
-        jdbc.update("INSERT INTO job_sync_outbox (event_id,job_id,config_version,deleted,snapshot_json,next_attempt_at) VALUES (?,?,?,?,?,?)",
+    public void insert(Event event, Context traceContext) {
+        jdbc.update("INSERT INTO job_sync_outbox (event_id,job_id,config_version,deleted,snapshot_json,next_attempt_at,traceparent,tracestate) VALUES (?,?,?,?,?,?,?,?)",
                 event.eventId().toString(), event.jobId(), event.configVersion(), event.deleted(),
-                json.writeValueAsString(event.configuration()), ts(Instant.now()));
+                json.writeValueAsString(event.configuration()), ts(Instant.now()), traceContext.traceparent(), traceContext.tracestate());
     }
 
     public Optional<Status> latest(long jobId) {
@@ -76,7 +77,7 @@ public class JobSyncMapper {
         return jdbc.query("SELECT * FROM job_sync_outbox WHERE event_id=? AND lease_token=?", (rs, index) ->
                 new Delivery(new Event(eventId, rs.getLong("job_id"), rs.getLong("config_version"),
                         rs.getBoolean("deleted"), json.readValue(rs.getString("snapshot_json"), Configuration.class)),
-                        token, rs.getInt("attempts")), eventId.toString(), token.toString()).stream().findFirst();
+                        token, rs.getInt("attempts"), new Context(rs.getString("traceparent"), rs.getString("tracestate"))), eventId.toString(), token.toString()).stream().findFirst();
     }
 
     public void acknowledge(Delivery delivery, Acknowledgement ack, Instant now) {

@@ -1,5 +1,7 @@
 package com.taskflow.scheduler.dispatch.service.impl;
 
+import com.taskflow.scheduler.observability.config.AsyncTracing;
+import java.util.Map;
 import java.time.Instant;
 import java.util.UUID;
 import com.taskflow.scheduler.dispatch.config.DispatchProperties;
@@ -20,6 +22,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 @ConditionalOnProperty(name = "taskflow.dispatch.transport", havingValue = "rabbitmq", matchIfMissing = true)
 public class DispatchRelayServiceImpl implements IDispatchRelayService {
+    private final AsyncTracing tracing;
     private final DispatchOutboxMapper mapper;
     private final RunDataMapper runs;
     private final IDispatchPublisher publisher;
@@ -29,11 +32,12 @@ public class DispatchRelayServiceImpl implements IDispatchRelayService {
     private final tools.jackson.databind.json.JsonMapper json;
     public DispatchRelayServiceImpl(DispatchOutboxMapper mapper, IDispatchPublisher publisher,
             DispatchProperties properties, PlatformTransactionManager manager, RunDataMapper runs,
-            com.taskflow.scheduler.node.service.IWorkerNodeService nodes,tools.jackson.databind.json.JsonMapper json) {
+            com.taskflow.scheduler.node.service.IWorkerNodeService nodes,tools.jackson.databind.json.JsonMapper json, AsyncTracing tracing) {
         this.mapper = mapper; this.publisher = publisher; this.properties = properties;
         this.runs = runs;
         transactions = new TransactionTemplate(manager);
         this.nodes=nodes; this.json=json;
+        this.tracing = tracing;
     }
     @Override
     @Transactional(propagation = Propagation.NEVER)
@@ -44,9 +48,12 @@ public class DispatchRelayServiceImpl implements IDispatchRelayService {
                 var claimed = transactions.execute(status -> claim(id));
                 if (claimed == null) continue;
                 var event = claimed.event();
-                try {
+                try (var trace = tracing.start("dispatch.publish", event.traceContext(), Map.of(
+                        "runId", claimed.command().runId(), "attemptId", event.attemptId(), "eventId", id,
+                        "workerId", event.target().workerId(), "publishNumber", event.publishAttempts()))) {
                     // confirm 等待发生在 SQL 事务外；确认后崩溃会重发同一不可变事件。
                     publisher.publish(event);
+                    org.slf4j.LoggerFactory.getLogger(getClass()).info("RabbitMQ confirmed dispatch");
                 } catch (RuntimeException failed) {
                     var now = Instant.now();
                     long factor = 1L << Math.min(event.publishAttempts() - 1, 16);

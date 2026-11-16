@@ -1,5 +1,6 @@
 package com.taskflow.scheduler.execution.mapper;
 
+import com.taskflow.scheduler.observability.config.AsyncTracing.Context;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -24,12 +25,13 @@ public class RunDataMapper {
     public void insert(RunRow row) {
         jdbc.update("""
                 INSERT INTO run_execution (id,job_id,config_version,request_key,fingerprint,state,snapshot_json,
-                    current_attempt,created_at,updated_at,trigger_type,scheduled_at,source_run_id,rerun_actor)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    current_attempt,created_at,updated_at,trigger_type,scheduled_at,source_run_id,rerun_actor,traceparent,tracestate)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 row.id().toString(), row.jobId(), row.configVersion(), row.requestKey().toString(), row.fingerprint(),
                 row.state(), row.snapshotJson(), row.currentAttempt(), ts(row.createdAt()), ts(row.updatedAt()),
-                row.triggerType(), ts(row.scheduledAt()), row.sourceRunId() == null ? null : row.sourceRunId().toString(), row.rerunActor());
+                row.triggerType(), ts(row.scheduledAt()), row.sourceRunId() == null ? null : row.sourceRunId().toString(), row.rerunActor(),
+                row.traceContext().traceparent(), row.traceContext().tracestate());
     }
     public void insertAttempt(Attempt row) {
         jdbc.update("INSERT INTO run_attempt (id,run_id,attempt_number,lease_version,state,dispatch_count,next_dispatch_at) VALUES (?,?,?,?,?,?,?)",
@@ -195,7 +197,8 @@ public class RunDataMapper {
                 UUID.fromString(rs.getString("request_key")), rs.getString("fingerprint"), rs.getString("state"),
                 rs.getString("snapshot_json"), rs.getInt("current_attempt"), rs.getString("result_code"),
                 rs.getString("message"), instant(rs, "created_at"), instant(rs, "updated_at"), rs.getString("trigger_type"),
-                instant(rs, "scheduled_at"), source == null ? null : UUID.fromString(source), rs.getString("rerun_actor"), instant(rs, "finished_at"));
+                instant(rs, "scheduled_at"), source == null ? null : UUID.fromString(source), rs.getString("rerun_actor"), instant(rs, "finished_at"),
+                new Context(rs.getString("traceparent"), rs.getString("tracestate")));
     }
     private Attempt readAttempt(ResultSet rs, int index) throws SQLException {
         return new Attempt(UUID.fromString(rs.getString("id")), UUID.fromString(rs.getString("run_id")),

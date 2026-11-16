@@ -98,8 +98,12 @@ management:
       enabled: "${TASKFLOW_ADMIN_REDIS_ENABLED:false}"
 
 logging:
-  pattern:
-    level: "%5p [requestId=%X{requestId:-}]"
+  structured:
+    format:
+      console: "${TASKFLOW_LOG_FORMAT:logstash}"
+    json:
+      add:
+        serviceName: "${spring.application.name}"
 
 eureka:
   client:

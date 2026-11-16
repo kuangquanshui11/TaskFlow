@@ -90,6 +90,7 @@ onBeforeUnmount(() => controller?.abort());
         <div class="panel-heading"><h2 id="run-overview-title">运行概况</h2><RunStatusBadge :state="run.state" /></div>
         <dl class="detail-grid">
           <div class="wide"><dt>Run ID</dt><dd><code>{{ run.id }}</code></dd></div>
+          <div v-if="run.traceId" class="wide"><dt>Trace ID</dt><dd><code>{{ run.traceId }}</code></dd></div>
           <div><dt>任务 ID</dt><dd>{{ run.jobId }}</dd></div>
           <div><dt>触发来源</dt><dd>{{ TRIGGER_TYPES[run.triggerType] || run.triggerType || '—' }}</dd></div>
           <template v-if="run.sourceRunId">

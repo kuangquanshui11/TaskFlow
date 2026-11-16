@@ -23,6 +23,7 @@
 
 | 事件 | 记录条件 |
 | --- | --- |
+| `INBOX_ACCEPTED` | 首次接收派发时与 Inbox 同事务提交，重复投递沿用原记录 |
 | `HANDLER_STARTED` | 领取租约且通过执行资格检查后，进入调用 Handler 的边界前写入 |
 | `HANDLER_FINISHED` | 已进入 Handler 的执行结果成功保存 |
 | `EXECUTION_FINISHED`、`EXECUTION_RECOVERED` | 调用前失败，或重启收尾本地 RUNNING 工作 |

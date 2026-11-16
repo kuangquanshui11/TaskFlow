@@ -74,3 +74,6 @@ CREATE TABLE config_reconciliation_round (
     lease_id VARCHAR(36)
 );
 CREATE INDEX idx_config_reconciliation_round_started ON config_reconciliation_round (started_at,round_id);
+
+ALTER TABLE job_sync_outbox ADD COLUMN traceparent VARCHAR(512);
+ALTER TABLE job_sync_outbox ADD COLUMN tracestate VARCHAR(512);

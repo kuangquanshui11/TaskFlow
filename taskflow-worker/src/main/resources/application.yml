@@ -159,3 +159,11 @@ taskflow:
     max-report-attempts: 30
     report-retry-delay: 2s
     report-budget: "${TASKFLOW_REPORT_BUDGET:2s}"
+
+logging:
+  structured:
+    format:
+      console: "${TASKFLOW_LOG_FORMAT:logstash}"
+    json:
+      add:
+        serviceName: "${spring.application.name}"

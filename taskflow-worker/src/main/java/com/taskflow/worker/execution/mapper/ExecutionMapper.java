@@ -1,5 +1,6 @@
 package com.taskflow.worker.execution.mapper;
 
+import com.taskflow.worker.observability.config.AsyncTracing.Context;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;
@@ -25,8 +26,15 @@ public class ExecutionMapper {
                 runId.toString(), attemptId.toString(), workerId, limit);
     }
     public void insert(UUID attemptId, UUID runId, String fingerprint, String encoded, Instant now) {
-        jdbc.update("INSERT INTO worker_execution (attempt_id,run_id,fingerprint,dispatch_json,state,retryable,reported,report_count,next_report_at,created_at) VALUES (?,?,?,?,'ACCEPTED',FALSE,FALSE,0,?,?)",
-                attemptId.toString(), runId.toString(), fingerprint, encoded, ts(now), ts(now));
+        insert(attemptId, runId, fingerprint, encoded, now, null, Context.EMPTY);
+    }
+    public void insert(UUID attemptId, UUID runId, String fingerprint, String encoded, Instant now, String workerId, Context traceContext) {
+        jdbc.update("INSERT INTO worker_execution (attempt_id,run_id,fingerprint,dispatch_json,state,retryable,reported,report_count,next_report_at,created_at,traceparent,tracestate) VALUES (?,?,?,?,'ACCEPTED',FALSE,FALSE,0,?,?,?,?)",
+                attemptId.toString(), runId.toString(), fingerprint, encoded, ts(now), ts(now), traceContext.traceparent(), traceContext.tracestate());
+        if (workerId != null) jdbc.update("""
+                INSERT INTO worker_attempt_event (run_id,attempt_id,worker_id,event_type,occurred_at,state)
+                VALUES (?,?,?,'INBOX_ACCEPTED',?,'ACCEPTED')
+                """, runId.toString(), attemptId.toString(), workerId, ts(now));
     }
     public long pendingCount() {
         return jdbc.queryForObject("SELECT COUNT(*) FROM worker_execution WHERE state IN ('ACCEPTED','RUNNING')", Long.class);
@@ -143,7 +151,8 @@ public class ExecutionMapper {
                 rs.getString("fingerprint"), rs.getString("dispatch_json"), rs.getString("state"), rs.getString("result_code"),
                 rs.getString("message"), rs.getBoolean("retryable"), rs.getBoolean("reported"), rs.getInt("report_count"),
                 instant(rs, "next_report_at"), instant(rs, "created_at"), instant(rs, "finished_at"), rs.getString("report_worker_id"),
-                rs.getString("report_session_id") == null ? null : UUID.fromString(rs.getString("report_session_id")));
+                rs.getString("report_session_id") == null ? null : UUID.fromString(rs.getString("report_session_id")),
+                new Context(rs.getString("traceparent"), rs.getString("tracestate")));
     }
     private Instant instant(ResultSet rs, String name) throws SQLException {
         var value = rs.getTimestamp(name); return value == null ? null : value.toInstant();

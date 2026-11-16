@@ -37,6 +37,7 @@ import static org.mockito.ArgumentMatchers.*;
 @ActiveProfiles(resolver = RunStateConcurrencyTests.DatabaseProfiles.class)
 @ContextConfiguration(initializers = RunStateConcurrencyTests.DatabaseGuard.class)
 class RunStateConcurrencyTests {
+    @org.springframework.beans.factory.annotation.Autowired com.taskflow.scheduler.observability.config.AsyncTracing tracing;
     @Autowired IRunService runs;
     @Autowired JdbcTemplate jdbc;
     @Autowired JsonMapper json;
@@ -299,7 +300,7 @@ class RunStateConcurrencyTests {
         var mq = new DispatchProperties("rabbitmq", p.exchange(), p.queue(), p.routingKey(), p.deadLetterExchange(),
                 p.deadLetterQueue(), p.deadLetterRoutingKey(), p.confirmTimeout(), p.claimLease(), p.retryDelay(),
                 p.maxRetryDelay(), p.maxPublishAttempts(), false, p.nodeRecheckDelay());
-        return new RunServiceImpl(mapper, worker, runProperties, json, manager, mq, outbox, nodes);
+        return new RunServiceImpl(mapper, worker, runProperties, json, manager, mq, outbox, nodes, tracing);
     }
 
     private void assertCompleted(RunView run, String state, boolean retryable) {

@@ -1,5 +1,7 @@
 package com.taskflow.admin.jobsync.service.impl;
 
+import com.taskflow.admin.observability.config.AsyncTracing;
+import java.util.Map;
 import java.time.Instant;
 import java.util.UUID;
 import com.taskflow.admin.job.exception.JobException;
@@ -17,18 +19,20 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class JobSyncServiceImpl implements IJobSyncService {
+    private final AsyncTracing tracing;
     private final JobSyncMapper mapper;
     private final PlanSyncClient client;
     private final JobSyncProperties properties;
 
-    public JobSyncServiceImpl(JobSyncMapper mapper, PlanSyncClient client, JobSyncProperties properties) {
+    public JobSyncServiceImpl(JobSyncMapper mapper, PlanSyncClient client, JobSyncProperties properties, AsyncTracing tracing) {
         this.mapper = mapper; this.client = client; this.properties = properties;
+        this.tracing = tracing;
     }
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public void enqueue(JobDefinition job, boolean deleted) {
-        mapper.insert(new Event(UUID.randomUUID(), job.id(), job.configVersion(), deleted, job.configuration()));
+        mapper.insert(new Event(UUID.randomUUID(), job.id(), job.configVersion(), deleted, job.configuration()), tracing.capture());
     }
 
     @Override
@@ -40,7 +44,10 @@ public class JobSyncServiceImpl implements IJobSyncService {
             var claimed = mapper.claim(id, UUID.randomUUID(), now, now.plus(properties.claimLease()), properties.maxAttempts());
             if (claimed.isEmpty()) continue;
             var delivery = claimed.get();
-            try { mapper.acknowledge(delivery, client.send(delivery.event()), Instant.now()); }
+            try (var trace = tracing.start("job.sync", delivery.traceContext(), Map.of("eventId", id,
+                    "jobId", delivery.event().jobId(), "configVersion", delivery.event().configVersion()))) {
+                mapper.acknowledge(delivery, client.send(delivery.event()), Instant.now());
+            }
             catch (DeliveryException error) {
                 var failedAt = Instant.now();
                 var delay = properties.retryDelay().multipliedBy(1L << (delivery.attempts() - 1));

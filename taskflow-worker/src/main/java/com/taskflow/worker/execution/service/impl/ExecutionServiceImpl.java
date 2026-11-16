@@ -1,5 +1,7 @@
 package com.taskflow.worker.execution.service.impl;
 
+import com.taskflow.worker.observability.config.AsyncTracing;
+import java.util.Map;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -31,6 +33,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 @Service
 public class ExecutionServiceImpl implements IExecutionService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ExecutionServiceImpl.class);
+    private final AsyncTracing tracing;
     private final ExecutionMapper mapper;
     private final IHandlerRegistryService handlers;
     private final SchedulerReportClient reports;
@@ -46,11 +50,12 @@ public class ExecutionServiceImpl implements IExecutionService {
     public ExecutionServiceImpl(ExecutionMapper mapper, IHandlerRegistryService handlers, SchedulerReportClient reports,
                                 ExecutionProperties properties, JsonMapper json, PlatformTransactionManager manager,
                                 IExecutionResultService results, IExecutionLeaseService leases,
-                                IExecutionRecoveryService recovery) {
+                                IExecutionRecoveryService recovery, AsyncTracing tracing) {
         this.mapper = mapper; this.handlers = handlers; this.reports = reports; this.properties = properties; this.json = json;
         this.results = results;
         this.leases = leases;
         this.recovery = recovery;
+        this.tracing = tracing;
         transactions = new TransactionTemplate(manager);
         pool = new ThreadPoolExecutor(properties.parallelism(), properties.parallelism(), 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(properties.parallelism()), Thread.ofPlatform().name("taskflow-handler-", 0).factory(),
@@ -77,11 +82,15 @@ public class ExecutionServiceImpl implements IExecutionService {
             transactions.executeWithoutResult(status -> {
                 if (mapper.pendingCount() >= properties.maxPending())
                     throw new ExecutionException(429, "WORKER_BUSY", "Worker 待执行容量已满");
-                mapper.insert(request.attemptId(), request.runId(), fingerprint, encoded, Instant.now());
+                mapper.insert(request.attemptId(), request.runId(), fingerprint, encoded, Instant.now(),
+                        leases.owner().workerId(), tracing.capture());
             });
         } catch (DuplicateKeyException concurrentInsert) {
             return requireSame(mapper.find(request.attemptId()).orElseThrow(() -> concurrentInsert), fingerprint);
         }
+        log.atInfo().addKeyValue("event", "INBOX_ACCEPTED").addKeyValue("runId", request.runId())
+                .addKeyValue("attemptId", request.attemptId()).addKeyValue("workerId", leases.owner().workerId())
+                .log("Dispatch stored in Inbox");
         return new Accepted(request.attemptId(), "ACCEPTED");
     }
     @Override
@@ -111,7 +120,12 @@ public class ExecutionServiceImpl implements IExecutionService {
                 if (!mapper.claim(row.attemptId(), leases.owner())) continue;
                 try {
                     var dispatch = json.readValue(row.dispatchJson(), Dispatch.class);
-                    pool.execute(() -> execute(dispatch));
+                    pool.execute(() -> {
+                        try (var trace = tracing.start("attempt.execute", row.traceContext(), Map.of(
+                                "runId", row.runId(), "attemptId", row.attemptId(), "workerId", leases.owner().workerId()))) {
+                            execute(dispatch);
+                        }
+                    });
                     submitted = true;
                 } catch (RuntimeException failure) {
                     boolean rejected = failure instanceof RejectedExecutionException;
@@ -196,6 +210,8 @@ public class ExecutionServiceImpl implements IExecutionService {
                 }
             }
             // 终态、待上报信息与事件一起提交；HTTP 上报由独立扫描完成。
+            tracing.tag("resultCode", code);
+            log.atInfo().addKeyValue("resultCode", code).log("Attempt execution ended");
             deferred = saveResult(new ExecutionCompletion(dispatch.attemptId(), dispatch.runId(), state, code, message,
                     retryable, handlerStarted, Instant.now()));
         } catch (RuntimeException failure) {
@@ -242,8 +258,13 @@ public class ExecutionServiceImpl implements IExecutionService {
             var result = new Result(row.attemptId(), row.runId(), dispatch.leaseVersion(), row.state(),
                     row.resultCode(), row.message(), row.retryable(), row.reportWorkerId(), row.reportSessionId());
             Outcome outcome;
-            try { outcome = reports.report(result); }
-            catch (RuntimeException ignored) { outcome = Outcome.UNCONFIRMED; }
+            try (var trace = tracing.start("attempt.report", row.traceContext(), Map.of(
+                    "runId", row.runId(), "attemptId", row.attemptId(), "reportNumber", row.reportCount() + 1))) {
+                try { outcome = reports.report(result); }
+                catch (RuntimeException ignored) { outcome = Outcome.UNCONFIRMED; }
+                trace.span().tag("resultCode", outcome.name());
+                log.atInfo().addKeyValue("resultCode", outcome.name()).log("Attempt result report completed");
+            }
             int number = row.reportCount() + 1;
             boolean settled = outcome == Outcome.ACKNOWLEDGED || outcome == Outcome.STALE;
             boolean exhausted = !settled && number >= properties.maxReportAttempts();

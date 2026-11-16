@@ -1,6 +1,9 @@
 package com.taskflow.worker.dispatch.service.impl;
 
+import com.taskflow.worker.observability.config.AsyncTracing;
+import com.taskflow.worker.observability.config.AsyncTracing.Context;
 import java.io.IOException;
+import java.util.Map;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.TimeUnit;
@@ -19,12 +22,14 @@ import tools.jackson.databind.json.JsonMapper;
 @Service
 @ConditionalOnProperty(name = "taskflow.dispatch.transport", havingValue = "rabbitmq", matchIfMissing = true)
 public class DispatchConsumerServiceImpl implements IDispatchConsumerService {
+    private final AsyncTracing tracing;
     private final IExecutionService executions;
     private final JsonMapper json;
     private final Validator validator;
     private final DispatchProperties properties;
-    public DispatchConsumerServiceImpl(IExecutionService executions, JsonMapper json, Validator validator, DispatchProperties properties) {
+    public DispatchConsumerServiceImpl(IExecutionService executions, JsonMapper json, Validator validator, DispatchProperties properties, AsyncTracing tracing) {
         this.executions = executions; this.json = json; this.validator = validator; this.properties = properties;
+        this.tracing = tracing;
     }
     @Override
     public void consume(Message message, Channel channel) throws IOException {
@@ -44,6 +49,19 @@ public class DispatchConsumerServiceImpl implements IDispatchConsumerService {
                     id != null && id.matches("[a-f0-9-]{36}") ? id : "unknown");
             channel.basicReject(tag, false); return;
         }
+        var headers = message.getMessageProperties().getHeaders();
+        var parent = new Context(traceHeader(headers.get("traceparent")), traceHeader(headers.get("tracestate")));
+        try (var trace = tracing.start("dispatch.consume", parent, Map.of("runId", event.command().runId(),
+                "attemptId", event.command().attemptId(), "eventId", event.eventId()))) {
+            accept(event, channel, tag);
+        }
+    }
+
+    private static String traceHeader(Object value) {
+        return value instanceof String header && header.length() <= 512 ? header : null;
+    }
+
+    private void accept(DispatchEvent event, Channel channel, long tag) throws IOException {
         int failures = 0;
         boolean waitingForCapacity = false;
         // prefetch=1 时保留当前 delivery 即形成背压，不通过反复 requeue 消耗 Broker 投递次数。

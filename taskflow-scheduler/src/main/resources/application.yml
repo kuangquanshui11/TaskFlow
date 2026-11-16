@@ -163,3 +163,11 @@ taskflow:
     max-pending: 32
     max-report-attempts: 30
     report-retry-delay: 2s
+
+logging:
+  structured:
+    format:
+      console: "${TASKFLOW_LOG_FORMAT:logstash}"
+    json:
+      add:
+        serviceName: "${spring.application.name}"
