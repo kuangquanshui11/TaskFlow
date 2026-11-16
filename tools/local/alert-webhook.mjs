@@ -1,11 +1,23 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { join } from 'node:path';
 
-const [port, output] = process.argv.slice(2);
+const [port, output, fixtureDirectory] = process.argv.slice(2);
 
 createServer(async (request, response) => {
   if (request.method === 'GET' && request.url === '/health') {
     response.writeHead(200).end();
+    return;
+  }
+  const metrics = /^\/(broker-[ab])\/metrics\/detailed(?:\?|$)/.exec(request.url);
+  if (fixtureDirectory && request.method === 'GET' && metrics) {
+    try {
+      const body = readFileSync(join(fixtureDirectory, metrics[1] + '.prom'), 'utf8');
+      if (body === 'unavailable') { response.writeHead(503).end(); return; }
+      response.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' }).end(body);
+    } catch {
+      response.writeHead(503).end();
+    }
     return;
   }
   if (request.method !== 'POST' || request.url !== '/webhook') {

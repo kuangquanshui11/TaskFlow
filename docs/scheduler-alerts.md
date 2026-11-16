@@ -1,24 +1,39 @@
-# Scheduler 告警 S3
+# TaskFlow 业务失败与多节点告警
 
-我用 Scheduler 已有的 Micrometer OTLP 导出，将派发逾期数量和最近成功采样年龄发送到 Prometheus。Prometheus 评估规则，Alertmanager 按告警名和实例分组，通过已配置的 webhook 发送触发和恢复通知。Scheduler 继续读取自己的数据库，告警链路只消费导出的指标。
+我沿用 Scheduler 和 Worker 的 Micrometer OTLP 指标，由 Prometheus 评估告警，Alertmanager 分组后发送 Webhook。Scheduler 从自己的数据库观察终态 Run、Worker 心跳、派发 Outbox 和已入库死信。Worker 从自己的 Inbox 观察本节点的结果上报耗尽。Broker 死信队列通过 RabbitMQ 自带的 Prometheus 插件采集。[指标字典](observability-metrics.md) · [派发故障查询与处置](api.md#派发故障查询与处置)
 
 ## 规则与数据边界
 
-| 告警 | 触发条件 | 解除条件 |
+| 告警 | 触发与恢复 | 定位 |
 | --- | --- | --- |
-| `TaskFlowSchedulerDispatchOverdue` | 指标新鲜且派发逾期数量持续大于 0，满 2 分钟 | 逾期数归零或指标失去新鲜度 |
-| `TaskFlowSchedulerMetricsUnavailable` | 指标缺失、尚未采样或过期，持续 2 分钟 | 两项指标恢复有效且新鲜 |
+| `TaskFlowRunBusinessFailure` | 最近 5 分钟按 `finished_at` 观察到 `FAILED` 且结果码为 `BUSINESS_HANDLER_FAILED` 或 `HANDLER_FAILED`。按结果码分别触发，窗口清空后解除。进入 `RETRY_WAIT` 的 Attempt 不算终态 | 通知包含结果码和运行列表链接，默认查最近 24 小时的结束时间。可根据通知的触发时间缩小范围，点击 Run ID 查看任务快照和 Attempt |
+| `TaskFlowWorkerOffline` | 预期 Worker 没有注册记录或心跳过期持续 1 分钟。注册或心跳恢复后解除 | 通知包含 `worker_id`。在控制台「工作节点」按 ID 搜索，在部署清单核对从未注册的节点 |
+| `TaskFlowSchedulerDispatchOverdue` | 到期尚待派发的 Attempt 持续存在 2 分钟 | 核对 Worker 资格、派发 Outbox 和 Broker |
+| `TaskFlowDispatchOutboxPublishOverdue` / `TaskFlowDispatchOutboxClaimExpired` / `TaskFlowDispatchOutboxExhausted` | 分别观察 READY 发布逾期、SENDING 领取超时、发布耗尽且未结案，持续 2 分钟 | 根据类型核对派发日志、Broker 与运行详情的派发故障 |
+| `TaskFlowDeadLetterUnresolved` | 已入库死信持续有记录待结案，持续 2 分钟 | 在运行详情或派发故障查询中用 Run、Attempt 或事件 ID 检索 |
+| `TaskFlowWorkerReportExhausted` | 某 Worker Inbox 存在结果上报耗尽且尚未确认，持续 2 分钟 | 标签 `instance` 是 Worker ID。用该节点报告日志中的 Run / Attempt ID 查询运行详情。Scheduler 结案和 Worker 本地结果确认各自独立 |
+| `TaskFlowBrokerDeadLetterBacklog` | Broker 死信队列深度（待消费及未确认）持续大于零满 2 分钟 | 通知包含 `broker_cluster`、`vhost` 和 `queue` |
+| `TaskFlowSchedulerMetricsUnavailable` / `TaskFlowWorkerMetricsUnavailable` | 预期实例尚无有效采样、样本陈旧或指标缺失，持续 2 分钟。该实例恢复有效样本后解除 | 用 `job` 和 `instance` 核对本地采样日志、Actuator 与 OTLP 配置 |
+| `TaskFlowSchedulerClusterMetricsUnavailable` / `TaskFlowBrokerMetricsUnavailable` | 无新鲜 Scheduler 样本或某 Broker 目标抓取失败，持续 2 分钟。任一 Scheduler 恢复有效采样或对应 Broker 抓取重新成功时解除 | 核对 Scheduler 数据源、采样日志或 Broker 抓取状态 |
 
-我在 `taskflow:scheduler_metrics:fresh` 中检查两个 Gauge 均存在且非负。最近成功采样年龄加上本次导出距今的时间须不超过 90 秒，逾期数量的导出也须在最近 90 秒内。采样失败时 Gauge 会保留原来的数量，即使逾期数量仍为正，也会随采样年龄超过 90 秒而退出派发告警。停止 OTLP 推送时，Prometheus 同样按上次接收的指标时间戳判定过期。没有序列的启动窗口使用 2 分钟等待期。
+应用每 15 秒采样并导出，Prometheus 每 15 秒评估。最近成功的采样年龄加上导出以后经过的时间，最多为 90 秒。参与业务规则的计数也必须非负且最近 90 秒内导出。采样 SQL 失败时保留旧值，直到该轮数据过期。此时相关业务规则退出，收到 resolved 表示规则退出，确认实际恢复需要看到新鲜样本及清零。所有 Scheduler 样本过期时，由集群采样中断告警表示业务状态未知。终态业务失败规则观察滚动窗口，采集停顿超过窗口时可从运行历史补查。
 
-部署示例每 15 秒采样、导出和评估一次。阈值与持续时间在 `deploy/observability/scheduler-alerts.yml` 中配置，修改后重启 Prometheus。Alertmanager 首次分组等待 10 秒，同组更新间隔 30 秒，持续触发时每 4 小时重复通知。实际通知时间还取决于各周期对齐和接收端可用性。
-
-我为首版指定一个告警来源，OTLP 资源标识为 `service.name=taskflow-scheduler` 和 `service.instance.id=scheduler-1`。Prometheus 转为 `job` 和 `instance`，名称转换保留单位后缀，例如 `taskflow_metrics_sample_age_seconds`。其他实例的积压不累加。多实例部署中，应只给承担告警采样的一个 Scheduler 使用 `scheduler-1`，迁移该角色时先停旧实例的导出。多实例逐节点健康及通知高可用需独立实施。 [Prometheus OTLP 指南](https://prometheus.io/docs/guides/opentelemetry/)
+我让读取同一 Scheduler 数据库的实例各自采样，过滤陈旧来源后取最大值。Outbox、Attempt、Run 和入库死信各自按指标语义聚合，同一记录只进入一条集群告警。分时观测时，较大的新鲜读数可能维持到下一次采样。Worker 在线只要其中一台有效 Scheduler 样本显示在线即可。每个 Worker 的 Inbox 独立，按对应 Worker ID 告警。Broker 只采纳最新抓取成功的来源，同一 `broker_cluster/vhost/queue` 取最大值，队列在节点间迁移时告警身份保持一致。抓取失败后业务样本失效，告警应与抓取状态一起排查。
 
 ## 部署与排查
 
-1. 准备 Docker Compose v2、可运行的 Scheduler 以及 Alertmanager 容器可访问的 webhook 接收端。接收端应处理 Alertmanager 通用 JSON 并返回 2xx。将实际 URL 单独保存到本地忽略目录下的 UTF-8 文本文件，例如 `.tools/scheduler-alert-webhook.txt`。
-2. 启动监控组件。Compose 以只读 secret 提供 URL，两个 HTTP 端口只发布到主机回环地址。
+1. 准备 Docker Compose v2、Scheduler / Worker 和 Alertmanager 可访问的通用 JSON Webhook。接收端返回 2xx。将实际 URL 保存到被忽略的 UTF-8 文件中，例如 `.tools/scheduler-alert-webhook.txt`。
+2. 按部署调整 `deploy/observability/prometheus.yml` 的 `environment` 与控制台绝对地址 `console_url`，末尾省略斜杠。每套 Prometheus 配置只监控一个共享 Scheduler 数据库的部署环境。按 `expected-targets.yml` 的格式列出预期的 Scheduler 和 Worker。每个 Scheduler 分配唯一的 `TASKFLOW_SCHEDULER_METRICS_INSTANCE_ID`。Worker 的 OTLP `instance` 直接沿用 `TASKFLOW_WORKER_ID`。计划退役时移除对应预期记录。
+3. 将 `config/taskflow-scheduler-alerts.example.yml` 和 `config/taskflow-worker-alerts.example.yml` 分别合并到被忽略的 Scheduler、Worker 本地配置。所有读取同一库的 Scheduler 使用同一个 `TASKFLOW_METRICS_EXPECTED_WORKERS`，以逗号分隔，最多 100 个 Worker ID。更新节点清单时同时更新这份配置和 Prometheus 的预期目标。重启相应应用使配置生效。跨主机 OTLP 导出指向私有监控网络上的接收入口。
+4. 需要采集 Broker 时启用 `rabbitmq_prometheus`，在 `rabbitmq.targets.yml` 添加每个集群的节点和集群标识。多节点使用同一个集群标签。若 Broker 与 Prometheus 位于不同 Compose 项目，需要给 Prometheus 接入 Broker 的私有网络或填写可从监控容器路由的地址。根据部署调整 `prometheus.yml` 中的 vhost 过滤。留空的目标文件表示未启用 Broker 采集。
+
+   ```yaml
+   - targets: ["rabbit1:15692", "rabbit2:15692", "rabbit3:15692"]
+     labels:
+       broker_cluster: taskflow-mq
+   ```
+
+5. 启动监控组件。Prometheus 和 Alertmanager 对主机只发布回环端口，Webhook URL 通过只读 secret 挂载。
 
    ```powershell
    $env:TASKFLOW_ALERT_WEBHOOK_FILE = (Resolve-Path .tools/scheduler-alert-webhook.txt).Path
@@ -26,28 +41,50 @@
    docker compose -f deploy/observability/compose.yml up -d
    ```
 
-3. 将 `config/taskflow-scheduler-alerts.example.yml` 中的设置合并到被忽略的 `config/taskflow-scheduler-local.yml`。已有 `management` 键时合并子项。Scheduler 默认每 15 秒采样。若采样已关闭，先启用 `taskflow.metrics.enabled`。独立主机部署须配置 Scheduler 可访问的 `TASKFLOW_SCHEDULER_ALERTS_OTLP_URL`，使用受限监控网络和认证入口。重启 Scheduler 后生效。
-4. 打开 `http://127.0.0.1:9090/alerts`，在 Prometheus 查询 `taskflow:scheduler_metrics:fresh{job="taskflow-scheduler",instance="scheduler-1"}`。正常情况下返回 1。`http://127.0.0.1:9093` 展示 Alertmanager 收到的告警。
+6. 在 `http://127.0.0.1:9090/alerts` 和两个 Alertmanager 页面（端口 9093 和 9095）核对规则、集群成员和告警。Prometheus 查询可用 `taskflow:metrics:expected`、`taskflow:scheduler_metrics:fresh`、`taskflow:worker_metrics:fresh`、`taskflow:worker_node:online` 和 `taskflow:broker_dead_letter:queued`。本机 Actuator 采样正常但 Prometheus 无样本时，检查导出地址、资源标识、进程时钟和导出日志。已触发但未通知时，检查两台 Alertmanager 的日志、secret 挂载及 Webhook 响应。
 
-收到派发逾期告警时，先检查 Worker 资格、Scheduler Outbox 状态及 Broker 连接。收到采样中断告警时，检查 Scheduler 采样日志和 `/actuator/metrics/taskflow.metrics.sample.age`。若本地样本新鲜但 Prometheus 缺少序列，检查 OTLP 地址、导出错误、时钟和资源标识。若规则已触发但 webhook 没有收到通知，检查 Alertmanager 容器日志、URL 文件挂载和接收端响应。 [Alertmanager webhook 配置](https://prometheus.io/docs/alerting/latest/configuration/#webhook_config)
+### 通知高可用
 
-停用时先关闭指定 Scheduler 的 OTLP 指标导出并重启，再停止监控 Compose。Compose 数据卷保留最近的指标及 Alertmanager 状态。
+我将 Prometheus 配置为同时把告警发送给两个 Alertmanager。两个成员配置相同接收端，使用各自的数据卷，通过 9094 TCP/UDP 同步静默和通知记录。Compose 将两者部署在同一主机，用于验证进程级故障切换。生产若要覆盖主机故障，分别部署在不同主机，使用对端可达的通告地址，并让 Prometheus 直接访问两台的 HTTP 接口。Prometheus 和 Webhook 接收端各自的可用性由部署环境管理。网络分区期间可能出现重复通知，接收端要允许重复投递。[Alertmanager 高可用](https://prometheus.io/docs/alerting/latest/high_availability/)
+
+通知按环境和告警名分组。首批等待 10 秒，同组变化间隔 30 秒，持续告警 4 小时后重复通知。节点、结果码或队列标识保留在每条告警中，通知发送耗时还受规则评估、聚类同步和 Webhook 响应影响。停用时先关闭应用的 OTLP 指标导出并重启，再停止监控 Compose。数据卷保留历史指标与通知记录。
 
 ## 验证命令
 
-规则测试使用与 Compose 相同版本的 Prometheus 3.13.5。通知验收同时使用 Alertmanager 0.34.2、Java 21、Node.js 和 Maven 本机仓库中的 H2 驱动。Windows 可从官方发布页下载工具，按发布页的 SHA256 校验，并将 `promtool.exe`、`prometheus.exe` 和 `alertmanager.exe` 所在目录加入 PATH。 [官方下载](https://prometheus.io/download/)
+规则和通知验收使用与 Compose 相同版本的 Prometheus 3.13.5、Alertmanager 0.34.2。端到端脚本还需要 Java 21、Node.js 和 Maven 缓存中的 H2 驱动。[官方下载](https://prometheus.io/download/)
 
 ```powershell
 .\mvnw.cmd -B -o verify
 promtool check config deploy/observability/prometheus.yml
 promtool test rules deploy/observability/scheduler-alerts.test.yml
+amtool check-config deploy/observability/alertmanager.yml
 .\tools\test-scheduler-alerts.ps1 -PrometheusPath (Get-Command prometheus.exe).Source `
   -AlertmanagerPath (Get-Command alertmanager.exe).Source -SkipBuild
 ```
 
-端到端脚本使用真实 Scheduler 可执行 JAR、独立 H2 文件库、原生 Prometheus 和 Alertmanager。它保留发布规则及通知计时，在随机回环端口启动测试 webhook。脚本通过 Scheduler 内部 API 创建 Attempt，再在隔离库调整到期时间和暂时重命名 `worker_node`，验证 SQL 采样失败时保留旧值。报告记录告警 API 和 webhook 的触发、恢复结果，保存到 `.tools/scheduler-alerts/`。脚本退出时清理本轮进程。
+上线前确认 Scheduler 数据库已应用 Flyway V13。该迁移给 `run_execution.finished_at` 新增索引，用于最近终态失败采样和结束时间查询。
 
-### 2026-11-09 验证记录
+端到端脚本通过两个 Scheduler、一个 Worker、两个 Alertmanager、Prometheus 和本机 Webhook 验证告警触发、分组、恢复和单成员停止后的通知。Scheduler 共用一个隔离 H2 库，Worker 使用独立 H2。脚本用两个 HTTP 指标夹具模拟同一死信队列的重复观测和来源切换。实际 RabbitMQ quorum 队列切换、Compose 容器及线上 Webhook 需在目标环境独立验收。脚本证据保存到 `.tools/scheduler-alerts/`。
+
+### RabbitMQ 领导者切换验收
+
+在隔离 RabbitMQ 4.3+ 三节点集群建立临时 vhost 和三副本 quorum 死信队列。Prometheus 抓取三台节点并使用同一个 `broker_cluster` 标签。保留一条待消费死信，核对告警只对应一个 `broker_cluster/vhost/queue`。记录队列领导者，停止该隔离节点，确认接任节点可被抓取、消息仍在、队列告警身份未变化。恢复原节点并消费测试消息，再核对一条队列恢复通知。保存切换前后的 `rabbitmq-queues quorum_status`、Prometheus 查询和 Webhook 通知。
+
+### 2026-11-16 多节点验证记录
+
+环境为 Windows、Java 21.0.12.1、Maven 3.10.0、H2 2.4.240、MySQL 8.0.34、Prometheus 3.13.5、Alertmanager 0.34.2、Docker Compose 5.6.1 和 Chromium。证据时间使用 Asia/Shanghai。
+
+| 命令或检查 | 结果 | 证据 |
+| --- | --- | --- |
+| Maven `-B -o --fail-at-end verify` | 全仓最终通过，402 项通过、52 项按条件跳过。Windows Wrapper 启动失败后使用其缓存的 Maven 3.10.0，在隔离源码副本中复跑。前两次全仓验证分别遇到 Admin 配置对账和订单清理测试失败，最终独立运行均通过 | `.tools/p04-root-final.log` |
+| `promtool check config`、`promtool test rules`、`amtool check-config`、Compose `config --quiet` | 配置全部通过，6 组规则用例通过 | `deploy/observability/scheduler-alerts.test.yml` |
+| `test-scheduler-alerts.ps1 -SkipBuild` | 19 项检查通过，11:16:11 完成。13 组触发通知和 13 组恢复通知，每组一次。覆盖双 Scheduler、Worker 离线和恢复、旧积压值失效以及停止一台 Alertmanager 后的通知 | `.tools/scheduler-alerts/20261116-110306-176/report.json` 和同目录 `webhook.jsonl` |
+| `test-execution.ps1 -SkipBuild -IncludeRunRerun` | 53 项隔离检查、30 项前端单元测试、3 项 Playwright 用例和前端构建通过。查看了结束时间筛选桌面截图和 390px 移动端截图 | `.tools/execution-e2e/20261116-110907-819/report.json`、`global-runs-finished.png` 和 `global-runs-mobile.png` |
+| 隔离 MySQL 执行 Scheduler V1–V13，用 1,000 条终态 Run 检查 `EXPLAIN` | 近 5 分钟匹配 4 条。失败采样和结束时间查询均以 `range` 使用 `idx_run_finished_at` | `.tools/p04-mysql/20261116-110204/result.log` |
+
+Broker 故障和重复来源用 HTTP 指标夹具验证。实际 RabbitMQ 4.3+ quorum 领导者切换、Compose 容器启动和目标环境 Webhook 联调待实地验收。
+
+### 2026-11-09 单 Scheduler 验证记录
 
 环境为 Windows、Java 21.0.12.1、Node.js 24.15.0、H2 2.4.240、Prometheus 3.13.5 和 Alertmanager 0.34.2。隔离 Scheduler 每 5 秒采样，导出、规则评估和通知时序沿用部署配置。
 

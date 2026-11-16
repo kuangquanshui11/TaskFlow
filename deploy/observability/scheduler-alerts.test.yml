@@ -1,148 +1,319 @@
-rule_files: [scheduler-alerts.yml]
+rule_files: [expected-targets.yml, scheduler-alerts.yml]
 evaluation_interval: 15s
+group_eval_order: [taskflow-expected-targets, taskflow-alerts]
 
 tests:
-  - name: P02 alerts fire for fresh unresolved failures and resolve after clearance or stale sampling
+  - name: Shared Scheduler backlog counts once and drops stale retained values
     interval: 15s
+    external_labels: {console_url: http://console.example.test}
     input_series:
       - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
-        values: '5+0x12'
-      - series: 'taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
-        values: '1+0x8 0+0x3'
+        values: '5+0x8 100+0x11 5+0x4'
+      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '2+0x24'
+      - series: 'taskflow_dispatch_outbox_publish_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '2+0x24'
+      - series: 'taskflow_dispatch_outbox_claim_expired{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '2+0x24'
       - series: 'taskflow_dispatch_outbox_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
-        values: '1+0x8 0+0x3'
-      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-worker",instance="worker-1"}'
-        values: '5+0x8 100+0x3'
-      - series: 'taskflow_worker_result_report_exhausted{job="taskflow-worker",instance="worker-1"}'
-        values: '1+0x12'
-      - series: 'up{job="rabbitmq-dead-letter",instance="rabbit1"}'
-        values: '1+0x8 0+0x3'
-      - series: 'rabbitmq_detailed_queue_messages{job="rabbitmq-dead-letter",instance="rabbit1",queue="taskflow.worker.default.dead.v1",vhost="taskflow"}'
-        values: '2+0x12'
+        values: '2+0x24'
+      - series: 'taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '2+0x24'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-1",result_code="HANDLER_FAILED"}'
+        values: '0+0x25'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-1",result_code="BUSINESS_HANDLER_FAILED"}'
+        values: '0+0x25'
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '5+0x25'
+      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '2+0x8 0+0x16'
+      - series: 'taskflow_dispatch_outbox_publish_overdue{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '2+0x8 0+0x16'
+      - series: 'taskflow_dispatch_outbox_claim_expired{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '2+0x8 0+0x16'
+      - series: 'taskflow_dispatch_outbox_unresolved{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '2+0x8 0+0x16'
+      - series: 'taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '2+0x8 0+0x16'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-2",result_code="HANDLER_FAILED"}'
+        values: '0+0x25'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-2",result_code="BUSINESS_HANDLER_FAILED"}'
+        values: '0+0x25'
     alert_rule_test:
       - eval_time: 2m
-        alertname: TaskFlowDeadLetterUnresolved
+        alertname: TaskFlowSchedulerDispatchOverdue
         exp_alerts:
-          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
-            exp_annotations: {summary: Dispatch dead letters require review}
+          - exp_labels: {"job":"taskflow-scheduler","severity":"warning"}
+            exp_annotations: {"summary":"Scheduler dispatch is overdue","description":"2 attempts are overdue. Check Worker eligibility, dispatch Outbox and Broker connectivity."}
+      - eval_time: 2m
+        alertname: TaskFlowDispatchOutboxPublishOverdue
+        exp_alerts:
+          - exp_labels: {"job":"taskflow-scheduler","severity":"warning"}
+            exp_annotations: {"summary":"Dispatch Outbox publications are overdue"}
+      - eval_time: 2m15s
+        alertname: TaskFlowDispatchOutboxPublishOverdue
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: TaskFlowDispatchOutboxClaimExpired
+        exp_alerts:
+          - exp_labels: {"job":"taskflow-scheduler","severity":"warning"}
+            exp_annotations: {"summary":"Dispatch Outbox claims have expired"}
+      - eval_time: 2m15s
+        alertname: TaskFlowDispatchOutboxClaimExpired
+        exp_alerts: []
       - eval_time: 2m
         alertname: TaskFlowDispatchOutboxExhausted
         exp_alerts:
-          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
-            exp_annotations: {summary: Dispatch Outbox publications exhausted}
+          - exp_labels: {"job":"taskflow-scheduler","severity":"warning"}
+            exp_annotations: {"summary":"Dispatch Outbox publications exhausted"}
+      - eval_time: 2m15s
+        alertname: TaskFlowDispatchOutboxExhausted
+        exp_alerts: []
       - eval_time: 2m
-        alertname: TaskFlowWorkerReportExhausted
+        alertname: TaskFlowDeadLetterUnresolved
         exp_alerts:
-          - exp_labels: {job: taskflow-worker, instance: worker-1, severity: warning}
-            exp_annotations: {summary: Worker result reports exhausted}
-      - eval_time: 2m
-        alertname: TaskFlowBrokerDeadLetterBacklog
-        exp_alerts:
-          - exp_labels: {job: rabbitmq-dead-letter, instance: rabbit1, queue: taskflow.worker.default.dead.v1, vhost: taskflow, severity: warning}
-            exp_annotations: {summary: RabbitMQ dead-letter queue has pending deliveries}
-      - {eval_time: 2m15s, alertname: TaskFlowDeadLetterUnresolved, exp_alerts: []}
-      - {eval_time: 2m15s, alertname: TaskFlowDispatchOutboxExhausted, exp_alerts: []}
-      - {eval_time: 2m15s, alertname: TaskFlowWorkerReportExhausted, exp_alerts: []}
-      - {eval_time: 2m15s, alertname: TaskFlowBrokerDeadLetterBacklog, exp_alerts: []}
-
-  - name: A short spike is ignored and sustained dispatch delay fires then resolves
-    interval: 15s
-    input_series:
-      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
-        values: '5+0x17'
-      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
-        values: '0 1 0 2+0x8 0+0x4'
-    alert_rule_test:
-      - {eval_time: 30s, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
-      - {eval_time: 2m30s, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
-      - eval_time: 2m45s
+          - exp_labels: {"job":"taskflow-scheduler","severity":"warning"}
+            exp_annotations: {"summary":"Dispatch dead letters require review"}
+      - eval_time: 2m15s
+        alertname: TaskFlowDeadLetterUnresolved
+        exp_alerts: []
+      - eval_time: 2m15s
         alertname: TaskFlowSchedulerDispatchOverdue
-        exp_alerts:
-          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
-            exp_annotations:
-              summary: Scheduler dispatch is overdue
-              description: 2 attempts are overdue for dispatch. Check Worker eligibility, dispatch Outbox and Broker connectivity.
-      - {eval_time: 3m, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
-      - {eval_time: 3m, alertname: TaskFlowSchedulerMetricsUnavailable, exp_alerts: []}
-
-  - name: Stale sampling stops the delay alert even while the retained count is positive
-    interval: 15s
-    input_series:
-      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
-        values: '5+0x8 100+0x9 5+0x6'
-      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
-        values: '1+0x18 0+0x6'
-    alert_rule_test:
-      - eval_time: 2m
-        alertname: TaskFlowSchedulerDispatchOverdue
-        exp_alerts:
-          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
-            exp_annotations:
-              summary: Scheduler dispatch is overdue
-              description: 1 attempts are overdue for dispatch. Check Worker eligibility, dispatch Outbox and Broker connectivity.
-      - {eval_time: 2m15s, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
-      - {eval_time: 4m, alertname: TaskFlowSchedulerMetricsUnavailable, exp_alerts: []}
+        exp_alerts: []
       - eval_time: 4m15s
         alertname: TaskFlowSchedulerMetricsUnavailable
         exp_alerts:
-          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
-            exp_annotations:
-              summary: Scheduler metrics are unavailable
-              description: Dispatch metrics are missing, unknown or stale. Check Scheduler sampling and OTLP export.
-      - {eval_time: 4m45s, alertname: TaskFlowSchedulerMetricsUnavailable, exp_alerts: []}
-      - {eval_time: 4m45s, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
-
-  - name: Another instance cannot hide a missing dispatch series for the expected Scheduler
-    interval: 15s
-    input_series:
-      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
-        values: '5+0x12'
-      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="other"}'
-        values: '5+0x12'
-      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="other"}'
-        values: '9+0x12'
-    alert_rule_test:
-      - {eval_time: 2m, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
-      - eval_time: 2m
+          - exp_labels: {"job":"taskflow-scheduler","instance":"scheduler-1","severity":"warning"}
+            exp_annotations: {"summary":"Scheduler metrics are unavailable","description":"An expected Scheduler has missing, unknown or stale samples."}
+      - eval_time: 4m15s
+        alertname: TaskFlowSchedulerClusterMetricsUnavailable
+        exp_alerts: []
+      - eval_time: 5m15s
         alertname: TaskFlowSchedulerMetricsUnavailable
-        exp_alerts:
-          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
-            exp_annotations:
-              summary: Scheduler metrics are unavailable
-              description: Dispatch metrics are missing, unknown or stale. Check Scheduler sampling and OTLP export.
-
-  - name: Stopped OTLP pushes age out before the normal Prometheus lookback expires
+        exp_alerts: []
+  - name: Stopped pushes age out and report an unknown cluster instead of backlog
     interval: 15s
+    external_labels: {console_url: http://console.example.test}
     input_series:
       - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
         values: '5'
       - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
         values: '1'
+      - series: 'taskflow_dispatch_outbox_publish_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_claim_expired{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-1",result_code="HANDLER_FAILED"}'
+        values: '0+0x25'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-1",result_code="BUSINESS_HANDLER_FAILED"}'
+        values: '0+0x25'
     alert_rule_test:
-      - {eval_time: 2m, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
-      - {eval_time: 3m15s, alertname: TaskFlowSchedulerMetricsUnavailable, exp_alerts: []}
+      - eval_time: 2m
+        alertname: TaskFlowSchedulerDispatchOverdue
+        exp_alerts: []
+      - eval_time: 3m15s
+        alertname: TaskFlowSchedulerClusterMetricsUnavailable
+        exp_alerts: []
+      - eval_time: 3m30s
+        alertname: TaskFlowSchedulerClusterMetricsUnavailable
+        exp_alerts:
+          - exp_labels: {"job":"taskflow-scheduler","severity":"warning"}
+            exp_annotations: {"summary":"No Scheduler has valid cluster metrics","description":"Dispatch, Run and Scheduler backlog conditions are unknown."}
       - eval_time: 3m30s
         alertname: TaskFlowSchedulerMetricsUnavailable
         exp_alerts:
-          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
-            exp_annotations:
-              summary: Scheduler metrics are unavailable
-              description: Dispatch metrics are missing, unknown or stale. Check Scheduler sampling and OTLP export.
-
-  - name: Initial negative gauges remain unknown until both metrics have valid samples
+          - exp_labels: {"job":"taskflow-scheduler","instance":"scheduler-1","severity":"warning"}
+            exp_annotations: {"summary":"Scheduler metrics are unavailable","description":"An expected Scheduler has missing, unknown or stale samples."}
+  - name: Fresh age is insufficient when required metrics are missing or unknown
     interval: 15s
+    external_labels: {console_url: http://console.example.test}
     input_series:
       - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
-        values: '-1+0x8 5+0x4'
+        values: '5+0x25'
       - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
-        values: '-1+0x9 0+0x3'
+        values: '-1+0x8 0+0x16'
+      - series: 'taskflow_dispatch_outbox_publish_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_claim_expired{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-1",result_code="HANDLER_FAILED"}'
+        values: '0+0x25'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-1",result_code="BUSINESS_HANDLER_FAILED"}'
+        values: '0+0x25'
     alert_rule_test:
-      - {eval_time: 2m, alertname: TaskFlowSchedulerDispatchOverdue, exp_alerts: []}
-      - eval_time: 2m15s
+      - eval_time: 2m
+        alertname: TaskFlowSchedulerDispatchOverdue
+        exp_alerts: []
+      - eval_time: 2m
         alertname: TaskFlowSchedulerMetricsUnavailable
         exp_alerts:
-          - exp_labels: {job: taskflow-scheduler, instance: scheduler-1, severity: warning}
-            exp_annotations:
-              summary: Scheduler metrics are unavailable
-              description: Dispatch metrics are missing, unknown or stale. Check Scheduler sampling and OTLP export.
-      - {eval_time: 2m30s, alertname: TaskFlowSchedulerMetricsUnavailable, exp_alerts: []}
+          - exp_labels: {"job":"taskflow-scheduler","instance":"scheduler-1","severity":"warning"}
+            exp_annotations: {"summary":"Scheduler metrics are unavailable","description":"An expected Scheduler has missing, unknown or stale samples."}
+      - eval_time: 2m
+        alertname: TaskFlowSchedulerClusterMetricsUnavailable
+        exp_alerts:
+          - exp_labels: {"job":"taskflow-scheduler","severity":"warning"}
+            exp_annotations: {"summary":"No Scheduler has valid cluster metrics","description":"Dispatch, Run and Scheduler backlog conditions are unknown."}
+      - eval_time: 2m15s
+        alertname: TaskFlowSchedulerMetricsUnavailable
+        exp_alerts: []
+      - eval_time: 2m15s
+        alertname: TaskFlowSchedulerClusterMetricsUnavailable
+        exp_alerts: []
+  - name: Terminal failure appears once per code and resolves when the finish window clears
+    interval: 15s
+    external_labels: {console_url: http://console.example.test}
+    input_series:
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '5+0x25'
+      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_publish_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_claim_expired{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-1",result_code="HANDLER_FAILED"}'
+        values: '0 2+0x6 0+0x17'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-1",result_code="BUSINESS_HANDLER_FAILED"}'
+        values: '0+0x25'
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '5+0x25'
+      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_publish_overdue{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_claim_expired{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_unresolved{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '0+0x25'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-2",result_code="HANDLER_FAILED"}'
+        values: '0 2+0x6 0+0x17'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-2",result_code="BUSINESS_HANDLER_FAILED"}'
+        values: '0+0x25'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: TaskFlowRunBusinessFailure
+        exp_alerts: []
+      - eval_time: 15s
+        alertname: TaskFlowRunBusinessFailure
+        exp_alerts:
+          - exp_labels: {"job":"taskflow-scheduler","result_code":"HANDLER_FAILED","severity":"warning"}
+            exp_annotations: {"summary":"Terminal business Runs have failed","description":"2 Runs ended in HANDLER_FAILED in the last 5 minutes.","console_url":"http://console.example.test/runs?timeField=FINISHED&state=FAILED&resultCode=HANDLER_FAILED"}
+      - eval_time: 2m
+        alertname: TaskFlowRunBusinessFailure
+        exp_alerts: []
+  - name: Worker heartbeat and Worker telemetry are independent
+    interval: 15s
+    external_labels: {console_url: http://console.example.test}
+    input_series:
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '5+0x25'
+      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_publish_overdue{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_claim_expired{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler",instance="scheduler-1"}'
+        values: '0+0x25'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-1",result_code="HANDLER_FAILED"}'
+        values: '0+0x25'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-1",result_code="BUSINESS_HANDLER_FAILED"}'
+        values: '0+0x25'
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '5+0x25'
+      - series: 'taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_publish_overdue{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_claim_expired{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_outbox_unresolved{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '0+0x25'
+      - series: 'taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler",instance="scheduler-2"}'
+        values: '0+0x25'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-2",result_code="HANDLER_FAILED"}'
+        values: '0+0x25'
+      - series: 'taskflow_run_business_failures_recent{job="taskflow-scheduler",instance="scheduler-2",result_code="BUSINESS_HANDLER_FAILED"}'
+        values: '0+0x25'
+      - series: 'taskflow_worker_node_online{job="taskflow-scheduler",instance="scheduler-1",worker_id="worker-default"}'
+        values: '0+0x8 1+0x16'
+      - series: 'taskflow_worker_node_online{job="taskflow-scheduler",instance="scheduler-2",worker_id="worker-default"}'
+        values: '0+0x25'
+      - series: 'taskflow_metrics_sample_age_seconds{job="taskflow-worker",instance="worker-default"}'
+        values: '5+0x8 100+0x9 5+0x6'
+      - series: 'taskflow_worker_result_report_exhausted{job="taskflow-worker",instance="worker-default"}'
+        values: '1+0x8 0+0x16'
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: TaskFlowWorkerOffline
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: TaskFlowWorkerOffline
+        exp_alerts:
+          - exp_labels: {"job":"taskflow-scheduler","worker_id":"worker-default","severity":"warning"}
+            exp_annotations: {"summary":"An expected Worker is offline","description":"Worker worker-default has no valid Scheduler heartbeat registration.","console_url":"http://console.example.test/workers"}
+      - eval_time: 2m
+        alertname: TaskFlowWorkerReportExhausted
+        exp_alerts:
+          - exp_labels: {"job":"taskflow-worker","instance":"worker-default","severity":"warning"}
+            exp_annotations: {"summary":"Worker result reports exhausted","description":"Check Worker worker-default and the Run dispatch failure panel.","console_url":"http://console.example.test/workers"}
+      - eval_time: 2m
+        alertname: TaskFlowWorkerMetricsUnavailable
+        exp_alerts: []
+      - eval_time: 2m15s
+        alertname: TaskFlowWorkerOffline
+        exp_alerts: []
+      - eval_time: 2m15s
+        alertname: TaskFlowWorkerReportExhausted
+        exp_alerts: []
+      - eval_time: 4m15s
+        alertname: TaskFlowWorkerMetricsUnavailable
+        exp_alerts:
+          - exp_labels: {"job":"taskflow-worker","instance":"worker-default","severity":"warning"}
+            exp_annotations: {"summary":"Worker metrics are unavailable","description":"Check sampling and OTLP push for Worker worker-default."}
+      - eval_time: 4m45s
+        alertname: TaskFlowWorkerMetricsUnavailable
+        exp_alerts: []
+  - name: Two Broker sources and a leader change keep one logical queue alert
+    interval: 15s
+    external_labels: {console_url: http://console.example.test}
+    input_series:
+      - series: 'up{job="rabbitmq-dead-letter",instance="rabbit1",broker_cluster="mq"}'
+        values: '1+0x3 0+0x20'
+      - series: 'up{job="rabbitmq-dead-letter",instance="rabbit2",broker_cluster="mq"}'
+        values: '1+0x25'
+      - series: 'rabbitmq_detailed_queue_messages{job="rabbitmq-dead-letter",instance="rabbit1",broker_cluster="mq",vhost="taskflow",queue="taskflow.worker.default.dead.v1"}'
+        values: '2+0x25'
+      - series: 'rabbitmq_detailed_queue_messages{job="rabbitmq-dead-letter",instance="rabbit2",broker_cluster="mq",vhost="taskflow",queue="taskflow.worker.default.dead.v1"}'
+        values: '2+0x8 0+0x16'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: TaskFlowBrokerDeadLetterBacklog
+        exp_alerts:
+          - exp_labels: {"job":"rabbitmq-dead-letter","broker_cluster":"mq","vhost":"taskflow","queue":"taskflow.worker.default.dead.v1","severity":"warning"}
+            exp_annotations: {"summary":"RabbitMQ dead-letter queue has pending deliveries","description":"Queue taskflow.worker.default.dead.v1 in vhost taskflow has 2 messages."}
+      - eval_time: 2m15s
+        alertname: TaskFlowBrokerDeadLetterBacklog
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: TaskFlowBrokerMetricsUnavailable
+        exp_alerts:
+          - exp_labels: {"job":"rabbitmq-dead-letter","broker_cluster":"mq","instance":"rabbit1","severity":"warning"}
+            exp_annotations: {"summary":"RabbitMQ metrics scrape failed"}

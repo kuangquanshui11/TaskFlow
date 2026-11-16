@@ -6,6 +6,7 @@ import java.util.*;
 import com.taskflow.scheduler.node.model.WorkerNode;
 import com.taskflow.scheduler.node.dto.WorkerNodeProtocol.Summary;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -72,6 +73,13 @@ public class WorkerNodeMapper {
     public Optional<Instant> oldestOnlineHeartbeat(Instant now) {
         return Optional.ofNullable(jdbc.queryForObject("SELECT MIN(last_heartbeat_at) FROM worker_node WHERE expires_at>?",
                 (rs, i) -> { var value = rs.getTimestamp(1); return value == null ? null : value.toInstant(); }, ts(now)));
+    }
+
+    public Set<String> onlineIds(Set<String> expected, Instant now) {
+        if (expected.isEmpty()) return Set.of();
+        return new HashSet<>(new NamedParameterJdbcTemplate(jdbc).queryForList(
+                "SELECT worker_id FROM worker_node WHERE worker_id IN (:workers) AND expires_at > :now",
+                Map.of("workers", expected, "now", ts(now)), String.class));
     }
 
 }

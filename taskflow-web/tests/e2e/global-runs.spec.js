@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 test('全局运行列表：真实筛选、历史 ID、已删除任务、失败重试和移动端', async ({ page, request }) => {
   test.setTimeout(90000);
+  const evidence = process.env.TASKFLOW_EXECUTION_EVIDENCE_DIR;
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   const created = await request.post('/api/v1/jobs/insert', { data: { name: '全局运行查询-' + Date.now(), handlerKey: 'demoSuccess', maxAttempts: 1, timeoutSeconds: 10 } });
   expect(created.status()).toBe(201);
@@ -39,6 +40,14 @@ test('全局运行列表：真实筛选、历史 ID、已删除任务、失败�
     expect(filtered.data.total).toBe(2);
     expect(filtered.data.records.every(row => row.jobId === job.id && row.state === 'SUCCEEDED' && row.triggerType === 'MANUAL')).toBeTruthy();
     expect(filtered.url.searchParams.get('from')).toBeTruthy();
+    await page.getByLabel('时间字段').selectOption('FINISHED');
+    const finished = await search();
+    expect(finished.url.searchParams.get('timeField')).toBe('FINISHED');
+    expect(finished.data.total).toBe(2);
+    expect(finished.data.records.every(row => Boolean(row.finishedAt))).toBeTruthy();
+    await expect(records.getByRole('columnheader', { name: '结束时间' })).toBeVisible();
+    if (evidence) await page.screenshot({ path: join(evidence, 'global-runs-finished.png'), fullPage: true, animations: 'disabled' });
+
     await page.getByLabel('时间范围').selectOption('all');
     await page.getByLabel('Run ID 精确查询').fill(ids[0]);
     const exact = await search();
@@ -69,12 +78,11 @@ test('全局运行列表：真实筛选、历史 ID、已删除任务、失败�
     await page.getByLabel('每页运行数量').selectOption('100');
     expect((await (await sized).json()).data.pageSize).toBe(100);
     await expect(records).toHaveAttribute('aria-busy', 'false');
-    const evidence = process.env.TASKFLOW_EXECUTION_EVIDENCE_DIR;
     if (evidence) await page.screenshot({ path: join(evidence, 'global-runs-desktop.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
     await expect(page.getByLabel('Run ID 精确查询')).toBeVisible();
-    if (evidence) await page.screenshot({ path: join(evidence, 'global-runs-mobile.png'), fullPage: true });
+    if (evidence) await page.screenshot({ path: join(evidence, 'global-runs-mobile.png'), fullPage: true, animations: 'disabled' });
     await page.route('**/api/v1/runs/selectGlobal?*', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'SCHEDULER_UNAVAILABLE', message: '调度服务暂时不可用', data: null }) }));
     await page.getByRole('button', { name: '刷新记录', exact: true }).click();
     await expect(records.getByRole('alert')).toContainText('调度服务暂时不可用');

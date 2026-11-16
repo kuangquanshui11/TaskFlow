@@ -1,9 +1,12 @@
-# Merge into config/taskflow-scheduler-local.yml when enabling S3 for the designated Scheduler.
+# Merge into each Scheduler local config. All replicas that read the same database use the same Worker inventory.
+taskflow:
+  metrics:
+    expected-workers: "${TASKFLOW_METRICS_EXPECTED_WORKERS:worker-default}"
 management:
   opentelemetry:
     resource-attributes:
       "[service.name]": taskflow-scheduler
-      "[service.instance.id]": scheduler-1
+      "[service.instance.id]": "${TASKFLOW_SCHEDULER_METRICS_INSTANCE_ID:scheduler-1}"
   otlp:
     metrics:
       export:

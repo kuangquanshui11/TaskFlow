@@ -1,0 +1,12 @@
+# Merge into the Worker local config. The OTLP instance is the stable Worker ID.
+management:
+  opentelemetry:
+    resource-attributes:
+      "[service.name]": taskflow-worker
+      "[service.instance.id]": "${TASKFLOW_WORKER_ID:worker-default}"
+  otlp:
+    metrics:
+      export:
+        enabled: true
+        step: 15s
+        url: "${TASKFLOW_WORKER_ALERTS_OTLP_URL:http://127.0.0.1:9090/api/v1/otlp/v1/metrics}"

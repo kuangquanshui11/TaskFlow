@@ -14,6 +14,15 @@ test('failure links keep the exact statistics window, result group, and full tas
   assert.throws(() => readRunLocation({ ...query, resultCode: 'x'.repeat(65) }), /64/);
 });
 
+test('business alert links select terminal failures by finish time', () => {
+  const location = readRunLocation({ timeField: 'FINISHED', state: 'FAILED', resultCode: 'HANDLER_FAILED' });
+  assert.equal(location.filters.timeField, 'FINISHED');
+  assert.equal(location.applied.timeField, 'FINISHED');
+  assert.equal(location.applied.state, 'FAILED');
+  assert.equal(location.applied.resultCode, 'HANDLER_FAILED');
+  assert.throws(() => readRunLocation({ timeField: 'updated_at' }), /时间字段/);
+});
+
 test('relative windows freeze at submission and all filters intersect', () => {
   const query = buildRunQuery({ ...emptyRunFilters(), jobId: '9223372036854775807', state: 'FAILED', triggerType: 'CRON' }, Date.parse('2026-11-05T00:00:00Z'));
   assert.deepEqual(query, { jobId: '9223372036854775807', state: 'FAILED', triggerType: 'CRON', from: '2026-11-04T00:00:00.000Z', to: '2026-11-05T00:00:00.000Z' });

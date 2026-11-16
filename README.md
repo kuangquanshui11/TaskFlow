@@ -16,7 +16,7 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 Scheduler/Worker 已支持积压与延迟指标独立采样、失败保值及本机 Actuator 查询，OTLP 指标导出默认关闭，见 [指标字典](docs/observability-metrics.md)。
 
-可选 Scheduler 告警通过 Prometheus 接收 OTLP 指标，并由 Alertmanager 对持续派发逾期和采样中断发送触发及恢复通知。 [告警部署与验收](docs/scheduler-alerts.md)
+可选监控部署通过 Prometheus 接收 Scheduler 和 Worker 的 OTLP 指标，由双 Alertmanager 对终态业务失败、Worker 离线、采样中断和派发积压发送分组通知。 [告警部署与验收](docs/scheduler-alerts.md)
 
 工作台已提供最近 24 小时 / 7 天的运行总数、成功率、失败数、P95 耗时、状态分布和失败 Top 5，由 Admin 在 run:read 权限下查询 Scheduler，不缓存统计。
 

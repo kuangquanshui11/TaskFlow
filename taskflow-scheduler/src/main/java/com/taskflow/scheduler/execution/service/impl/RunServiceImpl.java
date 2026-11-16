@@ -77,7 +77,7 @@ public class RunServiceImpl implements IRunService {
                 }
                 var now = Instant.now();
                 var run = new RunRow(UUID.randomUUID(), snapshot.jobId(), snapshot.configVersion(),
-                        requestKey, fingerprint, "READY", encoded, 1, null, null, now, now, "MANUAL", null, sourceRunId, actor);
+                        requestKey, fingerprint, "READY", encoded, 1, null, null, now, now, "MANUAL", null, sourceRunId, actor, null);
                 mapper.insert(run);
                 insertAttempt(run.id(), 1, now);
                 return run.id();
@@ -100,7 +100,7 @@ public class RunServiceImpl implements IRunService {
         validate(snapshot);
         var encoded = json.writeValueAsString(snapshot);
         var run = new RunRow(UUID.randomUUID(), snapshot.jobId(), snapshot.configVersion(), UUID.randomUUID(),
-                fingerprint(encoded), "READY", encoded, 1, null, null, createdAt, createdAt, "CRON", scheduledAt, null, null);
+                fingerprint(encoded), "READY", encoded, 1, null, null, createdAt, createdAt, "CRON", scheduledAt, null, null, null);
         mapper.insert(run);
         insertAttempt(run.id(), 1, createdAt);
         return run.id();
@@ -120,7 +120,7 @@ public class RunServiceImpl implements IRunService {
             throw new RunException(400, "INVALID_ARGUMENT", "运行分页参数不合法");
         var rows = mapper.select(jobId, page, pageSize).stream()
                 .map(row -> new Summary(row.id(), row.jobId(), row.configVersion(), row.state(), row.currentAttempt(),
-                        row.resultCode(), row.message(), row.createdAt(), row.updatedAt(), row.triggerType(), row.scheduledAt())).toList();
+                        row.resultCode(), row.message(), row.createdAt(), row.updatedAt(), row.triggerType(), row.scheduledAt(), row.finishedAt())).toList();
         return new Page(rows, mapper.count(jobId), page, pageSize);
     }
 
@@ -128,6 +128,7 @@ public class RunServiceImpl implements IRunService {
     public Page selectGlobal(com.taskflow.scheduler.execution.dto.RunQuery query) {
         if (query.page() < 1 || query.page() > 10000 || query.pageSize() < 1 || query.pageSize() > 100
                 || (query.jobId() != null && query.jobId() < 1)
+                || (query.timeField() != null && !java.util.Set.of("CREATED", "FINISHED").contains(query.timeField()))
                 || (query.resultCode() != null && (query.resultCode().isEmpty() || query.resultCode().length() > 64))
                 || (query.state() != null && !java.util.Set.of("READY", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED").contains(query.state()))
                 || (query.triggerType() != null && !java.util.Set.of("MANUAL", "CRON").contains(query.triggerType())))
@@ -147,7 +148,8 @@ public class RunServiceImpl implements IRunService {
             to = Instant.now(); from = to.minus(Duration.ofHours(24));
         }
         // 精确 ID 查询可跨历史；显式提供的时间、任务和状态仍取交集。记录与总数使用同一只读快照。
-        var filter = new com.taskflow.scheduler.execution.model.RunFilter(from, to, query.jobId(), query.state(), query.triggerType(), query.runId(), query.resultCode());
+        var filter = new com.taskflow.scheduler.execution.model.RunFilter(from, to, query.jobId(), query.state(),
+                query.triggerType(), query.runId(), query.resultCode(), "FINISHED".equals(query.timeField()));
         return new Page(mapper.selectGlobal(filter, query.page(), query.pageSize()), mapper.countGlobal(filter), query.page(), query.pageSize());
     }
 

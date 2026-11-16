@@ -119,6 +119,7 @@ public class RunServiceImpl implements IRunService {
     public JsonNode selectGlobal(com.taskflow.admin.run.dto.RunQuery query) {
         if (query.page() < 1 || query.page() > 10000 || query.pageSize() < 1 || query.pageSize() > 100
                 || (query.jobId() != null && query.jobId() < 1)
+                || (query.timeField() != null && !java.util.Set.of("CREATED", "FINISHED").contains(query.timeField()))
                 || (query.resultCode() != null && (query.resultCode().isEmpty() || query.resultCode().length() > 64))
                 || (query.state() != null && !java.util.Set.of("READY", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED").contains(query.state()))
                 || (query.triggerType() != null && !java.util.Set.of("MANUAL", "CRON").contains(query.triggerType())))
@@ -126,6 +127,7 @@ public class RunServiceImpl implements IRunService {
         var params = new java.util.LinkedHashMap<String, String>();
         params.put("page", Integer.toString(query.page())); params.put("pageSize", Integer.toString(query.pageSize()));
         addQueryWindow(params, query.from(), query.to());
+        if (query.timeField() != null) params.put("timeField", query.timeField());
         if (query.jobId() != null) params.put("jobId", query.jobId().toString());
         if (query.state() != null) params.put("state", query.state());
         if (query.triggerType() != null) params.put("triggerType", query.triggerType());

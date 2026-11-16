@@ -26,7 +26,7 @@ VIEWER 可查询及 POST 预览；OPERATOR 另可启停、触发 Run、重试同
 | Handler 执行、幂等接收、结果重报 | Worker | 已实现，白名单 Handler、有界执行、独立持久化 |
 | Worker 注册、心跳、会话隔离和在线查询 | Scheduler 权威，Worker 上报，Admin 代理 | 已实现；MQ 动态选择、固定 Attempt 目标和路由，管理台 /workers 接入 |
 | 运行统计 | Admin 代理 Scheduler | 已实现 |
-| 失败告警 | 对应业务服务 | 后续阶段 |
+| 失败告警 | Scheduler、Worker、Prometheus、Alertmanager | 支持终态业务失败、Worker 离线、采样异常与派发积压。见 [多节点告警](scheduler-alerts.md) |
 
 独立 Vue 管理台已接入任务管理接口，Admin 原首页仍为演示页。尚未实现的运行能力不会返回模拟成功。
 
@@ -270,7 +270,8 @@ GET /api/v1/runs/selectGlobal 是独立的全局查询，不改变上述单任�
 
 | 参数 | 默认与校验 |
 | --- | --- |
-| from / to | 同时省略或同时提供以 Z 结尾的 UTC ISO-8601；按 Run 创建时间筛选，`[from,to)`，起点早于终点，最长 7 天 |
+| from / to | 同时省略或同时提供以 Z 结尾的 UTC ISO-8601。窗口为 `[from,to)`，起点早于终点，最长 7 天 |
+| timeField | 可选，`CREATED`（默认）按创建时间，`FINISHED` 按权威 Run 结束时间。结束时间窗口排除尚无结束时间的 Run |
 | jobId | 可选，正整数；按运行保存的任务 ID 查询，不要求任务当前存在 |
 | state | 可选，READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED；TIMED_OUT 是 Attempt 状态，不是 Run 状态 |
 | triggerType | 可选，MANUAL、CRON |
@@ -280,7 +281,7 @@ GET /api/v1/runs/selectGlobal 是独立的全局查询，不改变上述单任�
 
 未提供 from/to 且没有 runId 时，Scheduler 在请求内确定最近 24 小时窗口；提供 runId 而省略时间时可查询任意历史记录。显式时间窗仍约束 runId，不自动忽略其他筛选。控制台将相对时间在提交时转换为绝对 UTC 窗口，翻页、调整每页数量、刷新和重试沿用本次窗口；重新查询或重置才重新确定窗口。自定义时间与结果使用浏览器时区，并显示时区名称。
 
-响应 data 沿用 records、total、page、pageSize；记录字段与单任务列表一致，并包含 triggerType、scheduledAt。按 createdAt DESC、id DESC 稳定排序，不返回快照或 Attempt 明细。每次请求的记录与总数使用 Scheduler 本地 REPEATABLE_READ 只读事务；不同翻页请求不是同一快照，并发新增/状态变化可能改变页边界。内部 GET /internal/v1/runs/selectGlobal 使用同名参数和控制密钥，返回裸 Page；不经 Gateway 公开。Admin 事务外调用、不缓存、不跨服务联表。
+响应 data 沿用 records、total、page、pageSize；记录字段与单任务列表一致，并包含 triggerType、scheduledAt 和可空的 finishedAt。按所选时间字段降序，再按 id DESC 稳定排序，不返回快照或 Attempt 明细。每次请求的记录与总数使用 Scheduler 本地 REPEATABLE_READ 只读事务；不同翻页请求不是同一快照，并发新增/状态变化可能改变页边界。内部 GET /internal/v1/runs/selectGlobal 使用同名参数和控制密钥，返回裸 Page；不经 Gateway 公开。Admin 事务外调用、不缓存、不跨服务联表。
 
 全局列表和运行统计的显式时间端点均须落在 `1000-01-01T00:00:00Z` 至 `9999-12-31T23:59:59.999Z` 之间（含端点）。Admin 在代理前校验，Scheduler 在查询前独立校验。
 

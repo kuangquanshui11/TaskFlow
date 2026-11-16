@@ -1,0 +1,14 @@
+# Keep this inventory aligned with the deployment. Each entry stays visible even when the process never starts.
+groups:
+  - name: taskflow-expected-targets
+    rules:
+      - record: taskflow:metrics:expected
+        expr: vector(1)
+        labels:
+          job: taskflow-scheduler
+          instance: scheduler-1
+      - record: taskflow:metrics:expected
+        expr: vector(1)
+        labels:
+          job: taskflow-worker
+          instance: worker-default

@@ -19,7 +19,7 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
-@SpringBootTest(properties = {"taskflow.metrics.enabled=true", "taskflow.metrics.sample-interval=5m"})
+@SpringBootTest(properties = {"taskflow.metrics.enabled=true", "taskflow.metrics.sample-interval=5m", "taskflow.metrics.expected-workers=expected-online,expected-offline,never-registered"})
 @ActiveProfiles("test")
 @org.springframework.test.context.ContextConfiguration(initializers = com.taskflow.scheduler.support.IsolatedTestDatabaseInitializer.class)
 class DispatchMetricsTests {
@@ -126,6 +126,27 @@ class DispatchMetricsTests {
         assertThat(gauge("taskflow.worker.node.heartbeat.age")).isBetween(115.0,130.0);
     }
 
+    @Test void terminalHandlerFailuresUseFinishTimeAndExpectedWorkersIncludeMissingRegistration() {
+        run("FAILED", "BUSINESS_HANDLER_FAILED", NOW.minusSeconds(300));
+        run("FAILED", "HANDLER_FAILED", NOW.minusSeconds(1));
+        run("FAILED", "HANDLER_FAILED", NOW.minusSeconds(301));
+        run("FAILED", "HANDLER_FAILED", NOW);
+        run("FAILED", "DISPATCH_REJECTED", NOW.minusSeconds(2));
+        run("RETRY_WAIT", "HANDLER_FAILED", null);
+        node("expected-online", NOW, NOW.plusSeconds(1));
+        node("expected-offline", NOW.minusSeconds(30), NOW);
+        node("unmanaged", NOW, NOW.plusSeconds(1));
+
+        sampler.sample();
+
+        assertThat(tagged("taskflow.run.business.failures.recent", "result_code", "BUSINESS_HANDLER_FAILED")).isEqualTo(1);
+        assertThat(tagged("taskflow.run.business.failures.recent", "result_code", "HANDLER_FAILED")).isEqualTo(1);
+        assertThat(tagged("taskflow.worker.node.online", "worker_id", "expected-online")).isEqualTo(1);
+        assertThat(tagged("taskflow.worker.node.online", "worker_id", "expected-offline")).isZero();
+        assertThat(tagged("taskflow.worker.node.online", "worker_id", "never-registered")).isZero();
+        assertThat(registry.find("taskflow.worker.node.online").tag("worker_id", "unmanaged").gauge()).isNull();
+    }
+
     @Test void samplingUsesIndependentStatementsOutsideTransactions() {
         doAnswer(call -> {
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
@@ -145,6 +166,20 @@ class DispatchMetricsTests {
     private void node(String id, Instant heartbeat, Instant expiry) {
         jdbc.update("INSERT INTO worker_node(worker_id,display_name,session_id,generation,registration_fingerprint,handler_keys_json,parallelism,max_pending,running_count,pending_count,dispatch_transport,last_sequence,registered_at,last_heartbeat_at,expires_at) VALUES(?,?,?,1,'fingerprint','[]',1,4,0,0,'http',0,?,?,?)",id,id,UUID.randomUUID().toString(),Timestamp.from(NOW),Timestamp.from(heartbeat),Timestamp.from(expiry));
     }
+    private void run(String state, String code, Instant finished) {
+        jdbc.update("""
+                INSERT INTO run_execution(id,job_id,config_version,request_key,fingerprint,state,snapshot_json,
+                  current_attempt,created_at,updated_at,result_code,finished_at,trigger_type)
+                VALUES(?,1,1,?,'fixture',?,'{}',1,?,?,?,?,'MANUAL')
+                """, UUID.randomUUID().toString(), UUID.randomUUID().toString(), state,
+                Timestamp.from(NOW.minusSeconds(86400)), Timestamp.from(NOW), code,
+                finished == null ? null : Timestamp.from(finished));
+    }
+
+    private double tagged(String name, String tag, String value) {
+        return registry.get(name).tag(tag, value).gauge().value();
+    }
+
     private double gauge(String name) { return registry.get(name).gauge().value(); }
     private double counter(String outcome) { return registry.get("taskflow.metrics.sample").tag("outcome",outcome).counter().count(); }
 }

@@ -1,13 +1,30 @@
 global:
   evaluation_interval: 15s
+  scrape_interval: 15s
+  external_labels:
+    environment: local
+    console_url: http://localhost:8090
 
 rule_files:
+  - expected-targets.yml
   - scheduler-alerts.yml
 
 otlp:
   translation_strategy: UnderscoreEscapingWithSuffixes
 
+scrape_configs:
+  - job_name: rabbitmq-dead-letter
+    metrics_path: /metrics/detailed
+    params:
+      family: [queue_coarse_metrics]
+      vhost: [taskflow]
+    file_sd_configs:
+      - files: [rabbitmq.targets.yml]
+
 alerting:
+  alert_relabel_configs:
+    - action: labeldrop
+      regex: console_url
   alertmanagers:
     - static_configs:
-        - targets: ["alertmanager:9093"]
+        - targets: ["alertmanager:9093", "alertmanager-peer:9093"]

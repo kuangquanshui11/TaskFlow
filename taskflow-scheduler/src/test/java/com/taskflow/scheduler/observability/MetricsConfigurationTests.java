@@ -2,6 +2,7 @@ package com.taskflow.scheduler.observability;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import com.taskflow.scheduler.observability.config.*;
 import com.taskflow.scheduler.observability.service.IMetricsSampler;
@@ -25,7 +26,7 @@ class MetricsConfigurationTests {
             var mapper = mock(WorkerNodeMapper.class);
             when(mapper.oldestOnlineHeartbeat(any())).thenThrow(new IllegalStateException("injected"));
             var sampler = new MetricsSamplerImpl(mock(DispatchOutboxMapper.class), mock(DispatchFailureMapper.class),
-                    mock(RunDataMapper.class), mapper, registry, Clock.systemUTC());
+                    mock(RunDataMapper.class), mapper, registry, Clock.systemUTC(), new MetricsProperties(true, Duration.ofSeconds(15), List.of("worker-1")));
             registry.getMeters().stream().filter(m -> m instanceof Gauge).forEach(m -> assertThat(((Gauge)m).value()).isEqualTo(-1));
             sampler.sample();
             registry.getMeters().stream().filter(m -> m instanceof Gauge).forEach(m -> assertThat(((Gauge)m).value()).isEqualTo(-1));
@@ -45,9 +46,9 @@ class MetricsConfigurationTests {
 
     @Test void sampleIntervalHasInclusiveBounds() {
         for (int seconds : new int[]{-1,0,4,301})
-            assertThatThrownBy(() -> new MetricsProperties(true, Duration.ofSeconds(seconds))).isInstanceOf(IllegalArgumentException.class);
-        assertThatCode(() -> new MetricsProperties(true, Duration.ofSeconds(5))).doesNotThrowAnyException();
-        assertThatCode(() -> new MetricsProperties(true, Duration.ofSeconds(300))).doesNotThrowAnyException();
+            assertThatThrownBy(() -> new MetricsProperties(true, Duration.ofSeconds(seconds), List.of())).isInstanceOf(IllegalArgumentException.class);
+        assertThatCode(() -> new MetricsProperties(true, Duration.ofSeconds(5), List.of())).doesNotThrowAnyException();
+        assertThatCode(() -> new MetricsProperties(true, Duration.ofSeconds(300), List.of())).doesNotThrowAnyException();
     }
 
     @Test void otlpMetricsUrlIsDerivedAndExplicitConfigurationWins() {

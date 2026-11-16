@@ -182,18 +182,7 @@ MQ 未部署时可显式用 http，并设置 `TASKFLOW_MQ_HEALTH_ENABLED=false`�
 
 死信告警分为 Broker 队列待消费和 Scheduler 已入库待结案。部署 Prometheus 时，可启用 RabbitMQ 自带的 exporter，配置受限网络内的 `rabbitmq-dead-letter` 抓取任务，路径为 `/metrics/detailed`，参数 `family=queue_coarse_metrics`、`vhost=taskflow`，并按部署的队列前缀筛选。未开启抓取的环境仍可通过管理界面观察 Broker 队列深度。Worker 上报耗尽告警反映 Worker 本地未获确认的记录，人工结案不会修改该记录。 [RabbitMQ Prometheus 指标](https://www.rabbitmq.com/docs/prometheus#aggregated-and-per-object-metrics)
 
-以下配置可加入目标环境的 `scrape_configs`。将目标替换为可从 Prometheus 访问的受限监控地址。
-
-```yaml
-- job_name: rabbitmq-dead-letter
-  metrics_path: /metrics/detailed
-  params:
-    family: [queue_coarse_metrics]
-    vhost: [taskflow]
-    queue: ['^taskflow[.].*[.]dead[.]v1$']
-  static_configs:
-    - targets: ['rabbit1:15692', 'rabbit2:15692', 'rabbit3:15692']
-```
+监控 Compose 从 `deploy/observability/rabbitmq.targets.yml` 载入 Broker 节点。按集群维护同一个 `broker_cluster` 标签，并使用 Prometheus 可达的受限地址。部署示例见 [多节点告警](scheduler-alerts.md#部署与排查)。
 
 ### 隔离验收
 

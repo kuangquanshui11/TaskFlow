@@ -4,12 +4,16 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import com.taskflow.scheduler.execution.dto.AttemptEvents.SchedulerEvent;
 import com.taskflow.scheduler.execution.model.RunRecords.*;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -75,11 +79,12 @@ public class RunDataMapper {
         String where = globalWhere(filter, args);
         args.add(size); args.add((long) (page - 1) * size);
         // 列表不读取配置参数，也不逐条查询 Attempt 或其他服务的任务表。
-        return jdbc.query("SELECT id,job_id,config_version,state,current_attempt,result_code,message,created_at,updated_at,trigger_type,scheduled_at FROM run_execution"
-                + where + " ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",
+        return jdbc.query("SELECT id,job_id,config_version,state,current_attempt,result_code,message,created_at,updated_at,trigger_type,scheduled_at,finished_at FROM run_execution"
+                + where + " ORDER BY " + timeColumn(filter) + " DESC,id DESC LIMIT ? OFFSET ?",
                 (rs, index) -> new Summary(UUID.fromString(rs.getString("id")), rs.getLong("job_id"), rs.getLong("config_version"),
                         rs.getString("state"), rs.getInt("current_attempt"), rs.getString("result_code"), rs.getString("message"),
-                        instant(rs, "created_at"), instant(rs, "updated_at"), rs.getString("trigger_type"), instant(rs, "scheduled_at")), args.toArray());
+                        instant(rs, "created_at"), instant(rs, "updated_at"), rs.getString("trigger_type"), instant(rs, "scheduled_at"),
+                        instant(rs, "finished_at")), args.toArray());
     }
     public long countGlobal(com.taskflow.scheduler.execution.model.RunFilter filter) {
         var args = new java.util.ArrayList<Object>();
@@ -88,13 +93,22 @@ public class RunDataMapper {
     }
     private String globalWhere(com.taskflow.scheduler.execution.model.RunFilter filter, List<Object> args) {
         var where = new StringBuilder(" WHERE 1=1");
-        if (filter.from() != null) { where.append(" AND created_at>=? AND created_at<?"); args.add(windowTs(filter.from())); args.add(windowTs(filter.to())); }
+        if (filter.from() != null) {
+            String column = timeColumn(filter);
+            where.append(" AND ").append(column).append(">=? AND ").append(column).append("<?");
+            args.add(windowTs(filter.from()));
+            args.add(windowTs(filter.to()));
+        }
         if (filter.jobId() != null) { where.append(" AND job_id=?"); args.add(filter.jobId()); }
         if (filter.state() != null) { where.append(" AND state=?"); args.add(filter.state()); }
         if (filter.triggerType() != null) { where.append(" AND trigger_type=?"); args.add(filter.triggerType()); }
         if (filter.resultCode() != null) { where.append(" AND ").append(GROUPED_RESULT_CODE).append("=?"); args.add(filter.resultCode()); }
         if (filter.runId() != null) { where.append(" AND id=?"); args.add(filter.runId().toString()); }
         return where.toString();
+    }
+
+    private String timeColumn(com.taskflow.scheduler.execution.model.RunFilter filter) {
+        return filter.byFinishedTime() ? "finished_at" : "created_at";
     }
     public List<UUID> due(Instant now) {
         return jdbc.query("SELECT id FROM run_attempt WHERE state IN ('READY','DISPATCHING') AND next_dispatch_at<=? ORDER BY next_dispatch_at,id LIMIT 100",
@@ -181,7 +195,7 @@ public class RunDataMapper {
                 UUID.fromString(rs.getString("request_key")), rs.getString("fingerprint"), rs.getString("state"),
                 rs.getString("snapshot_json"), rs.getInt("current_attempt"), rs.getString("result_code"),
                 rs.getString("message"), instant(rs, "created_at"), instant(rs, "updated_at"), rs.getString("trigger_type"),
-                instant(rs, "scheduled_at"), source == null ? null : UUID.fromString(source), rs.getString("rerun_actor"));
+                instant(rs, "scheduled_at"), source == null ? null : UUID.fromString(source), rs.getString("rerun_actor"), instant(rs, "finished_at"));
     }
     private Attempt readAttempt(ResultSet rs, int index) throws SQLException {
         return new Attempt(UUID.fromString(rs.getString("id")), UUID.fromString(rs.getString("run_id")),
@@ -198,6 +212,18 @@ public class RunDataMapper {
     private Timestamp ts(Instant value) { return value == null ? null : Timestamp.from(value.truncatedTo(java.time.temporal.ChronoUnit.MILLIS)); }
     public long countDispatchOverdue(Instant now) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM run_attempt WHERE state IN ('READY','DISPATCHING') AND next_dispatch_at<=?", Long.class, ts(now));
+    }
+
+    public Map<String, Long> countTerminalFailures(Instant from, Instant to, Set<String> resultCodes) {
+        var counts = new HashMap<String, Long>();
+        var named = new NamedParameterJdbcTemplate(jdbc);
+        named.query("""
+                SELECT result_code, COUNT(*) AS n FROM run_execution
+                WHERE state='FAILED' AND finished_at>=:from AND finished_at<:to AND result_code IN (:codes)
+                GROUP BY result_code
+                """, Map.of("from", windowTs(from), "to", windowTs(to), "codes", resultCodes),
+                rs -> { counts.put(rs.getString("result_code"), rs.getLong("n")); });
+        return counts;
     }
     // 观测契约使用 expires_at；执行短租约 lease_until 的业务收尾规则保持独立。
     public long countLeaseExpired(Instant now) {

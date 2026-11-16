@@ -1,0 +1,2 @@
+# Add one group per RabbitMQ cluster. Empty disables the optional Broker scrape.
+[]

@@ -1,5 +1,10 @@
 name: taskflow-observability
 
+x-alertmanager: &alertmanager-base
+  image: prom/alertmanager:v0.34.2
+  secrets: [alert-webhook-url]
+  restart: unless-stopped
+
 services:
   prometheus:
     image: prom/prometheus:v3.13.5
@@ -11,20 +16,32 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./scheduler-alerts.yml:/etc/prometheus/scheduler-alerts.yml:ro
+      - ./expected-targets.yml:/etc/prometheus/expected-targets.yml:ro
+      - ./rabbitmq.targets.yml:/etc/prometheus/rabbitmq.targets.yml:ro
       - prometheus-data:/prometheus
     restart: unless-stopped
   alertmanager:
-    image: prom/alertmanager:v0.34.2
+    <<: *alertmanager-base
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
-      - --cluster.listen-address=
+      - --cluster.listen-address=0.0.0.0:9094
+      - --cluster.peer=alertmanager-peer:9094
     ports: ["127.0.0.1:9093:9093"]
     volumes:
       - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager
-    secrets: [alert-webhook-url]
-    restart: unless-stopped
+  alertmanager-peer:
+    <<: *alertmanager-base
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=0.0.0.0:9094
+      - --cluster.peer=alertmanager:9094
+    ports: ["127.0.0.1:9095:9093"]
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-peer-data:/alertmanager
 
 secrets:
   alert-webhook-url:
@@ -33,3 +50,4 @@ secrets:
 volumes:
   prometheus-data:
   alertmanager-data:
+  alertmanager-peer-data:

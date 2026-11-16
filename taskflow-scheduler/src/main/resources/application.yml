@@ -101,6 +101,7 @@ taskflow:
   metrics:
     enabled: "${TASKFLOW_METRICS_ENABLED:true}"
     sample-interval: "${TASKFLOW_METRICS_SAMPLE_INTERVAL:15s}"
+    expected-workers: "${TASKFLOW_METRICS_EXPECTED_WORKERS:}"
   nodes:
     node-token: "${TASKFLOW_NODE_TOKEN:}"
     # 仅 HTTP 直连及显式关闭节点检查的兼容模式使用；MQ 按节点能力和负载选择。

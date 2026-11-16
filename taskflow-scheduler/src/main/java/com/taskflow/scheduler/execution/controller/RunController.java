@@ -35,8 +35,9 @@ public class RunController {
             @RequestParam(required = false) Long jobId, @RequestParam(required = false) String state,
             @RequestParam(required = false) String triggerType, @RequestParam(required = false) UUID runId,
             @RequestParam(required = false) String resultCode,
+            @RequestParam(required = false) String timeField,
             @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "20") int pageSize) {
-        return runs.selectGlobal(new com.taskflow.scheduler.execution.dto.RunQuery(from, to, jobId, state, triggerType, runId, resultCode, page, pageSize));
+        return runs.selectGlobal(new com.taskflow.scheduler.execution.dto.RunQuery(from, to, jobId, state, triggerType, runId, resultCode, page, pageSize, timeField));
     }
     @GetMapping("/selectByRequestKey")
     public RunView selectByRequestKey(@RequestParam UUID requestKey) { return runs.selectByRequestKey(requestKey); }

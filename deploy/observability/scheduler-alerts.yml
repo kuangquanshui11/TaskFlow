@@ -1,75 +1,156 @@
 groups:
-  - name: taskflow-scheduler
+  - name: taskflow-alerts
     rules:
-      # 样本中的年龄只算到导出时刻。停止推送后仍要把流逝时间计入。
-      - record: taskflow:scheduler_metrics:fresh
+      - record: taskflow:sample:fresh
         expr: |
           group by (job, instance) (
-            (taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"} >= 0)
-            and on (job, instance)
-            (taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}
-              + time() - timestamp(taskflow_metrics_sample_age_seconds{job="taskflow-scheduler",instance="scheduler-1"}) <= 90)
-            and on (job, instance)
-            (taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"} >= 0)
-            and on (job, instance)
-            (time() - timestamp(taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"}) <= 90)
+            (taskflow_metrics_sample_age_seconds{job=~"taskflow-(scheduler|worker)"} >= 0)
+            and (taskflow_metrics_sample_age_seconds{job=~"taskflow-(scheduler|worker)"}
+              + time() - timestamp(taskflow_metrics_sample_age_seconds{job=~"taskflow-(scheduler|worker)"}) <= 90)
+          )
+      - record: taskflow:scheduler_metrics:fresh
+        expr: |
+          taskflow:sample:fresh{job="taskflow-scheduler"}
+            and on (job, instance) (taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler"} >= 0 and time() - timestamp(taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler"}) <= 90)
+            and on (job, instance) (taskflow_dispatch_outbox_publish_overdue{job="taskflow-scheduler"} >= 0 and time() - timestamp(taskflow_dispatch_outbox_publish_overdue{job="taskflow-scheduler"}) <= 90)
+            and on (job, instance) (taskflow_dispatch_outbox_claim_expired{job="taskflow-scheduler"} >= 0 and time() - timestamp(taskflow_dispatch_outbox_claim_expired{job="taskflow-scheduler"}) <= 90)
+            and on (job, instance) (taskflow_dispatch_outbox_unresolved{job="taskflow-scheduler"} >= 0 and time() - timestamp(taskflow_dispatch_outbox_unresolved{job="taskflow-scheduler"}) <= 90)
+            and on (job, instance) (taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler"} >= 0 and time() - timestamp(taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler"}) <= 90)
+            and on (job, instance) (count by (job, instance) ((taskflow_run_business_failures_recent{job="taskflow-scheduler",result_code=~"BUSINESS_HANDLER_FAILED|HANDLER_FAILED"} >= 0 and time() - timestamp(taskflow_run_business_failures_recent{job="taskflow-scheduler",result_code=~"BUSINESS_HANDLER_FAILED|HANDLER_FAILED"}) <= 90)) == 2)
+      - record: taskflow:worker_metrics:fresh
+        expr: |
+          taskflow:sample:fresh{job="taskflow-worker"}
+            and on (job, instance) (taskflow_worker_result_report_exhausted{job="taskflow-worker"} >= 0 and time() - timestamp(taskflow_worker_result_report_exhausted{job="taskflow-worker"}) <= 90)
+      - record: taskflow:worker_node:online
+        expr: |
+          max by (job, worker_id) (
+            (taskflow_worker_node_online{job="taskflow-scheduler"} >= 0 and time() - timestamp(taskflow_worker_node_online{job="taskflow-scheduler"}) <= 90)
+            and on (job, instance) taskflow:scheduler_metrics:fresh
+          )
+      - record: taskflow:broker_dead_letter:queued
+        expr: |
+          max by (job, broker_cluster, vhost, queue) (
+            rabbitmq_detailed_queue_messages{job="rabbitmq-dead-letter",queue=~"taskflow[.].*[.]dead[.]v1"}
+            and on (job, instance) (up{job="rabbitmq-dead-letter"} == 1)
           )
       - alert: TaskFlowSchedulerDispatchOverdue
         expr: |
-          (taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler",instance="scheduler-1"} > 0)
-          and on (job, instance) taskflow:scheduler_metrics:fresh{job="taskflow-scheduler",instance="scheduler-1"}
+          max by (job) (taskflow_dispatch_attempt_dispatch_overdue{job="taskflow-scheduler"} and on (job, instance) taskflow:scheduler_metrics:fresh) > 0
         for: 2m
         labels:
           severity: warning
         annotations:
           summary: "Scheduler dispatch is overdue"
-          description: "{{ $value }} attempts are overdue for dispatch. Check Worker eligibility, dispatch Outbox and Broker connectivity."
-      - alert: TaskFlowSchedulerMetricsUnavailable
-        expr: absent(taskflow:scheduler_metrics:fresh{job="taskflow-scheduler",instance="scheduler-1"})
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Scheduler metrics are unavailable"
-          description: "Dispatch metrics are missing, unknown or stale. Check Scheduler sampling and OTLP export."
-  - name: taskflow-dispatch-failures
-    rules:
-      - alert: TaskFlowBrokerDeadLetterBacklog
+          description: "{{ $value }} attempts are overdue. Check Worker eligibility, dispatch Outbox and Broker connectivity."
+      - alert: TaskFlowDispatchOutboxPublishOverdue
         expr: |
-          (rabbitmq_detailed_queue_messages{job="rabbitmq-dead-letter",queue=~"taskflow[.].*[.]dead[.]v1"} > 0)
-          and on (job, instance) (up{job="rabbitmq-dead-letter"} == 1)
+          max by (job) (taskflow_dispatch_outbox_publish_overdue{job="taskflow-scheduler"} and on (job, instance) taskflow:scheduler_metrics:fresh) > 0
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "RabbitMQ dead-letter queue has pending deliveries"
-      - alert: TaskFlowDeadLetterUnresolved
+          summary: "Dispatch Outbox publications are overdue"
+      - alert: TaskFlowDispatchOutboxClaimExpired
         expr: |
-          (taskflow_dispatch_dead_letter_unresolved > 0)
-          and on (job, instance) (taskflow_metrics_sample_age_seconds >= 0)
-          and on (job, instance) (taskflow_metrics_sample_age_seconds + time() - timestamp(taskflow_metrics_sample_age_seconds) <= 90)
+          max by (job) (taskflow_dispatch_outbox_claim_expired{job="taskflow-scheduler"} and on (job, instance) taskflow:scheduler_metrics:fresh) > 0
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "Dispatch dead letters require review"
+          summary: "Dispatch Outbox claims have expired"
       - alert: TaskFlowDispatchOutboxExhausted
         expr: |
-          (taskflow_dispatch_outbox_unresolved > 0)
-          and on (job, instance) (taskflow_metrics_sample_age_seconds >= 0)
-          and on (job, instance) (taskflow_metrics_sample_age_seconds + time() - timestamp(taskflow_metrics_sample_age_seconds) <= 90)
+          max by (job) (taskflow_dispatch_outbox_unresolved{job="taskflow-scheduler"} and on (job, instance) taskflow:scheduler_metrics:fresh) > 0
         for: 2m
         labels:
           severity: warning
         annotations:
           summary: "Dispatch Outbox publications exhausted"
+      - alert: TaskFlowDeadLetterUnresolved
+        expr: |
+          max by (job) (taskflow_dispatch_dead_letter_unresolved{job="taskflow-scheduler"} and on (job, instance) taskflow:scheduler_metrics:fresh) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dispatch dead letters require review"
+      - alert: TaskFlowRunBusinessFailure
+        expr: |
+          max by (job, result_code) (
+            taskflow_run_business_failures_recent{job="taskflow-scheduler"}
+            and on (job, instance) taskflow:scheduler_metrics:fresh
+          ) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Terminal business Runs have failed"
+          description: "{{ $value }} Runs ended in {{ $labels.result_code }} in the last 5 minutes."
+          console_url: "{{ $externalLabels.console_url }}/runs?timeField=FINISHED&state=FAILED&resultCode={{ $labels.result_code }}"
+      - alert: TaskFlowWorkerOffline
+        expr: |
+          taskflow:worker_node:online == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "An expected Worker is offline"
+          description: "Worker {{ $labels.worker_id }} has no valid Scheduler heartbeat registration."
+          console_url: "{{ $externalLabels.console_url }}/workers"
       - alert: TaskFlowWorkerReportExhausted
         expr: |
-          (taskflow_worker_result_report_exhausted > 0)
-          and on (job, instance) (taskflow_metrics_sample_age_seconds >= 0)
-          and on (job, instance) (taskflow_metrics_sample_age_seconds + time() - timestamp(taskflow_metrics_sample_age_seconds) <= 90)
+          taskflow_worker_result_report_exhausted{job="taskflow-worker"} > 0
+            and on (job, instance) taskflow:worker_metrics:fresh
         for: 2m
         labels:
           severity: warning
         annotations:
           summary: "Worker result reports exhausted"
+          description: "Check Worker {{ $labels.instance }} and the Run dispatch failure panel."
+          console_url: "{{ $externalLabels.console_url }}/workers"
+      - alert: TaskFlowSchedulerMetricsUnavailable
+        expr: |
+          taskflow:metrics:expected{job="taskflow-scheduler"}
+            unless on (job, instance) taskflow:scheduler_metrics:fresh
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduler metrics are unavailable"
+          description: "An expected Scheduler has missing, unknown or stale samples."
+      - alert: TaskFlowSchedulerClusterMetricsUnavailable
+        expr: |
+          group by (job) (taskflow:metrics:expected{job="taskflow-scheduler"})
+            unless on (job) taskflow:scheduler_metrics:fresh
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No Scheduler has valid cluster metrics"
+          description: "Dispatch, Run and Scheduler backlog conditions are unknown."
+      - alert: TaskFlowWorkerMetricsUnavailable
+        expr: |
+          taskflow:metrics:expected{job="taskflow-worker"}
+            unless on (job, instance) taskflow:worker_metrics:fresh
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker metrics are unavailable"
+          description: "Check sampling and OTLP push for Worker {{ $labels.instance }}."
+      - alert: TaskFlowBrokerDeadLetterBacklog
+        expr: |
+          taskflow:broker_dead_letter:queued > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RabbitMQ dead-letter queue has pending deliveries"
+          description: "Queue {{ $labels.queue }} in vhost {{ $labels.vhost }} has {{ $value }} messages."
+      - alert: TaskFlowBrokerMetricsUnavailable
+        expr: |
+          up{job="rabbitmq-dead-letter"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RabbitMQ metrics scrape failed"

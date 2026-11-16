@@ -8,6 +8,7 @@ import com.taskflow.scheduler.dispatch.mapper.DispatchOutboxMapper;
 import com.taskflow.scheduler.dispatch.mapper.DispatchFailureMapper;
 import com.taskflow.scheduler.execution.mapper.RunDataMapper;
 import com.taskflow.scheduler.node.mapper.WorkerNodeMapper;
+import com.taskflow.scheduler.observability.config.MetricsProperties;
 import com.taskflow.scheduler.observability.service.IMetricsSampler;
 import io.micrometer.core.instrument.*;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -29,9 +30,11 @@ public class MetricsSamplerImpl implements IMetricsSampler {
     private final Counter failed;
     private static final List<String> STATES = List.of("WAITING", "READY", "SENDING", "PUBLISHED", "FAILED", "CANCELLED");
     private final Map<String, AtomicLong> backlog = new LinkedHashMap<>();
+    private final Map<String, AtomicLong> businessFailures = new LinkedHashMap<>();
+    private final Map<String, AtomicLong> workersOnline = new LinkedHashMap<>();
 
     public MetricsSamplerImpl(DispatchOutboxMapper outbox, DispatchFailureMapper failures, RunDataMapper runs, WorkerNodeMapper nodes,
-            MeterRegistry registry, @Qualifier("metricsClock") Clock clock) {
+            MeterRegistry registry, @Qualifier("metricsClock") Clock clock, MetricsProperties properties) {
         this.outbox = outbox; this.failures = failures; this.runs = runs; this.nodes = nodes;
         this.clock = clock;
         for (var state : STATES) {
@@ -47,6 +50,12 @@ public class MetricsSamplerImpl implements IMetricsSampler {
         register(registry, "taskflow.worker.node.heartbeat.age", "seconds");
         register(registry, "taskflow.dispatch.dead.letter.unresolved", null);
         register(registry, "taskflow.dispatch.outbox.unresolved", null);
+        for (String code : List.of("BUSINESS_HANDLER_FAILED", "HANDLER_FAILED")) {
+            businessFailures.put(code, registerTagged(registry, "taskflow.run.business.failures.recent", "result_code", code));
+        }
+        for (String worker : properties.expectedWorkers()) {
+            workersOnline.put(worker, registerTagged(registry, "taskflow.worker.node.online", "worker_id", worker));
+        }
         // 回调只读取内存时间戳；失败期间 age 继续增加，不查询数据库。
         Gauge.builder("taskflow.metrics.sample.age", lastSuccess,
                 value -> value.get() < 0 ? -1 : Math.max(0, (clock.millis() - value.get()) / 1000.0))
@@ -58,6 +67,12 @@ public class MetricsSamplerImpl implements IMetricsSampler {
     private void register(MeterRegistry registry, String name, String unit) {
         var value = new AtomicLong(-1); values.add(value);
         Gauge.builder(name, value, AtomicLong::get).baseUnit(unit).register(registry);
+    }
+
+    private AtomicLong registerTagged(MeterRegistry registry, String name, String key, String tag) {
+        var value = new AtomicLong(-1);
+        Gauge.builder(name, value, AtomicLong::get).tag(key, tag).register(registry);
+        return value;
     }
 
     @Override
@@ -75,10 +90,14 @@ public class MetricsSamplerImpl implements IMetricsSampler {
                     .map(at -> Math.max(0, Duration.between(at, now).getSeconds())).orElse(-1L);
             long dead = failures.countUnresolvedDeadLetters();
             long exhausted = failures.countUnresolvedOutbox();
+            var recentFailures = runs.countTerminalFailures(now.minus(Duration.ofMinutes(5)), now, businessFailures.keySet());
+            var online = nodes.onlineIds(workersOnline.keySet(), now);
             // 全部查询成功才发布本轮值；各 SELECT 独立释放连接，不构成数据库快照。
             for (var state : STATES) backlog.get(state).set(counts.getOrDefault(state, 0L));
             long[] sampled = {publish, claim, dispatch, expired, expiring, heartbeat, dead, exhausted};
             for (int i = 0; i < sampled.length; i++) values.get(i).set(sampled[i]);
+            businessFailures.forEach((code, value) -> value.set(recentFailures.getOrDefault(code, 0L)));
+            workersOnline.forEach((worker, value) -> value.set(online.contains(worker) ? 1 : 0));
             lastSuccess.set(now.toEpochMilli());
             ok.increment();
         } catch (RuntimeException failure) {

@@ -1,6 +1,6 @@
 export const RUN_STATES = { READY: '待派发', RUNNING: '运行中', RETRY_WAIT: '等待重试', SUCCEEDED: '成功', FAILED: '失败' };
 export const TRIGGER_TYPES = { MANUAL: '手动触发', CRON: '定时触发' };
-export const emptyRunFilters = () => ({ range: '24h', from: '', to: '', jobId: '', state: '', triggerType: '', runId: '', resultCode: '' });
+export const emptyRunFilters = () => ({ timeField: 'CREATED', range: '24h', from: '', to: '', jobId: '', state: '', triggerType: '', runId: '', resultCode: '' });
 export const isRunId = (value) => /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(value);
 
 export function localRunTime(value) {
@@ -46,6 +46,8 @@ export function buildRunQuery(form, now = Date.now(), previous = {}) {
     }
     if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to || to - from > 7 * 86400000)
       throw new Error('请填写有效的起止时间，起点早于终点，范围不超过 7 天。');
+    if (!['CREATED', 'FINISHED'].includes(form.timeField)) throw new Error('请选择有效的时间字段。');
+    if (form.timeField === 'FINISHED') query.timeField = form.timeField;
     query.from = new Date(from).toISOString(); query.to = new Date(to).toISOString();
   }
   return query;
