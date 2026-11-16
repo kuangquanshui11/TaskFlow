@@ -18,14 +18,19 @@ public final class AttemptEvents {
     public record ReportFailure(String code, int attempts, Instant observedAt) { }
 
     public record WorkerEvents(UUID runId, UUID attemptId, String workerId, List<WorkerEvent> events, Boolean truncated,
-                               ReportFailure reportFailure) {
+                               ReportFailure reportFailure, WorkerTiming timing) {
+        public WorkerEvents(UUID runId, UUID attemptId, String workerId, List<WorkerEvent> events, Boolean truncated, ReportFailure reportFailure) {
+            this(runId, attemptId, workerId, events, truncated, reportFailure, null);
+        }
         public WorkerEvents(UUID runId, UUID attemptId, String workerId, List<WorkerEvent> events, Boolean truncated) {
-            this(runId, attemptId, workerId, events, truncated, null);
+            this(runId, attemptId, workerId, events, truncated, null, null);
         }
     }
+
+    public record WorkerTiming(Long handlerMillis, Long resultReportMillis) { }
 
     public enum WorkerStatus { AVAILABLE, UNAVAILABLE, NOT_ASSIGNED }
 
     public record Timeline(UUID runId, UUID attemptId, String workerId, Batch<SchedulerEvent> scheduler,
-            WorkerStatus workerStatus, Batch<WorkerEvent> worker) {}
+            WorkerStatus workerStatus, Batch<WorkerEvent> worker, Long dispatchMillis, WorkerTiming workerTiming) {}
 }

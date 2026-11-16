@@ -351,7 +351,7 @@ GET /api/v1/runs/selectSummary?from=2026-10-30T00:00:00Z&to=2026-10-31T00:00:00Z
 - 窗口必须 `from < to` 且跨度 ≤ 7 天，否则 400 / `INVALID_ARGUMENT`。
 - Run 状态只有 `READY / RUNNING / RETRY_WAIT / SUCCEEDED / FAILED`；`TIMED_OUT` 只属于 Attempt。
 - `finished` = `SUCCEEDED + FAILED`；`successRate = succeeded / finished`，四舍五入 4 位小数，`finished = 0` 时为 `null`（不要返回 0 或 NaN）。
-- Run 耗时 = `run_execution.finished_at - started_at`，**包含排队、派发与重试间隔，不等于 Handler 执行时间**。
+- Run 耗时 = `run_execution.finished_at - started_at`，包含首次进入 RUNNING 后的等待、派发与重试间隔。
 - `p95` 用 nearest-rank。为控制查询量，只取窗口内按 `created_at, id` 升序的前 10,000 个已完成 Run 作为样本；`sampled` 返回实际样本数，`truncated` 表示样本已截断（此时 p95 为近似值，文档必须写明）。
 - 失败列表按 `(jobId, resultCode)` 聚合，`resultCode` 为空时记作 `UNKNOWN`，按 `runCount` 倒序，最多 5 条。
 - 四个统计查询是同一 Scheduler 数据库上的多次读取，**不是一致性快照**；`observedAt` 只表示观察时刻。
@@ -362,7 +362,7 @@ GET /api/v1/runs/selectSummary?from=2026-10-30T00:00:00Z&to=2026-10-31T00:00:00Z
 
 avgMillis 使用整个窗口内具有开始及结束时间的终态 Run 算术平均，四舍五入到整数毫秒；p95Millis 使用同样有效的耗时样本，按 nearest-rank 取值。没有可用耗时样本时平均和 P95 均为 null，sampled 为 0。采样超过 10,000 时只保留最早样本，不作随机抽样。有效耗时记录总数超过上限时 truncated=true。由于读取间状态可能变化，计数和样本数可能短暂不一致。
 
-started_at 首次进入 RUNNING 时写入，故耗时仅涵盖此后发生的等待、派发与重试间隔，不含初始排队；历史回填以 Attempt 最早开始为准。快速回调先于 RUNNING 完成时开始时间可能为空，此类 Run 计入结果，不进入耗时统计。详见 [运行统计设计](run-reporting.md) 与 [验证记录](run-reporting-verification.md)。
+started_at 首次进入 RUNNING 时写入，故耗时仅涵盖此后发生的等待、派发与重试间隔，不含初始排队；历史回填以 Attempt 最早开始为准。快速回调先于 RUNNING 完成时开始时间可能为空，此类 Run 计入结果，不进入耗时统计。总览另提供 `endToEndLatency`，结构与 `latency` 相同，使用 Run 创建到终态的毫秒数。Run 详情新增可空字段 `timing`（`endToEndMillis`、`scheduleDelayMillis`、`initialQueueMillis`）。Attempt 时间线新增 `dispatchMillis` 与 `workerTiming`（`handlerMillis`、`resultReportMillis`），缺少有效起止点时返回 null。详见 [运行统计设计](run-reporting.md) 与 [验证记录](p05-verification.md)。
 
 ## 代码分层
 

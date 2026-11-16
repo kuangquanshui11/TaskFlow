@@ -1,4 +1,5 @@
 <script setup>
+import { formatLatency } from '../lib/run-summary.js';
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { runsApi } from '../api/runs.js';
 import { fullDate } from '../lib/format.js';
@@ -84,6 +85,11 @@ onBeforeUnmount(() => controller?.abort());
       <p v-if="error" role="alert" class="muted">时间线读取失败，请重试。</p>
       <template v-if="timeline">
         <p class="muted">各服务按最近记录排序。目标节点 <code>{{ timeline.workerId || '未记录' }}</code></p>
+        <dl class="timeline-durations" v-if="timeline.dispatchMillis != null || timeline.workerTiming">
+          <div><dt>派发耗时</dt><dd>{{ formatLatency(timeline.dispatchMillis) }}</dd></div>
+          <div><dt>Handler 执行</dt><dd>{{ formatLatency(timeline.workerTiming?.handlerMillis) }}</dd></div>
+          <div><dt>结果上报</dt><dd>{{ formatLatency(timeline.workerTiming?.resultReportMillis) }}</dd></div>
+        </dl>
         <div v-for="source in sources" :key="source.name" class="timeline-source">
           <h4>{{ source.name }}</h4>
           <p v-if="source.batch.truncated" class="muted">仅显示最近 100 条。</p>
@@ -110,6 +116,8 @@ onBeforeUnmount(() => controller?.abort());
 .attempt-timeline { border-top: 1px solid var(--line); }
 .attempt-timeline summary { padding: 12px 16px; min-height: 44px; cursor: pointer; font-weight: 600; }
 .timeline-content { padding: 0 16px 16px; display: grid; gap: 12px; overflow-wrap: anywhere; }
+.timeline-durations { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 0; }
+.timeline-durations dd { margin: 0; font-variant-numeric: tabular-nums; }
 .timeline-source { min-width: 0; display: grid; gap: 8px; }
 .timeline-events { margin: 0; padding: 0; list-style: none; }
 .timeline-events li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 8px 0; border-top: 1px solid var(--line); }

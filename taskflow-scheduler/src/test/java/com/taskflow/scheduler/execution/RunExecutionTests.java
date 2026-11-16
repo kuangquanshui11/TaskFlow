@@ -148,6 +148,14 @@ class RunExecutionTests {
         runs.dispatchPending();
         assertThat(runs.selectById(run.id()).state()).isEqualTo("SUCCEEDED");
         assertThat(runs.selectById(run.id()).attempts()).hasSize(1);
+        var timing = runs.selectById(run.id()).timing();
+        assertThat(timing.endToEndMillis()).isNotNegative();
+        assertThat(timing.initialQueueMillis()).isNotNegative();
+        assertThat(timing.scheduleDelayMillis()).isNull();
+        var summary = runs.selectSummary(null, null);
+        assertThat(summary.endToEndLatency().sampled()).isEqualTo(1);
+        assertThat(summary.endToEndLatency().p95Millis()).isEqualTo(timing.endToEndMillis());
+        assertThat(summary.latency().sampled()).isZero();
         assertThat(eventTypes(run.id(), run.attempts().getFirst().id())).containsExactly(
                 "HTTP_DISPATCH_CLAIMED", "ATTEMPT_FINISHED", "RUN_FINISHED", "HTTP_DISPATCH_ACCEPTED");
     }

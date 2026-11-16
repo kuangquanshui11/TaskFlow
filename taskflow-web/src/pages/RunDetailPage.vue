@@ -97,6 +97,9 @@ onBeforeUnmount(() => controller?.abort());
             <div class="wide"><dt>原失败 Run</dt><dd><RouterLink class="source-run-link" :to="{ name: 'run-detail', params: { runId: run.sourceRunId }, query: route.query }"><code>{{ run.sourceRunId }}</code></RouterLink></dd></div>
             <div><dt>重跑操作者</dt><dd>{{ run.rerunActor }}</dd></div>
           </template>
+          <div v-if="run.timing?.endToEndMillis != null"><dt>端到端耗时</dt><dd>{{ formatLatency(run.timing.endToEndMillis) }}</dd></div>
+          <div v-if="run.timing?.scheduleDelayMillis != null"><dt>计划延迟</dt><dd>{{ formatLatency(run.timing.scheduleDelayMillis) }}</dd></div>
+          <div v-if="run.timing?.initialQueueMillis != null"><dt>首次排队</dt><dd>{{ formatLatency(run.timing.initialQueueMillis) }}</dd></div>
           <div><dt>创建时间</dt><dd>{{ fullDate(run.createdAt, timezone) }}</dd></div>
           <div><dt>最后更新时间</dt><dd>{{ fullDate(run.updatedAt, timezone) }}</dd></div>
           <div v-if="run.scheduledAt"><dt>计划触发时间</dt><dd>{{ fullDate(run.scheduledAt, timezone) }}</dd></div>

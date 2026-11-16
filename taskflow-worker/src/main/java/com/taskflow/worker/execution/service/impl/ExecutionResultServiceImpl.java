@@ -101,7 +101,7 @@ public class ExecutionResultServiceImpl implements IExecutionResultService {
     private boolean persist(ExecutionCompletion completion, boolean deferred) {
         return Boolean.TRUE.equals(transactions.execute(status -> {
             if (!mapper.finish(completion.attemptId(), completion.state(), completion.resultCode(), completion.message(),
-                    completion.retryable(), completion.handlerInvoked(), completion.finishedAt())) return false;
+                    completion.retryable(), completion.handlerInvoked(), completion.finishedAt(), completion.handlerElapsedMillis())) return false;
             if (deferred) mapper.appendExecutionEvent(completion.attemptId(), "RESULT_RECOVERED", Instant.now());
             return true;
         })) || alreadySaved(completion);

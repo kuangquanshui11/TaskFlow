@@ -28,11 +28,14 @@ public class AttemptEventServiceImpl implements IAttemptEventService {
         var events = runs.selectAttemptEvents(runId, attemptId, LIMIT + 1);
         var scheduler = new Batch<>(events.stream().limit(LIMIT).toList(), events.size() > LIMIT);
         var workerId = attempt.targetWorkerId() == null ? attempt.ownerWorkerId() : attempt.targetWorkerId();
+        Long dispatchMillis = RunServiceImpl.elapsedMillis(attempt.startedAt(), runs.firstLeaseAcquiredAt(runId, attemptId));
         if (workerId == null) {
-            return new Timeline(runId, attemptId, null, scheduler, WorkerStatus.NOT_ASSIGNED, NO_WORKER_EVENTS);
+            return new Timeline(runId, attemptId, null, scheduler, WorkerStatus.NOT_ASSIGNED, NO_WORKER_EVENTS, dispatchMillis, null);
         }
-        return worker.select(runId, attemptId, workerId, LIMIT)
-                .map(batch -> new Timeline(runId, attemptId, workerId, scheduler, WorkerStatus.AVAILABLE, batch))
-                .orElseGet(() -> new Timeline(runId, attemptId, workerId, scheduler, WorkerStatus.UNAVAILABLE, NO_WORKER_EVENTS));
+        return worker.snapshot(runId, attemptId, workerId, LIMIT)
+                .map(response -> new Timeline(runId, attemptId, workerId, scheduler, WorkerStatus.AVAILABLE,
+                        new Batch<>(response.events(), response.truncated()), dispatchMillis, response.timing()))
+                .orElseGet(() -> new Timeline(runId, attemptId, workerId, scheduler, WorkerStatus.UNAVAILABLE,
+                        NO_WORKER_EVENTS, dispatchMillis, null));
     }
 }

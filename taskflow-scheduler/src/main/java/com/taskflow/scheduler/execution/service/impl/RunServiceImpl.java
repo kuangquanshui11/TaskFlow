@@ -172,10 +172,10 @@ public class RunServiceImpl implements IRunService {
         var observed = Instant.now();
         if (from == null && to == null) { to = observed; from = to.minus(Duration.ofHours(24)); }
         validateQueryWindow(from, to);
-        // 四次读取不持有共同事务快照；观察时间不承诺各项统计完全同步。
+        // 多次读取不持有共同事务快照；观察时间不承诺各项统计完全同步。
         var states = mapper.summaryStates(from, to);
         var attempts = mapper.summaryAttempts(from, to);
-        var samples = mapper.summaryLatencies(from, to).stream().sorted().toList();
+        var samples = mapper.summaryLatencies(from, to);
         var failures = mapper.summaryFailures(from, to);
         var counts = new java.util.LinkedHashMap<String, Long>();
         for (var state : List.of("READY", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED")) counts.put(state, 0L);
@@ -184,13 +184,22 @@ public class RunServiceImpl implements IRunService {
         long timed = states.stream().mapToLong(StateCount::timedCount).sum();
         var totalMillis = states.stream().map(StateCount::totalMillis).filter(java.util.Objects::nonNull)
                 .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
-        Long average = timed == 0 ? null : totalMillis.divide(java.math.BigDecimal.valueOf(timed), 0, java.math.RoundingMode.HALF_UP).longValue();
-        Long p95 = samples.isEmpty() ? null : samples.get((int) Math.ceil(samples.size() * 0.95) - 1);
+        long endToEndCount = states.stream().mapToLong(StateCount::endToEndCount).sum();
+        var endToEndTotal = states.stream().map(StateCount::endToEndTotalMillis).filter(Objects::nonNull)
+                .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+        var endToEndSamples = mapper.summaryEndToEndLatencies(from, to);
         var rate = finished == 0 ? null : java.math.BigDecimal.valueOf(succeeded)
                 .divide(java.math.BigDecimal.valueOf(finished), 4, java.math.RoundingMode.HALF_UP);
         return new Overview(from, to, observed, counts.values().stream().mapToLong(Long::longValue).sum(), counts,
                 finished, succeeded, failed, rate, attempts.attemptTotal(), attempts.retriedRunCount(),
-                new Latency(average, p95, samples.size(), timed > 10000), failures);
+                latency(totalMillis, timed, samples), failures, latency(endToEndTotal, endToEndCount, endToEndSamples));
+    }
+
+    private static Latency latency(java.math.BigDecimal total, long count, List<Long> samples) {
+        var sorted = samples.stream().sorted().toList();
+        Long average = count == 0 ? null : total.divide(java.math.BigDecimal.valueOf(count), 0, java.math.RoundingMode.HALF_UP).longValue();
+        Long p95 = sorted.isEmpty() ? null : sorted.get((int) Math.ceil(sorted.size() * 0.95) - 1);
+        return new Latency(average, p95, sorted.size(), count > 10000);
     }
 
     private static void validateQueryWindow(Instant from, Instant to) {
@@ -389,7 +398,13 @@ public class RunServiceImpl implements IRunService {
         return new RunView(row.id(), row.jobId(), row.configVersion(), row.requestKey(), row.state(),
                 json.readValue(row.snapshotJson(), Snapshot.class), attempts, row.resultCode(),
                 row.message(), row.createdAt(), row.updatedAt(), row.triggerType(), row.scheduledAt(),
-                row.sourceRunId(), row.rerunActor(), canRerun(row, attempts), row.traceContext().traceId());
+                row.sourceRunId(), row.rerunActor(), canRerun(row, attempts), row.traceContext().traceId(),
+                new RunTiming(elapsedMillis(row.createdAt(), row.finishedAt()), elapsedMillis(row.scheduledAt(), row.createdAt()),
+                        elapsedMillis(row.createdAt(), attempts.isEmpty() ? null : attempts.getFirst().startedAt())));
+    }
+
+    static Long elapsedMillis(Instant from, Instant to) {
+        return from == null || to == null || to.isBefore(from) ? null : Duration.between(from, to).toMillis();
     }
     private static boolean canRerun(RunRow row, List<Attempt> attempts) {
         // Worker 只在领取执行租约之前使用这两个结果码。旧记录缺少确定证据时按不可重跑处理。

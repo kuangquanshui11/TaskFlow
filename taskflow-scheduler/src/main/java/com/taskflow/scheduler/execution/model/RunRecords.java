@@ -37,7 +37,8 @@ public final class RunRecords {
     public record RunView(UUID id, long jobId, long configVersion, UUID requestKey, String state,
             Snapshot snapshot, List<Attempt> attempts, String resultCode, String message,
             Instant createdAt, Instant updatedAt, String triggerType, Instant scheduledAt,
-            UUID sourceRunId, String rerunActor, boolean rerunEligible, String traceId) { }
+            UUID sourceRunId, String rerunActor, boolean rerunEligible, String traceId, RunTiming timing) { }
+    public record RunTiming(Long endToEndMillis, Long scheduleDelayMillis, Long initialQueueMillis) { }
     public record Summary(UUID id, long jobId, long configVersion, String state, int attemptCount,
             String resultCode, String message, Instant createdAt, Instant updatedAt, String triggerType,
             Instant scheduledAt, Instant finishedAt) { }
@@ -45,12 +46,13 @@ public final class RunRecords {
     public record Overview(Instant from, Instant to, Instant observedAt, long total,
             java.util.Map<String, Long> stateCounts, long finished, long succeeded, long failed,
             java.math.BigDecimal successRate, long attemptTotal, long retriedRunCount,
-            Latency latency, List<FailureGroup> failures) { }
+            Latency latency, List<FailureGroup> failures, Latency endToEndLatency) { }
     public record Latency(Long avgMillis, Long p95Millis, int sampled, boolean truncated) { }
     public record FailureGroup(long jobId, String resultCode, long runCount, Instant lastFailedAt) {
         @JsonProperty("jobIdText")
         public String jobIdText() { return Long.toString(jobId); }
     }
-    public record StateCount(String state, long count, long timedCount, java.math.BigDecimal totalMillis) { }
+    public record StateCount(String state, long count, long timedCount, java.math.BigDecimal totalMillis,
+            long endToEndCount, java.math.BigDecimal endToEndTotalMillis) { }
     public record AttemptTotals(long attemptTotal, long retriedRunCount) { }
 }

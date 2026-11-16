@@ -58,8 +58,12 @@ public class ExecutionMapper {
                 """, ts(now), id.toString()) == 1;
     }
     public boolean finish(UUID id, String state, String code, String message, boolean retryable, boolean handlerInvoked, Instant now) {
-        boolean updated = jdbc.update("UPDATE worker_execution SET state=?,result_code=?,message=?,retryable=?,finished_at=?,next_report_at=? WHERE attempt_id=? AND state='RUNNING'",
-                state, code, message, retryable, ts(now), ts(now), id.toString()) == 1;
+        return finish(id, state, code, message, retryable, handlerInvoked, now, null);
+    }
+    public boolean finish(UUID id, String state, String code, String message, boolean retryable, boolean handlerInvoked,
+            Instant now, Long handlerElapsedMillis) {
+        boolean updated = jdbc.update("UPDATE worker_execution SET state=?,result_code=?,message=?,retryable=?,finished_at=?,next_report_at=?,handler_elapsed_millis=?,result_recorded_at=? WHERE attempt_id=? AND state='RUNNING'",
+                state, code, message, retryable, ts(now), ts(now), handlerElapsedMillis, ts(Instant.now()), id.toString()) == 1;
         if (!updated) return false;
         appendExecutionEvent(id, handlerInvoked ? "HANDLER_FINISHED" : "EXECUTION_FINISHED", now);
         return true;
@@ -84,9 +88,9 @@ public class ExecutionMapper {
     public boolean finishUnknown(UUID attemptId, UUID runId, ExecutionOwner owner, Instant now) {
         boolean updated = jdbc.update("""
                 UPDATE worker_execution SET state='FAILED',result_code='RESULT_OUTCOME_UNKNOWN',
-                    message='原执行结果不可用，外部副作用未知，请核对业务流水',retryable=FALSE,finished_at=?,next_report_at=?
+                    message='原执行结果不可用，外部副作用未知，请核对业务流水',retryable=FALSE,finished_at=?,next_report_at=?,result_recorded_at=?
                 WHERE attempt_id=? AND run_id=? AND state='RUNNING' AND report_worker_id=? AND report_session_id=?
-                """, ts(now), ts(now), attemptId.toString(), runId.toString(), owner.workerId(), owner.sessionId().toString()) == 1;
+                """, ts(now), ts(now), ts(now), attemptId.toString(), runId.toString(), owner.workerId(), owner.sessionId().toString()) == 1;
         if (updated) appendExecutionEvent(attemptId, "RESULT_RECOVERY_UNKNOWN", now);
         return updated;
     }
@@ -96,7 +100,7 @@ public class ExecutionMapper {
                 SELECT run_id,attempt_id,report_worker_id,'EXECUTION_RECOVERED',?,'FAILED','WORKER_RESTARTED'
                 FROM worker_execution WHERE state='RUNNING'
                 """, ts(now));
-        jdbc.update("UPDATE worker_execution SET state='FAILED',result_code='WORKER_RESTARTED',message='Worker 重启，之前执行的外部副作用未知',retryable=FALSE,finished_at=?,next_report_at=? WHERE state='RUNNING'", ts(now), ts(now));
+        jdbc.update("UPDATE worker_execution SET state='FAILED',result_code='WORKER_RESTARTED',message='Worker 重启，之前执行的外部副作用未知',retryable=FALSE,finished_at=?,next_report_at=?,result_recorded_at=? WHERE state='RUNNING'", ts(now), ts(now), ts(now));
     }
     public List<ExecutionRow> reports(Instant now, int maxAttempts) {
         return jdbc.query("SELECT * FROM worker_execution WHERE state IN ('SUCCEEDED','FAILED') AND reported=FALSE AND report_count<? AND next_report_at<=? ORDER BY next_report_at LIMIT 100",
@@ -109,8 +113,25 @@ public class ExecutionMapper {
         return claimed;
     }
     public void recordReportOutcome(UUID id, int number, String type, boolean settled, Instant now) {
-        if (settled) jdbc.update("UPDATE worker_execution SET reported=TRUE WHERE attempt_id=?", id.toString());
+        if ("REPORT_ACKNOWLEDGED".equals(type)) {
+            jdbc.update("UPDATE worker_execution SET reported=TRUE,result_acknowledged_at=COALESCE(result_acknowledged_at,?) WHERE attempt_id=?",
+                    ts(now), id.toString());
+        } else if (settled) {
+            jdbc.update("UPDATE worker_execution SET reported=TRUE WHERE attempt_id=?", id.toString());
+        }
         appendReportEvent(id, number, type, now);
+    }
+    public com.taskflow.worker.execution.dto.AttemptEvents.Timing selectTiming(UUID runId, UUID attemptId, String workerId) {
+        return jdbc.query("""
+                SELECT handler_elapsed_millis,result_recorded_at,result_acknowledged_at FROM worker_execution
+                WHERE run_id=? AND attempt_id=? AND report_worker_id=?
+                """, (rs, index) -> {
+            var recorded = instant(rs, "result_recorded_at");
+            var acknowledged = instant(rs, "result_acknowledged_at");
+            Long reportMillis = recorded == null || acknowledged == null || acknowledged.isBefore(recorded)
+                    ? null : java.time.Duration.between(recorded, acknowledged).toMillis();
+            return new com.taskflow.worker.execution.dto.AttemptEvents.Timing(rs.getObject("handler_elapsed_millis", Long.class), reportMillis);
+        }, runId.toString(), attemptId.toString(), workerId).stream().findFirst().orElse(null);
     }
     public void recordReportFailure(UUID id, int number, String code) {
         jdbc.update("""

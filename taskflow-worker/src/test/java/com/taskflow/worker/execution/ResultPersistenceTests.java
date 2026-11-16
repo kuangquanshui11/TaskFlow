@@ -25,7 +25,7 @@ class ResultPersistenceTests {
     @Test void shutdownInterruptsSavingWithoutChangingTheBusinessOutcomeOrRetryingAgain() throws Exception {
         var mapper = mock(ExecutionMapper.class);
         var firstSave = new CountDownLatch(1);
-        when(mapper.finish(any(), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any())).thenAnswer(call -> {
+        when(mapper.finish(any(), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any(), nullable(Long.class))).thenAnswer(call -> {
             firstSave.countDown();
             throw new DataAccessResourceFailureException("database unavailable");
         });
@@ -46,7 +46,7 @@ class ResultPersistenceTests {
                 assertThat(worker.isAlive()).isFalse();
                 assertThat(stopped).isTrue();
                 assertThat(interruptPreserved).isTrue();
-                verify(mapper, times(1)).finish(completion.attemptId(), "SUCCEEDED", "SUCCEEDED", "done", false, true, completion.finishedAt());
+                verify(mapper, times(1)).finish(completion.attemptId(), "SUCCEEDED", "SUCCEEDED", "done", false, true, completion.finishedAt(), null);
                 assertThat(metrics.get("taskflow.worker.result.persistence").tag("outcome", "interrupted").counter().count()).isEqualTo(1);
                 assertThat(metrics.get("taskflow.worker.result.persistence.active").gauge().value()).isZero();
             } finally { worker.interrupt(); worker.join(3000); }
@@ -55,14 +55,14 @@ class ResultPersistenceTests {
 
     @Test void singleAttemptPolicyStopsImmediatelyAfterDatabaseFailure() {
         var mapper = mock(ExecutionMapper.class);
-        when(mapper.finish(any(), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any()))
+        when(mapper.finish(any(), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any(), nullable(Long.class)))
                 .thenThrow(new DataAccessResourceFailureException("database unavailable"));
         var metrics = new SimpleMeterRegistry();
         try {
             var service = new ExecutionResultServiceImpl(mapper, new ResultPersistenceProperties(1, Duration.ofSeconds(5), Duration.ofSeconds(1)),
                     metrics, mock(PlatformTransactionManager.class));
             assertThat(service.save(completion())).isEqualTo(DEFERRED);
-            verify(mapper, times(1)).finish(any(), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
+            verify(mapper, times(1)).finish(any(), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any(), nullable(Long.class));
             verifyNoMoreInteractions(mapper);
             assertThat(metrics.get("taskflow.worker.result.persistence").tag("outcome", "exhausted").counter().count()).isEqualTo(1);
         } finally { metrics.close(); }
@@ -74,14 +74,14 @@ class ResultPersistenceTests {
         when(manager.getTransaction(any())).thenThrow(new CannotCreateTransactionException("database unavailable"))
                 .thenReturn(new SimpleTransactionStatus());
         var completion = completion();
-        when(mapper.finish(completion.attemptId(), "SUCCEEDED", "SUCCEEDED", "done", false, true, completion.finishedAt()))
+        when(mapper.finish(completion.attemptId(), "SUCCEEDED", "SUCCEEDED", "done", false, true, completion.finishedAt(), null))
                 .thenReturn(true);
         var metrics = new SimpleMeterRegistry();
         try {
             var service = new ExecutionResultServiceImpl(mapper, new ResultPersistenceProperties(2, Duration.ofMillis(1), Duration.ofSeconds(1)), metrics, manager);
             assertThat(service.save(completion)).isEqualTo(SAVED);
             verify(manager, times(2)).getTransaction(any());
-            verify(mapper, times(1)).finish(completion.attemptId(), "SUCCEEDED", "SUCCEEDED", "done", false, true, completion.finishedAt());
+            verify(mapper, times(1)).finish(completion.attemptId(), "SUCCEEDED", "SUCCEEDED", "done", false, true, completion.finishedAt(), null);
         } finally { metrics.close(); }
     }
 

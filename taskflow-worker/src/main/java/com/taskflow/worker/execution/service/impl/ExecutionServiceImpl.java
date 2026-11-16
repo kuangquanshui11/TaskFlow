@@ -142,6 +142,7 @@ public class ExecutionServiceImpl implements IExecutionService {
         String state = "SUCCEEDED", code = "SUCCEEDED", message = "";
         boolean retryable = false;
         boolean handlerStarted = false;
+        Long handlerElapsedMillis = null;
         var active = new AtomicBoolean(true);
         ScheduledFuture<?> timeout = null;
         ExecutionContext context = null;
@@ -169,7 +170,12 @@ public class ExecutionServiceImpl implements IExecutionService {
                     recordHandlerStart(dispatch.attemptId());
                     context.checkActive();
                     handlerStarted = true;
-                    message = handlers.execute(dispatch.snapshot(), context);
+                    long started = System.nanoTime();
+                    try {
+                        message = handlers.execute(dispatch.snapshot(), context);
+                    } finally {
+                        handlerElapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+                    }
                     context.checkActive();
                 } catch (ExecutionCancelledException cancelled) {
                     state = "FAILED"; code = cancelled.code(); message = "执行资格已失效";
@@ -213,7 +219,7 @@ public class ExecutionServiceImpl implements IExecutionService {
             tracing.tag("resultCode", code);
             log.atInfo().addKeyValue("resultCode", code).log("Attempt execution ended");
             deferred = saveResult(new ExecutionCompletion(dispatch.attemptId(), dispatch.runId(), state, code, message,
-                    retryable, handlerStarted, Instant.now()));
+                    retryable, handlerStarted, Instant.now(), handlerElapsedMillis));
         } catch (RuntimeException failure) {
             org.slf4j.LoggerFactory.getLogger(getClass()).error("Execution persistence failed. attemptId={}, type={}",
                     dispatch.attemptId(), failure.getClass().getSimpleName());

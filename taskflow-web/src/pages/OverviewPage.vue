@@ -71,7 +71,7 @@ onBeforeUnmount(() => { controller?.abort(); summaryController?.abort(); });
         <article class="metric-card"><div class="metric-label">运行总数</div><div class="metric-number">{{ formatCount(runSummary.total) }}</div><p>窗口内创建的 Run</p></article>
         <article class="metric-card"><div class="metric-label">成功率</div><div class="metric-number">{{ formatSuccessRate(runSummary.successRate) }}</div><p>成功 / 已完成</p></article>
         <article class="metric-card"><div class="metric-label">失败数</div><div class="metric-number">{{ formatCount(runSummary.failed) }}</div><p>最终失败的 Run</p><RouterLink :to="failedRunsLocation()" class="text-link run-failure-link">查看失败运行<AppIcon name="arrow" :size="15" /></RouterLink></article>
-        <article class="metric-card"><div class="metric-label">P95 耗时{{ runSummary.latency.truncated ? '（近似）' : '' }}</div><div class="metric-number">{{ formatLatency(runSummary.latency.p95Millis) }}</div><p>有效样本 {{ formatCount(runSummary.latency.sampled) }} 个</p></article>
+        <article class="metric-card"><div class="metric-label">端到端 P95{{ runSummary.endToEndLatency?.truncated ? '（近似）' : '' }}</div><div class="metric-number">{{ formatLatency(runSummary.endToEndLatency?.p95Millis) }}</div><p v-if="runSummary.endToEndLatency">有效样本 {{ formatCount(runSummary.endToEndLatency.sampled) }} 个</p></article>
       </div>
       <p v-if="!runSummary.total" class="run-summary-message" role="status">暂无数据：此时间窗内没有运行记录</p>
       <div class="run-distribution" aria-label="运行状态分布">

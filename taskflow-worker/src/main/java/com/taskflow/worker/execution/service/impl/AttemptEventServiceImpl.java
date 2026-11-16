@@ -31,6 +31,7 @@ public class AttemptEventServiceImpl implements IAttemptEventService {
         var now = Instant.now();
         var failure = executions.selectReportFailure(runId, attemptId, workerId, properties.maxReportAttempts(),
                 now.minus(properties.connectTimeout()).minus(properties.requestTimeout()), now).orElse(null);
-        return new AttemptEvents(runId, attemptId, workerId, events.stream().limit(LIMIT).toList(), events.size() > LIMIT, failure);
+        return new AttemptEvents(runId, attemptId, workerId, events.stream().limit(LIMIT).toList(), events.size() > LIMIT,
+                failure, executions.selectTiming(runId, attemptId, workerId));
     }
 }

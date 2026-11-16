@@ -169,8 +169,17 @@ public class RunDataMapper {
                 expected.id().toString(), expected.currentAttempt(), expected.state()) == 1;
     }
     public List<StateCount> summaryStates(Instant from, Instant to) {
-        return jdbc.query("SELECT state,COUNT(*) AS n,COUNT(CASE WHEN state IN ('SUCCEEDED','FAILED') AND started_at IS NOT NULL THEN finished_at END) AS timed_count,SUM(CASE WHEN state IN ('SUCCEEDED','FAILED') THEN TIMESTAMPDIFF(MICROSECOND,started_at,finished_at)/1000.0 END) AS total_millis FROM run_execution WHERE created_at>=? AND created_at<? GROUP BY state",
-                (rs, i) -> new StateCount(rs.getString("state"), rs.getLong("n"), rs.getLong("timed_count"), rs.getBigDecimal("total_millis")), windowTs(from), windowTs(to));
+        return jdbc.query("""
+                SELECT state, COUNT(*) AS n,
+                  COUNT(CASE WHEN state IN ('SUCCEEDED','FAILED') AND started_at IS NOT NULL THEN finished_at END) AS timed_count,
+                  SUM(CASE WHEN state IN ('SUCCEEDED','FAILED') THEN TIMESTAMPDIFF(MICROSECOND,started_at,finished_at)/1000.0 END) AS total_millis,
+                  COUNT(CASE WHEN state IN ('SUCCEEDED','FAILED') AND finished_at>=created_at THEN 1 END) AS end_to_end_count,
+                  SUM(CASE WHEN state IN ('SUCCEEDED','FAILED') AND finished_at>=created_at
+                    THEN TIMESTAMPDIFF(MICROSECOND,created_at,finished_at)/1000.0 END) AS end_to_end_total
+                FROM run_execution WHERE created_at>=? AND created_at<? GROUP BY state
+                """,
+                (rs, i) -> new StateCount(rs.getString("state"), rs.getLong("n"), rs.getLong("timed_count"), rs.getBigDecimal("total_millis"),
+                        rs.getLong("end_to_end_count"), rs.getBigDecimal("end_to_end_total")), windowTs(from), windowTs(to));
     }
     public AttemptTotals summaryAttempts(Instant from, Instant to) {
         return jdbc.queryForObject("SELECT COUNT(*) AS n,COUNT(DISTINCT CASE WHEN a.attempt_number>1 THEN a.run_id END) AS retried FROM run_attempt a JOIN run_execution r ON r.id=a.run_id WHERE r.created_at>=? AND r.created_at<?",
@@ -180,6 +189,22 @@ public class RunDataMapper {
         return jdbc.query("SELECT started_at,finished_at FROM run_execution WHERE created_at>=? AND created_at<? AND state IN ('SUCCEEDED','FAILED') AND started_at IS NOT NULL AND finished_at IS NOT NULL ORDER BY created_at,id LIMIT 10000",
                 (rs, i) -> java.time.Duration.between(instant(rs, "started_at"), instant(rs, "finished_at")).toMillis(), windowTs(from), windowTs(to));
     }
+    public List<Long> summaryEndToEndLatencies(Instant from, Instant to) {
+        return jdbc.query("""
+                SELECT created_at,finished_at FROM run_execution
+                WHERE created_at>=? AND created_at<? AND state IN ('SUCCEEDED','FAILED') AND finished_at>=created_at
+                ORDER BY created_at,id LIMIT 10000
+                """, (rs, i) -> java.time.Duration.between(instant(rs, "created_at"), instant(rs, "finished_at")).toMillis(),
+                windowTs(from), windowTs(to));
+    }
+
+    public Instant firstLeaseAcquiredAt(UUID runId, UUID attemptId) {
+        return jdbc.query("""
+                SELECT occurred_at FROM scheduler_attempt_event
+                WHERE run_id=? AND attempt_id=? AND event_type='LEASE_ACQUIRED' ORDER BY id LIMIT 1
+                """, rs -> rs.next() ? instant(rs, "occurred_at") : null, runId.toString(), attemptId.toString());
+    }
+
     public List<FailureGroup> summaryFailures(Instant from, Instant to) {
         return jdbc.query("SELECT job_id," + GROUPED_RESULT_CODE + " AS code,COUNT(*) AS n,MAX(finished_at) AS last_failed_at"
                         + " FROM run_execution WHERE created_at>=? AND created_at<? AND state='FAILED' GROUP BY job_id,"
