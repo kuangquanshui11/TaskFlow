@@ -93,7 +93,7 @@ watch(() => [form.cronExpression, form.timeZone, form.scheduleType], () => { pre
 
 async function focusErrors() { await nextTick(); summary.value?.focus(); }
 function focusField(field) { document.getElementById('job-' + field)?.focus(); }
-const fieldNames = { name: '任务名称', handlerKey: '处理器', payload: '任务参数', timeZone: '时区', cronExpression: 'Cron 表达式', timeoutSeconds: '执行超时', maxAttempts: '最大尝试次数', retryIntervalSeconds: '重试间隔' };
+const fieldNames = { name: '任务名称', handlerKey: '处理器', payload: '任务参数', timeZone: '时区', cronExpression: 'Cron 表达式', timeoutSeconds: '执行超时', maxAttempts: '最大尝试次数', retryIntervalSeconds: '重试间隔', retryMaxIntervalSeconds: '重试间隔上限' };
 
 function applyTemplate(id) {
   Object.assign(form, createTemplateForm(id));
@@ -230,7 +230,15 @@ async function preview() {
           <div class="form-grid">
             <div class="field"><label for="job-timeoutSeconds">执行超时（秒）</label><input id="job-timeoutSeconds" v-model.number="form.timeoutSeconds" type="number" min="1" max="86400"><p v-if="errors.timeoutSeconds" class="field-error">{{ errors.timeoutSeconds }}</p></div>
             <div class="field"><label for="job-maxAttempts">最大尝试次数</label><input id="job-maxAttempts" v-model.number="form.maxAttempts" type="number" min="1" max="10"><p class="field-hint">包含首次执行。</p><p v-if="errors.maxAttempts" class="field-error">{{ errors.maxAttempts }}</p></div>
-            <div class="field"><label for="job-retryIntervalSeconds">重试间隔（秒）</label><input id="job-retryIntervalSeconds" v-model.number="form.retryIntervalSeconds" type="number" min="1" max="86400"><p v-if="errors.retryIntervalSeconds" class="field-error">{{ errors.retryIntervalSeconds }}</p></div>
+            <div class="field"><label for="job-retryPolicy">重试策略</label><select id="job-retryPolicy" v-model="form.retryPolicy"><option value="FIXED">固定间隔</option><option value="EXPONENTIAL">指数退避与抖动</option></select></div>
+            <div class="field"><label for="job-retryIntervalSeconds">{{ form.retryPolicy === 'EXPONENTIAL' ? '基础间隔（秒）' : '重试间隔（秒）' }}</label><input id="job-retryIntervalSeconds" v-model.number="form.retryIntervalSeconds" type="number" min="1" max="86400"><p v-if="errors.retryIntervalSeconds" class="field-error">{{ errors.retryIntervalSeconds }}</p></div>
+            <div v-if="form.retryPolicy === 'EXPONENTIAL'" class="field">
+              <label for="job-retryMaxIntervalSeconds">重试间隔上限（秒）</label>
+              <input id="job-retryMaxIntervalSeconds" v-model.number="form.retryMaxIntervalSeconds" type="number"
+                :min="form.retryIntervalSeconds" max="86400" :aria-invalid="Boolean(errors.retryMaxIntervalSeconds)"
+                aria-describedby="job-retryMaxIntervalHint">
+              <p id="job-retryMaxIntervalHint" :class="errors.retryMaxIntervalSeconds ? 'field-error' : 'field-hint'">{{ errors.retryMaxIntervalSeconds || '每次重试最多等待这个时长。' }}</p>
+            </div>
             <div class="field"><label for="job-misfirePolicy">错过计划时</label><select id="job-misfirePolicy" v-model="form.misfirePolicy"><option value="SKIP">跳过本次</option><option value="FIRE_ONCE">补发一次</option></select></div>
           </div>
         </details>

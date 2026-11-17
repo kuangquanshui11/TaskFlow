@@ -28,3 +28,10 @@ test('次数和秒数必须是范围内整数', () => {
   assert.ok(result.errors.maxAttempts);
   assert.ok(result.errors.retryIntervalSeconds);
 });
+
+test('指数退避要求间隔上限，切回固定策略时清除上限', () => {
+  const form = { ...emptyJob(), name: '任务', handlerKey: 'demoSuccess', retryPolicy: 'EXPONENTIAL' };
+  assert.ok(validateJob({ ...form, retryMaxIntervalSeconds: 4 }).errors.retryMaxIntervalSeconds);
+  assert.equal(toJobPayload({ ...form, retryMaxIntervalSeconds: 30 }, {}).retryMaxIntervalSeconds, 30);
+  assert.equal(toJobPayload({ ...form, retryPolicy: 'FIXED', retryMaxIntervalSeconds: 30 }, {}).retryMaxIntervalSeconds, null);
+});

@@ -149,7 +149,8 @@ onBeforeUnmount(() => controller?.abort());
           <div><dt>计划时区</dt><dd>{{ run.snapshot.timeZone }}</dd></div>
           <div><dt>执行超时</dt><dd>{{ run.snapshot.timeoutSeconds }} 秒</dd></div>
           <div><dt>最大尝试次数</dt><dd>{{ run.snapshot.maxAttempts }} 次（含首次）</dd></div>
-          <div><dt>重试间隔</dt><dd>{{ run.snapshot.retryIntervalSeconds }} 秒</dd></div>
+          <div><dt>重试策略</dt><dd>{{ run.snapshot.retryPolicy === 'EXPONENTIAL' ? '指数退避与抖动' : '固定间隔' }}</dd></div>
+          <div><dt>重试间隔</dt><dd>{{ run.snapshot.retryIntervalSeconds }} 秒{{ run.snapshot.retryPolicy === 'EXPONENTIAL' ? `（基础间隔，上限 ${run.snapshot.retryMaxIntervalSeconds} 秒）` : '' }}</dd></div>
           <div><dt>错过计划时</dt><dd>{{ { SKIP: '跳过本次', FIRE_ONCE: '补发一次' }[run.snapshot.misfirePolicy] || run.snapshot.misfirePolicy }}</dd></div>
           <div v-if="run.snapshot.description" class="wide"><dt>任务说明</dt><dd class="result-message">{{ run.snapshot.description }}</dd></div>
           <div class="wide"><dt>任务参数</dt><dd><pre>{{ JSON.stringify(run.snapshot.payload ?? null, null, 2) }}</pre></dd></div>

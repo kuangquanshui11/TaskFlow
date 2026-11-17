@@ -12,6 +12,8 @@ CREATE TABLE job_definition (
     timeout_seconds INT DEFAULT 30 NOT NULL,
     max_attempts INT DEFAULT 3 NOT NULL,
     retry_interval_seconds INT DEFAULT 5 NOT NULL,
+    retry_policy VARCHAR(16),
+    retry_max_interval_seconds INT,
     misfire_policy VARCHAR(16) DEFAULT 'SKIP' NOT NULL,
     config_version BIGINT DEFAULT 1 NOT NULL,
     created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) NOT NULL,

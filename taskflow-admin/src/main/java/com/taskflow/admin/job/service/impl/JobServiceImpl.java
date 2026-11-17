@@ -9,6 +9,7 @@ import com.taskflow.admin.job.event.JobDefinitionChanged;
 import com.taskflow.admin.job.exception.JobException;
 import com.taskflow.admin.job.model.JobDefinition;
 import com.taskflow.admin.job.model.JobDefinition.Configuration;
+import com.taskflow.admin.job.model.JobDefinition.RetryPolicy;
 import com.taskflow.admin.job.model.JobDefinition.ScheduleType;
 import com.taskflow.admin.job.model.JobFilter;
 import com.taskflow.admin.job.model.JobSummary;
@@ -129,6 +130,13 @@ public class JobServiceImpl implements IJobService {
     }
 
     private Configuration validate(Configuration input) {
+        var retryMax = input.retryMaxIntervalSeconds();
+        if (input.retryPolicy() == RetryPolicy.EXPONENTIAL) {
+            if (retryMax == null || retryMax < input.retryIntervalSeconds() || retryMax > 86400)
+                throw JobException.invalid("指数退避的间隔上限须介于基础重试间隔和 86400 秒之间");
+        } else if (retryMax != null) {
+            throw JobException.invalid("间隔上限仅用于指数退避");
+        }
         if (!handlers.select().contains(input.handlerKey())) {
             throw JobException.invalid("handlerKey 不在配置白名单中，请先查询可选处理器");
         }

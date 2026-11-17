@@ -17,6 +17,8 @@ import com.taskflow.scheduler.execution.dto.ExecutionProtocol.*;
 import com.taskflow.scheduler.execution.exception.RunException;
 import com.taskflow.scheduler.execution.mapper.RunDataMapper;
 import com.taskflow.scheduler.execution.model.RunRecords.*;
+import com.taskflow.scheduler.execution.model.RetryDelay;
+import java.util.concurrent.ThreadLocalRandom;
 import com.taskflow.scheduler.execution.service.IRunService;
 import com.taskflow.scheduler.dispatch.config.DispatchProperties;
 import com.taskflow.scheduler.dispatch.dto.DispatchEvent;
@@ -368,7 +370,10 @@ public class RunServiceImpl implements IRunService {
         var snapshot = json.readValue(run.snapshotJson(), Snapshot.class);
         if (!state.equals("SUCCEEDED") && retryable && attempt.attemptNumber() < snapshot.maxAttempts()) {
             int next = attempt.attemptNumber() + 1;
-            insertAttempt(run, next, now.plusSeconds(snapshot.retryIntervalSeconds()));
+            var delay = RetryDelay.calculate(snapshot.retryPolicy(),
+                    snapshot.retryIntervalSeconds(), snapshot.retryMaxIntervalSeconds(), attempt.attemptNumber(),
+                    ThreadLocalRandom.current());
+            insertAttempt(run, next, now.plus(delay));
             if (!mapper.runState(run, "RETRY_WAIT", next, code, message, now)) throw stale();
         } else {
             var finalState = state.equals("SUCCEEDED") ? "SUCCEEDED" : "FAILED";
@@ -420,6 +425,8 @@ public class RunServiceImpl implements IRunService {
         return view(row);
     }
     private void validate(Snapshot snapshot) {
+        if (!snapshot.isRetryPolicyValid())
+            throw new RunException(400, "INVALID_ARGUMENT", "重试间隔上限与策略不匹配");
         if (snapshot.payload() != null && !snapshot.payload().isNull() && !snapshot.payload().isObject())
             throw new RunException(400, "INVALID_ARGUMENT", "执行参数必须为 JSON 对象");
         if (snapshot.payload() != null && snapshot.payload().toString().getBytes(StandardCharsets.UTF_8).length > 65536)

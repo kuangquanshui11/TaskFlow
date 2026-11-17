@@ -2,6 +2,7 @@ package com.taskflow.scheduler.execution;
 
 import java.net.URI;
 import java.net.http.*;
+import java.time.Duration;
 import java.time.Instant;
 import java.sql.Timestamp;
 import java.util.UUID;
@@ -199,6 +200,8 @@ class RunExecutionTests {
         var waiting = runs.selectById(run.id());
         assertThat(waiting.state()).isEqualTo("RETRY_WAIT");
         assertThat(waiting.attempts()).hasSize(2);
+        assertThat(Duration.between(waiting.attempts().getFirst().finishedAt(), waiting.attempts().get(1).nextDispatchAt()))
+                .isEqualTo(Duration.ofSeconds(5));
         runs.dispatchPending();
         verify(worker, times(1)).dispatch(any());
         makeDue(); runs.dispatchPending();
@@ -218,6 +221,42 @@ class RunExecutionTests {
         assertThat(failed.resultCode()).isEqualTo("DISPATCH_UNCONFIRMED");
         assertThat(failed.attempts()).hasSize(1);
         verify(worker, times(5)).dispatch(any());
+    }
+    @Test void exponentialRetryPersistsBoundedDelayAndStopsAtTheAttemptLimit() {
+        doAnswer(call -> {
+            reportFailure(call.getArgument(0), "HANDLER_FAILED", true);
+            return null;
+        }).when(worker).dispatch(any());
+        var snapshot = new Snapshot(7, 2, "exponential", "demoSuccess", null, 30, 4, 5, "MANUAL",
+                null, "Asia/Shanghai", "SKIP", true, null, "EXPONENTIAL", 12);
+        var run = runs.insert(new Create(UUID.randomUUID(), snapshot));
+        long[] ceilings = {5, 10, 12};
+        for (int index = 0; index < ceilings.length; index++) {
+            makeDue();
+            runs.dispatchPending();
+            var waiting = runs.selectById(run.id());
+            assertThat(waiting.state()).isEqualTo("RETRY_WAIT");
+            assertThat(waiting.attempts()).hasSize(index + 2);
+            var delay = Duration.between(waiting.attempts().get(index).finishedAt(),
+                    waiting.attempts().get(index + 1).nextDispatchAt());
+            assertThat(delay.toMillis()).isBetween(ceilings[index] * 800, ceilings[index] * 1000);
+        }
+        makeDue();
+        runs.dispatchPending();
+        var failed = runs.selectById(run.id());
+        assertThat(failed.state()).isEqualTo("FAILED");
+        assertThat(failed.attempts()).hasSize(4);
+    }
+
+    @Test void explicitFixedPolicyReplaysTheLegacyRunFingerprint() {
+        var legacy = create(UUID.randomUUID(), "legacy", 3);
+        var stored = runs.insert(legacy);
+        var body = (tools.jackson.databind.node.ObjectNode) json.valueToTree(legacy.snapshot());
+        assertThat(body.has("retryPolicy")).isFalse();
+        assertThat(body.has("retryMaxIntervalSeconds")).isFalse();
+        body.put("retryPolicy", "FIXED");
+        var replay = new Create(legacy.requestKey(), json.treeToValue(body, Snapshot.class));
+        assertThat(runs.insert(replay).id()).isEqualTo(stored.id());
     }
     @Test void leaseExpiryIsTerminalAndRejectsLateWorkerResult() {
         var run = runs.insert(create(UUID.randomUUID(), "expiry", 3));

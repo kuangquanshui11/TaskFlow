@@ -5,6 +5,7 @@ import java.time.Instant;
 import com.taskflow.admin.job.exception.JobException;
 import com.taskflow.admin.job.model.JobDefinition.Configuration;
 import com.taskflow.admin.job.model.JobDefinition.MisfirePolicy;
+import com.taskflow.admin.job.model.JobDefinition.RetryPolicy;
 import com.taskflow.admin.job.model.JobDefinition.ScheduleType;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
@@ -26,7 +27,9 @@ public final class JobRequests {
             @Min(1) @Max(86400) Integer timeoutSeconds,
             @Min(1) @Max(10) Integer maxAttempts,
             @Min(1) @Max(86400) Integer retryIntervalSeconds,
-            MisfirePolicy misfirePolicy) {
+            MisfirePolicy misfirePolicy,
+            RetryPolicy retryPolicy,
+            @Min(1) @Max(86400) Integer retryMaxIntervalSeconds) {
 
         public Write {
             name = name == null ? null : name.strip();
@@ -48,7 +51,7 @@ public final class JobRequests {
             return new Configuration(name, description, handlerKey,
                     payload == null || payload.isNull() ? null : payload.toString(),
                     scheduleType, cronExpression, timeZone, enabled, timeoutSeconds,
-                    maxAttempts, retryIntervalSeconds, misfirePolicy);
+                    maxAttempts, retryIntervalSeconds, misfirePolicy, retryPolicy, retryMaxIntervalSeconds);
         }
     }
 

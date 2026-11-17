@@ -74,6 +74,8 @@ public class MybatisJobDataMapper implements JobDataMapper {
                 .set(JobEntity::getTimeoutSeconds, configuration.timeoutSeconds())
                 .set(JobEntity::getMaxAttempts, configuration.maxAttempts())
                 .set(JobEntity::getRetryIntervalSeconds, configuration.retryIntervalSeconds())
+                .set(JobEntity::getRetryPolicy, configuration.retryPolicy())
+                .set(JobEntity::getRetryMaxIntervalSeconds, configuration.retryMaxIntervalSeconds())
                 .set(JobEntity::getMisfirePolicy, configuration.misfirePolicy().name());
         return mapper.update(null, update) == 1;
     }

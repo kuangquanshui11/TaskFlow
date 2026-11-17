@@ -3,6 +3,7 @@ export function emptyJob() {
     name: '', description: '', handlerKey: '', scheduleType: 'CRON',
     cronExpression: '0 */5 * * * *', timeZone: 'Asia/Shanghai', enabled: false,
     timeoutSeconds: 30, maxAttempts: 3, retryIntervalSeconds: 5, misfirePolicy: 'SKIP', payloadText: '{}',
+    retryPolicy: 'FIXED', retryMaxIntervalSeconds: null,
   };
 }
 
@@ -25,6 +26,12 @@ export function validateJob(form) {
       errors[field] = label + '应为 ' + min + '–' + max + ' 范围内的整数。';
     }
   }
+  if (form.retryPolicy === 'EXPONENTIAL') {
+    const cap = Number(form.retryMaxIntervalSeconds);
+    if (!Number.isInteger(cap) || cap < 1 || cap < Number(form.retryIntervalSeconds) || cap > 86400) {
+      errors.retryMaxIntervalSeconds = '请输入基础间隔到 86400 秒之间的整数。';
+    }
+  }
   let payload = null;
   if (form.payloadText.trim()) {
     try {
@@ -45,5 +52,7 @@ export function toJobPayload(form, payload) {
     timeZone: form.timeZone.trim(), enabled: form.enabled,
     timeoutSeconds: Number(form.timeoutSeconds), maxAttempts: Number(form.maxAttempts),
     retryIntervalSeconds: Number(form.retryIntervalSeconds), misfirePolicy: form.misfirePolicy,
+    retryPolicy: form.retryPolicy,
+    retryMaxIntervalSeconds: form.retryPolicy === 'EXPONENTIAL' ? Number(form.retryMaxIntervalSeconds) : null,
   };
 }

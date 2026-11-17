@@ -38,6 +38,7 @@
 - Scheduler 的状态变更事务统一按 Run → Attempt 加行锁；MQ 确认需要访问 Outbox 时在两者之后加锁。首次普通读取只定位不可变 runId，等待 Run 锁后通过 `SELECT ... FOR UPDATE` 读取 Attempt 当前状态，不使用旧的 REPEATABLE READ 快照作状态决策。HTTP 请求与 MQ 发布仍在 SQL 事务外。
 - HTTP 接收确认和 MQ 发布确认共用状态转换保护：必须匹配当前 Attempt、消息租约版本和有效期；Attempt SQL 更新成功才推进 Run，Run SQL 同时检查原状态和当前 Attempt，终态不允许回退。终态写入、创建重试与 Outbox 变更也检查影响行数，任一转换失败则回滚整个本地事务。本地确认失败不归类为 Worker 拒绝；保留原 Attempt，由既有扫描及租约机制恢复。此修复不自动重写历史异常记录，验证见 [状态并发修复](run-state-concurrency-verification.md)。
 - 明确的 HANDLER_FAILED 可按快照 maxAttempts 和 retryIntervalSeconds 有限重试；不确定派发失败不立即创建业务重试；已报告的执行超时和 Worker 重启保持原非重试语义。Scheduler 观察到租约失效时，默认按快照上限新增 Attempt，并重新选择节点，可用 `TASKFLOW_RETRY_ON_LEASE_LOSS=false` 关闭。业务失败重试必须考虑副作用幂等。
+- 指数退避对第 n 次失败计算 `min(retryMaxIntervalSeconds, retryIntervalSeconds × 2^(n−1))`，在该值的 80% 至 100% 之间按毫秒取样。新 Attempt 的 `next_dispatch_at` 与派发 Outbox 同事务提交。历史快照继续按固定间隔重试。启用新策略前先升级 Worker、Scheduler，再升级 Admin 和控制台。
 - Run 状态为 READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED；Attempt 为 READY、DISPATCHING、RUNNING、SUCCEEDED、FAILED、TIMED_OUT。终态不可被迟到结果覆盖。
 
 ## 超时与故障

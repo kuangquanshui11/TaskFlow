@@ -82,12 +82,28 @@ class JobApiTests {
         assertThat(data.get("payload").get("batchSize").intValue()).isEqualTo(100);
         assertThat(data.get("scheduleType").stringValue()).isEqualTo("MANUAL");
         assertThat(data.get("maxAttempts").intValue()).isEqualTo(3);
+        assertThat(data.get("retryPolicy").stringValue()).isEqualTo("FIXED");
         assertThat(data.get("enabled").booleanValue()).isFalse();
         assertThat(data.get("createdAt").stringValue()).endsWith("Z");
 
         var selected = request("GET", "/api/v1/jobs/selectById?id=" + data.get("id").longValue(), null);
         assertThat(selected.statusCode()).isEqualTo(200);
         assertThat(tree(selected).get("data")).isEqualTo(data);
+    }
+
+    @Test
+    void exponentialRetryStrategyRoundTripsAndRequiresAValidCap() throws Exception {
+        var draft = new java.util.HashMap<String, Object>(input("指数退避"));
+        draft.put("retryPolicy", "EXPONENTIAL");
+        assertThat(request("POST", "/api/v1/jobs/insert", draft).statusCode()).isEqualTo(400);
+        draft.put("retryMaxIntervalSeconds", 4);
+        assertThat(request("POST", "/api/v1/jobs/insert", draft).statusCode()).isEqualTo(400);
+        draft.put("retryMaxIntervalSeconds", 30);
+        var inserted = request("POST", "/api/v1/jobs/insert", draft);
+        assertThat(inserted.statusCode()).as(inserted.body()).isEqualTo(201);
+        var job = tree(inserted).get("data");
+        assertThat(job.get("retryPolicy").stringValue()).isEqualTo("EXPONENTIAL");
+        assertThat(job.get("retryMaxIntervalSeconds").intValue()).isEqualTo(30);
     }
 
     @Test

@@ -122,6 +122,10 @@ public class RunServiceImpl implements IRunService {
         snapshot.put("cronExpression", configuration.cronExpression()); snapshot.put("timeZone", configuration.timeZone());
         snapshot.put("misfirePolicy", configuration.misfirePolicy().name()); snapshot.put("enabled", configuration.enabled());
         snapshot.put("description", configuration.description());
+        if (configuration.retryPolicy() != null) {
+            snapshot.put("retryPolicy", configuration.retryPolicy().name());
+            snapshot.put("retryMaxIntervalSeconds", configuration.retryMaxIntervalSeconds());
+        }
         return snapshot;
     }
     @Override

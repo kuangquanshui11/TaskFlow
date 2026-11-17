@@ -2,6 +2,7 @@ package com.taskflow.worker.execution.dto;
 
 import java.time.Instant;
 import java.util.UUID;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import tools.jackson.databind.JsonNode;
@@ -14,7 +15,20 @@ public final class ExecutionProtocol {
             @Min(1) @Max(86400) int timeoutSeconds, @Min(1) @Max(10) int maxAttempts,
             @Min(1) @Max(86400) int retryIntervalSeconds, @NotBlank String scheduleType,
             String cronExpression, @NotBlank String timeZone, @NotBlank String misfirePolicy,
-            boolean enabled, @Size(max = 500) String description) { }
+            boolean enabled, @Size(max = 500) String description,
+            @JsonInclude(JsonInclude.Include.NON_NULL) @Pattern(regexp = "FIXED|EXPONENTIAL") String retryPolicy,
+            @JsonInclude(JsonInclude.Include.NON_NULL) Integer retryMaxIntervalSeconds) {
+        public Snapshot {
+            if ("FIXED".equals(retryPolicy)) retryPolicy = null;
+        }
+
+        public Snapshot(long jobId, long configVersion, String name, String handlerKey, JsonNode payload,
+                        int timeoutSeconds, int maxAttempts, int retryIntervalSeconds, String scheduleType,
+                        String cronExpression, String timeZone, String misfirePolicy, boolean enabled, String description) {
+            this(jobId, configVersion, name, handlerKey, payload, timeoutSeconds, maxAttempts, retryIntervalSeconds,
+                    scheduleType, cronExpression, timeZone, misfirePolicy, enabled, description, null, null);
+        }
+    }
     public record Create(@NotNull UUID requestKey, @NotNull @Valid Snapshot snapshot) { }
     public record Dispatch(@NotNull UUID attemptId, @NotNull UUID runId, @Min(1) int attemptNumber,
                            @Positive long leaseVersion, @NotNull Instant expiresAt,
