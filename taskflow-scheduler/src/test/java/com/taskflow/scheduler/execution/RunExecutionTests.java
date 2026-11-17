@@ -298,6 +298,26 @@ class RunExecutionTests {
         assertThat(timeline.path("scheduler").path("events").get(0).path("sequenceNumber").asInt()).isEqualTo(100);
     }
 
+    @Test void logQueryVerifiesOwnershipAndUsesTheBoundWorkerOutsideTransactions() throws Exception {
+        var run = runs.insert(create(UUID.randomUUID(), "attempt-logs", 1));
+        var attemptId = run.attempts().getFirst().id();
+        String prefix = "/internal/v1/runs/selectAttemptLogs?attemptId=" + attemptId + "&offset=100&runId=";
+        assertThat(http("GET", prefix + UUID.randomUUID(), null, "test-control-token").statusCode()).isEqualTo(404);
+        var waiting = json.readTree(http("GET", prefix + run.id(), null, "test-control-token").body());
+        assertThat(waiting.path("workerStatus").asString()).isEqualTo("NOT_ASSIGNED");
+        verifyNoInteractions(workerEvents);
+        runs.dispatchPending();
+        when(workerEvents.selectLogs(eq(run.id()), eq(attemptId), eq(100), eq("worker-default"), anyMap())).thenAnswer(call -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            return new com.taskflow.scheduler.execution.dto.AttemptLogs.WorkerPage(run.id(), attemptId, "worker-default",
+                    java.util.List.of(new com.taskflow.scheduler.execution.dto.AttemptLogs.Entry(
+                            run.id(), attemptId, Instant.now(), "INFO", "batch done")), null);
+        });
+        var loaded = http("GET", prefix + run.id(), null, "test-control-token");
+        assertThat(loaded.statusCode()).as(loaded.body()).isEqualTo(200);
+        assertThat(json.readTree(loaded.body()).path("entries").get(0).path("message").asString()).isEqualTo("batch done");
+    }
+
     private java.util.List<String> eventTypes(UUID runId, UUID attemptId) {
         return jdbc.queryForList("SELECT event_type FROM scheduler_attempt_event WHERE run_id=? AND attempt_id=? ORDER BY id",
                 String.class, runId.toString(), attemptId.toString());

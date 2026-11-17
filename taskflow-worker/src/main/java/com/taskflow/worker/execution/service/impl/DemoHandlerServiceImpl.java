@@ -22,6 +22,7 @@ public class DemoHandlerServiceImpl implements IDemoHandlerService {
                 var payload = snapshot.payload();
                 long duration = payload != null && payload.has("durationMillis") ? payload.get("durationMillis").longValue() : 1000;
                 if (duration < 0 || duration > 60000) throw new IllegalArgumentException("durationMillis 必须在 0–60000 之间");
+                context.logProgress("模拟执行 " + duration + " 毫秒");
                 // 此处 sleep 只模拟耗时业务，派发/重试/恢复均由数据库状态驱动。
                 Thread.sleep(duration);
                 context.checkActive();

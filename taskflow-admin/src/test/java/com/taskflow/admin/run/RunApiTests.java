@@ -170,6 +170,22 @@ class RunApiTests {
         assertThat(post("/updateCancellation", body, operator).statusCode()).isEqualTo(200);
     }
 
+    @Test void attemptLogsUseRunReadAndValidateOffsetBeforeProxying() throws Exception {
+        var runId = UUID.randomUUID();
+        var attemptId = UUID.randomUUID();
+        var query = "?runId=" + runId + "&attemptId=" + attemptId + "&offset=";
+        var admin = com.taskflow.admin.support.TestTokens.admin();
+        assertThat(get("/selectAttemptLogs" + query + "-1", admin).statusCode()).isEqualTo(400);
+        verifyNoInteractions(scheduler);
+        when(scheduler.get("/internal/v1/runs/selectAttemptLogs" + query + "100")).thenAnswer(call -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            return json.createObjectNode().put("workerStatus", "AVAILABLE");
+        });
+        var response = get("/selectAttemptLogs" + query + "100", admin);
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(json.readTree(response.body()).path("data").path("workerStatus").asString()).isEqualTo("AVAILABLE");
+    }
+
     @Test void attemptTimelineRequiresRunReadAndProxiesOutsideTheLocalTransaction() throws Exception {
         var runId = UUID.randomUUID();
         var attemptId = UUID.randomUUID();

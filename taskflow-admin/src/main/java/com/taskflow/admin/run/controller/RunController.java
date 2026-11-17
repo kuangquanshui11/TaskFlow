@@ -47,6 +47,11 @@ public class RunController {
     public ApiResponse<JsonNode> selectAttemptEvents(@RequestParam UUID runId, @RequestParam UUID attemptId) {
         return ApiResponse.success(runs.selectAttemptEvents(runId, attemptId));
     }
+    @GetMapping("/selectAttemptLogs")
+    public ApiResponse<JsonNode> selectAttemptLogs(@RequestParam UUID runId, @RequestParam UUID attemptId,
+                                                  @RequestParam(defaultValue = "0") int offset) {
+        return ApiResponse.success(runs.selectAttemptLogs(runId, attemptId, offset));
+    }
     @GetMapping("/selectGlobal")
     public ApiResponse<JsonNode> selectGlobal(@RequestParam(required = false) String from, @RequestParam(required = false) String to,
             @RequestParam(required = false) Long jobId, @RequestParam(required = false) String state,

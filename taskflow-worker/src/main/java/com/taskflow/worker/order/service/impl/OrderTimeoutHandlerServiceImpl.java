@@ -53,6 +53,8 @@ public class OrderTimeoutHandlerServiceImpl implements ITaskHandler {
                     || result.scanned()>0 && (result.afterId()==null || result.afterExpiresAt()==null
                     || result.afterId().equals(next.afterId()))) throw new HandlerFailureException("订单服务响应不合法",false);
             scanned+=result.scanned();closed+=result.closed();skipped+=result.skipped();failed+=result.failed();
+            context.logProgress("第 " + batches + " 批扫描 " + result.scanned() + " 笔，关闭 "
+                    + result.closed() + " 笔，失败 " + result.failed() + " 笔");
             if(result.scanned()<size) break;
             next=new OrderTimeoutRemote.Batch(size,result.cutoff(),result.afterExpiresAt(),result.afterId());
         }

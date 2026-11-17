@@ -135,6 +135,10 @@ taskflow:
     consume-retry-delay: 1s
     consumer-enabled: true
   execution:
+    attempt-logs:
+      enabled: "${TASKFLOW_ATTEMPT_LOGS_ENABLED:true}"
+      directory: "${TASKFLOW_ATTEMPT_LOG_DIR:.tools/runtime/attempt-logs}"
+      retention-days: "${TASKFLOW_ATTEMPT_LOG_RETENTION_DAYS:30}"
     lease:
       renewal-interval: ${TASKFLOW_EXECUTION_LEASE_RENEWAL_INTERVAL:5s}
       safety-margin: ${TASKFLOW_EXECUTION_LEASE_SAFETY_MARGIN:6s}

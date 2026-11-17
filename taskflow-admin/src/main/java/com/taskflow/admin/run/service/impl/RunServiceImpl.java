@@ -159,6 +159,11 @@ public class RunServiceImpl implements IRunService {
         return scheduler.get("/internal/v1/runs/selectAttemptEvents?runId=" + runId + "&attemptId=" + attemptId);
     }
     @Override
+    public JsonNode selectAttemptLogs(UUID runId, UUID attemptId, int offset) {
+        if (offset < 0) throw new RunException(400, "INVALID_ARGUMENT", "日志偏移量不得为负数");
+        return scheduler.get("/internal/v1/runs/selectAttemptLogs?runId=" + runId + "&attemptId=" + attemptId + "&offset=" + offset);
+    }
+    @Override
     public JsonNode selectGlobal(com.taskflow.admin.run.dto.RunQuery query) {
         if (query.page() < 1 || query.page() > 10000 || query.pageSize() < 1 || query.pageSize() > 100
                 || (query.jobId() != null && query.jobId() < 1)

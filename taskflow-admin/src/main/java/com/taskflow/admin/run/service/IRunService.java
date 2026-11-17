@@ -20,6 +20,7 @@ public interface IRunService {
     JsonNode selectSummary(String from, String to);
     JsonNode selectById(UUID id);
     JsonNode selectAttemptEvents(UUID runId, UUID attemptId);
+    JsonNode selectAttemptLogs(UUID runId, UUID attemptId, int offset);
     JsonNode selectByRequestKey(UUID requestKey);
     @org.springframework.security.access.prepost.PreAuthorize("hasAuthority('run:review')")
     JsonNode updateOutcomeReview(ReviewOutcome request);

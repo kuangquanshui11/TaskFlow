@@ -30,6 +30,7 @@ public class SchedulerClient {
         boolean failures = RemoteErrors.action(path).equals("selectDispatchFailures");
         boolean outcomeReview = path.equals("/internal/v1/runs/updateOutcomeReview");
         boolean cancellation = path.equals("/internal/v1/runs/updateCancellation");
+        boolean attemptLogs = RemoteErrors.action(path).equals("selectAttemptLogs");
         String response;
         try {
             var headers=RemoteErrors.headers(properties.controlToken(),java.util.UUID.randomUUID().toString());
@@ -47,7 +48,7 @@ public class SchedulerClient {
                 throw operationFailure(status, failure, "OUTCOME_REVIEW_REJECTED", "副作用核对请求无法处理");
             if (cancellation && (status == 400 || status == 404 || status == 409))
                 throw operationFailure(status, failure, "CANCELLATION_REJECTED", "运行取消请求无法处理");
-            if (status == 404 && path.startsWith("/internal/v1/runs/selectAttemptEvents?"))
+            if (status == 404 && (attemptLogs || path.startsWith("/internal/v1/runs/selectAttemptEvents?")))
                 throw new RunException(404, "ATTEMPT_NOT_FOUND", "该运行中未找到此 Attempt");
             if (status==404) throw new RunException(404,"RUN_NOT_FOUND","运行记录尚未找到");
             if (rerun && status == 422)
@@ -57,6 +58,15 @@ public class SchedulerClient {
         }
         try {
             var data = json.readTree(response);
+            if (attemptLogs) {
+                if (data == null || !params.get("runId").equals(data.path("runId").asString())
+                        || !params.get("attemptId").equals(data.path("attemptId").asString())
+                        || !java.util.Set.of("AVAILABLE", "UNAVAILABLE", "NOT_ASSIGNED").contains(data.path("workerStatus").asString(""))
+                        || !data.path("entries").isArray() || data.path("entries").size() > 100
+                        || !(data.path("nextOffset").isNull() || data.path("nextOffset").isIntegralNumber()))
+                    throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "执行日志返回格式不合法");
+                return data;
+            }
             if (outcomeReview) {
                 if (data == null || !data.isObject() || !data.path("requestKey").isString() || !data.path("decision").isString())
                     throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "副作用核对返回格式不合法");

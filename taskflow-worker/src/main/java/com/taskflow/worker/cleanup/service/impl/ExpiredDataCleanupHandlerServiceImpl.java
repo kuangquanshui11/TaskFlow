@@ -59,6 +59,7 @@ public class ExpiredDataCleanupHandlerServiceImpl implements ITaskHandler {
                     || preview.eligibleCount() > batchSize || (preview.hasMore() && preview.eligibleCount() != batchSize)) {
                 throw invalidResponse();
             }
+            context.logProgress("预览候选记录 " + preview.eligibleCount() + " 条");
             return "mode=PREVIEW, cutoff=" + preview.cutoff() + ", eligibleCount=" + preview.eligibleCount()
                     + ", deletedCount=0, hasMore=" + preview.hasMore();
         }
@@ -84,6 +85,7 @@ public class ExpiredDataCleanupHandlerServiceImpl implements ITaskHandler {
             cutoff = batch.cutoff();
             deleted += batch.deletedCount();
             batches++;
+            context.logProgress("第 " + batches + " 批清理 " + batch.deletedCount() + " 条记录");
             hasMore = batch.hasMore();
         }
         return "mode=DELETE, cutoff=" + cutoff + ", deletedCount=" + deleted

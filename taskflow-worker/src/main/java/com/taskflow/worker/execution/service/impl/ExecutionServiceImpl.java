@@ -19,6 +19,7 @@ import com.taskflow.worker.execution.model.ExecutionCompletion;
 import com.taskflow.worker.execution.model.ExecutionContext;
 import com.taskflow.worker.execution.exception.ExecutionCancelledException;
 import com.taskflow.worker.execution.service.IExecutionLeaseService;
+import com.taskflow.worker.execution.service.IAttemptLogService;
 import com.taskflow.worker.execution.service.IHandlerRegistryService;
 import com.taskflow.worker.execution.exception.HandlerFailureException;
 import com.taskflow.worker.execution.service.IExecutionService;
@@ -41,6 +42,7 @@ public class ExecutionServiceImpl implements IExecutionService {
     private final IExecutionResultService results;
     private final IExecutionRecoveryService recovery;
     private final IExecutionLeaseService leases;
+    private final IAttemptLogService attemptLogs;
     private final ExecutionProperties properties;
     private final JsonMapper json;
     private final TransactionTemplate transactions;
@@ -50,12 +52,13 @@ public class ExecutionServiceImpl implements IExecutionService {
     public ExecutionServiceImpl(ExecutionMapper mapper, IHandlerRegistryService handlers, SchedulerReportClient reports,
                                 ExecutionProperties properties, JsonMapper json, PlatformTransactionManager manager,
                                 IExecutionResultService results, IExecutionLeaseService leases,
-                                IExecutionRecoveryService recovery, AsyncTracing tracing) {
+                                IExecutionRecoveryService recovery, AsyncTracing tracing, IAttemptLogService attemptLogs) {
         this.mapper = mapper; this.handlers = handlers; this.reports = reports; this.properties = properties; this.json = json;
         this.results = results;
         this.leases = leases;
         this.recovery = recovery;
         this.tracing = tracing;
+        this.attemptLogs = attemptLogs;
         transactions = new TransactionTemplate(manager);
         pool = new ThreadPoolExecutor(properties.parallelism(), properties.parallelism(), 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(properties.parallelism()), Thread.ofPlatform().name("taskflow-handler-", 0).factory(),
@@ -168,6 +171,8 @@ public class ExecutionServiceImpl implements IExecutionService {
                     }, 0, leases.watchdogIntervalMillis(), TimeUnit.MILLISECONDS);
                     context.checkActive();
                     recordHandlerStart(dispatch.attemptId());
+                    context.attachProgressLog(attemptLogs.progress(dispatch.runId(), dispatch.attemptId()));
+                    context.logProgress("准备执行 Handler " + dispatch.snapshot().handlerKey());
                     context.checkActive();
                     handlerStarted = true;
                     long started = System.nanoTime();
@@ -218,6 +223,7 @@ public class ExecutionServiceImpl implements IExecutionService {
             }
             // 终态、待上报信息与事件一起提交；HTTP 上报由独立扫描完成。
             tracing.tag("resultCode", code);
+            attemptLogs.finished(dispatch.runId(), dispatch.attemptId(), code);
             log.atInfo().addKeyValue("resultCode", code).log("Attempt execution ended");
             deferred = saveResult(new ExecutionCompletion(dispatch.attemptId(), dispatch.runId(), state, code, message,
                     retryable, handlerStarted, Instant.now(), handlerElapsedMillis));

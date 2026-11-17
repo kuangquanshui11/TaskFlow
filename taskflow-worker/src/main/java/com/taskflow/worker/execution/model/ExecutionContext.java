@@ -3,6 +3,7 @@ package com.taskflow.worker.execution.model;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.function.Consumer;
 import com.taskflow.worker.execution.dto.ExecutionProtocol.*;
 import com.taskflow.worker.execution.exception.ExecutionCancelledException;
 
@@ -17,6 +18,7 @@ public final class ExecutionContext {
     private String cancelled;
     private boolean handlerFinished;
     private boolean closed;
+    private volatile Consumer<String> progressLog = message -> { };
 
     public ExecutionContext(Dispatch dispatch, LeaseRequest owner, LeaseAcknowledgement ack,
                             Duration safetyMargin, long requestStartedNanos) {
@@ -37,6 +39,8 @@ public final class ExecutionContext {
     public String workerId() { return owner.workerId(); }
     public Instant executionDeadline() { return executionDeadline; }
     public Instant hardDeadline() { return dispatch.expiresAt(); }
+    public void attachProgressLog(Consumer<String> progressLog) { this.progressLog = progressLog; }
+    public void logProgress(String message) { progressLog.accept(message); }
     public String businessIdempotencyKey(String operation) {
         if (operation == null || operation.isBlank()) throw new IllegalArgumentException("操作标识不能为空");
         return runId() + ":" + operation;
@@ -56,7 +60,10 @@ public final class ExecutionContext {
     }
     public synchronized String cancellationCode() { cancelled(); return cancelled; }
     public synchronized void cancel(String reason) { if (cancelled == null && !closed) cancelled = reason; }
-    public synchronized void handlerFinished() { handlerFinished = true; }
+    public synchronized void handlerFinished() {
+        handlerFinished = true;
+        progressLog = message -> { };
+    }
     public synchronized void close() { closed = true; }
     public synchronized boolean renewable() { return !closed && !cancelled(); }
     public synchronized void renewed(LeaseAcknowledgement ack, long requestStartedNanos) {

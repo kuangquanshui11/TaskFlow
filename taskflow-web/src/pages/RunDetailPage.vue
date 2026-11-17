@@ -5,6 +5,7 @@ import { runsApi } from '../api/runs.js';
 import { can } from '../auth/access.js';
 import AppIcon from '../components/AppIcon.vue';
 import RunAttemptTimeline from '../components/RunAttemptTimeline.vue';
+import RunAttemptLogs from '../components/RunAttemptLogs.vue';
 import RunDispatchFailures from '../components/RunDispatchFailures.vue';
 import RunOutcomeReviews from '../components/RunOutcomeReviews.vue';
 import RunRerunAction from '../components/RunRerunAction.vue';
@@ -144,6 +145,7 @@ onBeforeUnmount(() => controller?.abort());
               <div v-if="attempt.message" class="wide"><dt>结果说明</dt><dd class="result-message">{{ attempt.message }}</dd></div>
             </dl>
             <RunAttemptTimeline :run-id="run.id" :attempt-id="attempt.id" :timezone="timezone" />
+            <RunAttemptLogs :run-id="run.id" :attempt-id="attempt.id" :timezone="timezone" />
           </li>
         </ol>
       </section>

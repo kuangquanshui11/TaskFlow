@@ -11,7 +11,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties({ExecutionProperties.class, ResultPersistenceProperties.class, ExecutionLeaseProperties.class})
+@EnableConfigurationProperties({ExecutionProperties.class, ResultPersistenceProperties.class, ExecutionLeaseProperties.class,
+        AttemptLogProperties.class})
 @EnableScheduling
 public class ExecutionConfiguration {
     private final ExecutionProperties properties;
@@ -29,6 +30,11 @@ public class ExecutionConfiguration {
     }
     @EventListener(ApplicationReadyEvent.class)
     public void recover() { executions.recover(); }
+    @Bean public ThreadPoolTaskScheduler workerAttemptLogScheduler() {
+        var scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setThreadNamePrefix("taskflow-attempt-log-cleanup-");
+        return scheduler;
+    }
     @Scheduled(fixedDelayString = "${taskflow.execution.scan-interval}", initialDelayString = "${taskflow.execution.scan-interval}")
     public void scan() {
         if (properties.scanningEnabled()) {

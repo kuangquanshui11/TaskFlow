@@ -63,6 +63,7 @@ Gateway 保留以下 API 路径，只路由 `/api/v1/**`；`/internal/v1/**`、�
 | GET | /api/v1/runs/selectById?id=UUID | run:read；运行详情、配置快照与 Attempt 历史 |
 | GET | /api/v1/runs/selectByRequestKey?requestKey=UUID | 按原提交标识确认接收结果 |
 | GET | /api/v1/runs/selectAttemptEvents?runId=UUID&attemptId=UUID | run:read；单次 Attempt 的执行事件 |
+| GET | /api/v1/runs/selectAttemptLogs?runId=UUID&attemptId=UUID&offset=0 | run:read；单次 Attempt 的 Handler 文件日志 |
 | GET | /api/v1/runs/selectDispatchFailures | run:read，查询派发故障 |
 | POST | /api/v1/runs/updateDispatchFailure | dispatch:resolve，确认或结案 |
 | POST | /api/v1/runs/updateOutcomeReview | run:review，保存实质副作用的核对结论 |
@@ -330,6 +331,12 @@ POST `/api/v1/runs/insertRerun` 接收 `sourceRunId`、`configVersion` 和 UUID 
 - `NOT_ASSIGNED` 表示 Attempt 尚无可定位的 Worker，`worker.events` 为空。
 
 内部 GET `/internal/v1/runs/selectAttemptEvents` 使用控制密钥，返回裸 JSON。Scheduler 调用 Worker 的 GET `/internal/v1/executions/selectAttemptEvents` 时使用派发密钥和 `X-Taskflow-Worker-Id`，由 Worker 独立验证目标标识。两个内部入口均由服务之间直接调用。
+
+### Handler 执行日志
+
+`GET /api/v1/runs/selectAttemptLogs` 要求 `run:read`。传 `runId`、`attemptId` 和可选的非负整数 `offset`，缺省从 0 开始。响应包含 `runId`、`attemptId`、可空 `workerId`、`workerStatus`、`entries` 和 `nextOffset`。每页最多 100 条，按文件写入顺序读取。日志项包括两个 UUID、UTC 时间 `occurredAt`、`level` 和 `message`，`nextOffset=null` 表示该次读取已到文件末尾。
+
+Worker 查询成功返回 `AVAILABLE`，尚无日志、未启用或超出保留期时日志列表为空。Attempt 尚未绑定目标返回 `NOT_ASSIGNED`，目标 Worker 不可达或日志读取失败返回 `UNAVAILABLE`。非法参数返回 400，Attempt 不属于 Run 返回 404。Admin 在事务外调用 Scheduler 的同名内部查询。Scheduler 按 Attempt 定位 Worker，并使用派发密钥和目标身份调用 `GET /internal/v1/executions/selectAttemptLogs`。
 
 ### 派发故障查询与处置
 

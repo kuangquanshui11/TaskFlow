@@ -25,6 +25,8 @@ taskflow:
     transport: http
     consumer-enabled: false
   execution:
+    attempt-logs:
+      enabled: false
     result-persistence:
       max-attempts: 3
       retry-delay: 10ms

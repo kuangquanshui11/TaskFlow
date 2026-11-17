@@ -37,7 +37,9 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.awaitility.Awaitility.await;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+        "taskflow.execution.attempt-logs.enabled=true",
+        "taskflow.execution.attempt-logs.directory=target/attempt-log-tests/${random.uuid}"})
 @ActiveProfiles("test")
 @ExtendWith(OutputCaptureExtension.class)
 @org.springframework.test.context.ContextConfiguration(initializers = com.taskflow.worker.support.IsolatedTestDatabaseInitializer.class)
@@ -52,6 +54,7 @@ class WorkerExecutionTests {
     @Autowired IExecutionResultService results;
     @Autowired IExecutionRecoveryService recovery;
     @Autowired IAttemptEventService attemptEvents;
+    @Autowired IAttemptLogService attemptLogs;
     @Autowired IExecutionLeaseService leases;
     @Autowired ResultPersistenceProperties resultProperties;
     @Autowired MeterRegistry metrics;
@@ -128,7 +131,7 @@ class WorkerExecutionTests {
                 throw new org.springframework.dao.DataAccessResourceFailureException("temporary save failure");
             return call.callRealMethod();
         }).when(mapper).finish(eq(command.attemptId()), anyString(), anyString(), anyString(), anyBoolean(), anyBoolean(), any(), nullable(Long.class));
-        var stopped = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, properties, json, transactions, results, leases, recovery, tracing);
+        var stopped = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, properties, json, transactions, results, leases, recovery, tracing, attemptLogs);
         try {
             stopped.recover(); stopped.insert(command); stopped.shutdown();
             assertThatCode(stopped::executePending).doesNotThrowAnyException();
@@ -511,7 +514,7 @@ class WorkerExecutionTests {
         var limited = new ExecutionProperties(properties.schedulerUrl(), properties.dispatchToken(), properties.reportToken(),
                 properties.connectTimeout(), properties.requestTimeout(), properties.scanInterval(), properties.parallelism(),
                 properties.maxPending(), properties.maxReportAttempts(), properties.reportRetryDelay(), false, Duration.ofMillis(1));
-        var reporting = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, limited, json, transactions, results, leases, recovery, tracing);
+        var reporting = new ExecutionServiceImpl(mapper, new com.taskflow.worker.execution.service.impl.HandlerRegistryServiceImpl(java.util.List.of(handlers)), reports, limited, json, transactions, results, leases, recovery, tracing, attemptLogs);
         try {
             reporting.recover(); reporting.reportPending();
             verify(reports, atMostOnce()).report(any());
@@ -548,6 +551,29 @@ class WorkerExecutionTests {
             assertThat(body.path("events").get(0).path("eventType").asString()).isEqualTo("HANDLER_FINISHED");
         }
     }
+    @Test void logsExposeTheOriginalAttemptWithTokenAndWorkerChecks() throws Exception {
+        var command = command("demoSuccess", 1, 30, "{}");
+        executions.insert(command);
+        executions.executePending();
+        finished(command);
+        String workerId = leases.owner().workerId();
+        String base = "http://localhost:" + port + "/internal/v1/executions/selectAttemptLogs?attemptId="
+                + command.attemptId() + "&runId=";
+        try (var client = HttpClient.newHttpClient()) {
+            var unsigned = HttpRequest.newBuilder(URI.create(base + command.runId())).header("X-Taskflow-Worker-Id", workerId).GET().build();
+            assertThat(client.send(unsigned, HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(401);
+            assertThat(client.send(eventRequest(base + command.runId(), "another-worker"), HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(409);
+            var wrongRun = client.send(eventRequest(base + UUID.randomUUID(), workerId), HttpResponse.BodyHandlers.ofString());
+            assertThat(json.readTree(wrongRun.body()).path("entries").size()).isZero();
+            var response = client.send(eventRequest(base + command.runId(), workerId), HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+            var entries = json.readTree(response.body()).path("entries");
+            assertThat(entries.size()).isGreaterThanOrEqualTo(2);
+            assertThat(entries.get(0).path("message").asString()).contains("demoSuccess");
+            assertThat(entries.get(entries.size() - 1).path("message").asString()).contains("SUCCEEDED");
+        }
+    }
+
     private HttpRequest eventRequest(String url, String workerId) {
         return HttpRequest.newBuilder(URI.create(url)).header("X-Taskflow-Worker-Id", workerId)
                 .header("X-Taskflow-Token", "test-dispatch-token").GET().build();

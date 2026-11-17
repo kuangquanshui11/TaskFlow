@@ -11,6 +11,7 @@ import com.taskflow.scheduler.execution.dto.ExecutionProtocol.Cancel;
 import com.taskflow.scheduler.execution.model.OutcomeReview;
 import com.taskflow.scheduler.execution.model.RunRecords.*;
 import com.taskflow.scheduler.execution.dto.AttemptEvents;
+import com.taskflow.scheduler.execution.dto.AttemptLogs;
 import com.taskflow.scheduler.execution.service.IAttemptEventService;
 import com.taskflow.scheduler.execution.service.IRunService;
 
@@ -38,6 +39,11 @@ public class RunController {
     @GetMapping("/selectAttemptEvents")
     public AttemptEvents.Timeline selectAttemptEvents(@RequestParam UUID runId, @RequestParam UUID attemptId) {
         return events.select(runId, attemptId);
+    }
+    @GetMapping("/selectAttemptLogs")
+    public AttemptLogs selectAttemptLogs(@RequestParam UUID runId, @RequestParam UUID attemptId,
+                                         @RequestParam(defaultValue = "0") int offset) {
+        return events.selectLogs(runId, attemptId, offset);
     }
     @GetMapping("/selectGlobal")
     public Page selectGlobal(@RequestParam(required = false) String from, @RequestParam(required = false) String to,

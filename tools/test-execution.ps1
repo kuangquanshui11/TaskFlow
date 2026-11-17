@@ -1,6 +1,6 @@
 param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$InjectWorkerResultSaveExhaustion, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster, [switch]$IncludeConfigReconciliation, [switch]$IncludeAttemptTimeline, [switch]$IncludeRunRerun, [switch]$IncludeConfigRecovery,
     [ValidateSet('http','rabbitmq')][string]$Transport = 'http', [string]$MqSettingsPath,[string]$PlatformSettingsPath,
-    [ValidateRange(1024,65535)][int]$IdentityPort = 19190, [switch]$IncludeRunCancellation)
+    [ValidateRange(1024,65535)][int]$IdentityPort = 19190, [switch]$IncludeRunCancellation, [switch]$IncludeAttemptLogs)
 $ErrorActionPreference = 'Stop'
 if ($InjectWorkerResultSaveExhaustion -and ($InjectWorkerResultSaveFailure -or $Transport -ne 'http' -or $PlatformSettingsPath)) {
     throw 'Result save exhaustion requires isolated standalone HTTP mode and its own fault injector.'
@@ -451,6 +451,10 @@ try {
         $accessImport = if ($name -eq 'admin') { 'file:' + (Join-Path $PSScriptRoot 'acceptance/application-access-admin.yml').Replace('\','/') } else { '' }
         $testImport = @($testImport, $accessImport | Where-Object { $_ }) -join ','
         $executionLeaseYaml = if ($IncludeExecutionLease -or $IncludeWorkerCluster -or $IncludeAttemptTimeline -or $InjectWorkerResultSaveExhaustion -or $IncludeRunCancellation) { "    lease:`n      duration: 10s`n      renewal-interval: 500ms" } else { '' }
+        $attemptLogsYaml = if ($name -eq 'worker') {
+            $logDirectory = (Join-Path $runRoot 'attempt-logs').Replace('\','/')
+            "    attempt-logs:`n      enabled: $(if ($IncludeAttemptLogs) { 'true' } else { 'false' })`n      directory: `"$logDirectory`""
+        } else { '' }
         $resultOrderYaml = if ($name -eq 'worker' -and $InjectWorkerResultSaveExhaustion) {
             "  order:`n    enabled: true`n    token: `"$dispatchToken`"`n    url: http://127.0.0.1:$($ports['result-ledger'])`n    connect-timeout: 500ms`n    request-timeout: 1s"
         } else { '' }
@@ -516,6 +520,7 @@ $resultOrderYaml
     detail-cache:
       enabled: false
   execution:
+$attemptLogsYaml
 $executionLeaseYaml
 $resultPersistenceYaml
     scheduler-url: "http://127.0.0.1:19081"
@@ -645,6 +650,15 @@ info:
         Assert-Check ('attempt.execute' -in $runEvents.event -and 'attempt.report' -in $runEvents.event) 'RabbitMQ delivery preserves trace context across Inbox, execution and reporting'
     }
     Assert-Check ($successResult.state -eq 'SUCCEEDED' -and @($successResult.attempts).Count -eq 1) 'Success handler completes via three real services'
+    if ($IncludeAttemptLogs) {
+        $attemptId = $successResult.attempts[0].id
+        $logs = Call-Api 'GET' "http://127.0.0.1:19080/api/v1/runs/selectAttemptLogs?runId=$($successResult.id)&attemptId=$attemptId"
+        Assert-Check ($logs.status -eq 200 -and $logs.body.data.workerStatus -eq 'AVAILABLE' -and
+            @($logs.body.data.entries).Count -ge 2 -and $logs.body.data.entries[0].message -like '*demoSuccess*' -and
+            $logs.body.data.entries[-1].message -like '*SUCCEEDED*') 'Run read API returns Handler start and outcome from the assigned Worker file'
+        $file = Join-Path $runRoot "attempt-logs/worker-default/$($successResult.id)_$attemptId.jsonl"
+        Assert-Check ((Test-Path -LiteralPath $file) -and (Select-String -LiteralPath $file -SimpleMatch -Pattern $attemptId -Quiet)) 'Worker persists JSON lines with Run and Attempt IDs in its own log directory'
+    }
     if ($IncludeRunCancellation) {
         $runningJob = New-TestJob 'demoSlow' -Attempts 3 -Timeout 45 -Delay 30000
         $running = New-TestRun $runningJob

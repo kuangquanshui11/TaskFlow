@@ -44,6 +44,22 @@
 
 cloud 使用 Eureka 的 `worker-id` 元数据定位该节点，local/test 使用现有显式直连地址。Worker 验证目标标识及内部派发密钥，再按 Run、Attempt、Worker 三个标识读取本地数据。读取使用 500 ms 连接超时、1 s 响应读取超时和现有熔断策略，不自动重试。Worker 不可达、响应无效或目标身份不匹配时，Scheduler 返回本地事件并标记 Worker 信息暂不可用。两个来源各自观察和排序，查询期间状态可以继续变化。接口字段见 [API](api.md#attempt-执行时间线)。
 
+## Handler 执行日志
+
+我在运行详情的每次 Attempt 下增加「执行日志」。Worker 在进入 Handler 前写入处理器标识，执行收尾时写入结果码，Handler 用 `ExecutionContext.logProgress()` 追加批次进度或数量，各内置业务 Handler 仅记录摘要。每行 JSON 保存 Run、Attempt、时间、级别和文字。文件写入失败时，Worker 继续沿用原执行和结果持久化流程，并在服务日志记录写入故障。
+
+默认文件路径为 `.tools/runtime/attempt-logs/<workerId>/<runId>_<attemptId>.jsonl`。Worker 的 `taskflow.execution.attempt-logs` 提供 `enabled`、`directory` 和 `retention-days`，可用 `TASKFLOW_ATTEMPT_LOGS_ENABLED`、`TASKFLOW_ATTEMPT_LOG_DIR` 和 `TASKFLOW_ATTEMPT_LOG_RETENTION_DAYS` 覆盖。默认保留 30 天，可设为 2–365 天，按文件最后写入时间计算。Worker 每小时清理到期的日志文件。部署 Worker 时使用该节点专用的持久目录，重启后沿用原 Worker 标识和目录。
+
+单次 Attempt 日志上限为 256 KiB，每条消息最多 1,000 个 UTF-16 字符。达到进度上限时写一条提示并保留结果摘要空间。Worker 本地按页读取，Scheduler 根据 Attempt 的目标节点定向查询。运行、结果、重试和去重继续由原数据库记录维护。[读取接口](api.md#handler-执行日志)
+
+### 日志验证
+
+2026-11-17 在 Windows、Java 21、Maven 3.10.0 和隔离 H2 环境中验证。
+
+- `.\mvnw.cmd -B -pl taskflow-admin,taskflow-scheduler,taskflow-worker,taskflow-gateway -am verify` 构建成功，377 项通过、12 项条件跳过。覆盖按 Attempt 分页、文件重读、保留期限、容量上限、目标身份与读取权限。证据为 `.tools/attempt-logs-verify.log`。
+- `.\tools\test-execution.ps1 -SkipBuild -SkipBrowser -IncludeAttemptLogs` 在独立进程通过 Gateway 执行真实 HTTP 派发，确认 Worker 文件中的两个 UUID 命中运行查询，API 返回处理器入口和结果码。证据为 `.tools/attempt-logs-e2e.log` 和 `.tools/execution-e2e/20261117-113246-129/`。
+- `npm.cmd test` 31 项通过，`npm.cmd run build` 成功。本机无头 Chrome 在 375 px 组件页面验证展开加载、翻页、刷新和 Worker 暂不可用提示。证据为 `.tools/attempt-logs-web.log` 和 `.tools/attempt-logs-mobile.png`。
+
 ## 验证
 
 2026-11-07（Asia/Shanghai），Windows、Java 21.0.12.1、Maven 3.10.0。使用只包含基线和本次改动的独立快照，离线执行构建与隔离 H2 测试。

@@ -49,6 +49,7 @@ public class SalesReportHandlerServiceImpl implements ITaskHandler {
                 || !zone.getId().equals(report.timeZone()) || report.orderCount()<0 || report.totalQuantity()<0
                 || report.totalAmountCents()<0 || report.generatedAt()==null)
             throw new HandlerFailureException("报表服务响应不合法",false);
+        context.logProgress("日报已处理，订单 " + report.orderCount() + " 笔");
         return "reportId="+report.id()+", date="+report.businessDate()+", orders="+report.orderCount()
                 +", quantity="+report.totalQuantity()+", amountCents="+report.totalAmountCents();
     }

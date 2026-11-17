@@ -56,6 +56,7 @@ public class InventorySyncHandlerServiceImpl implements ITaskHandler {
                 || result.updatedCount() < 0 || (!"APPLIED".equals(result.outcome()) && result.updatedCount() != 0)) {
             throw new HandlerFailureException("库存同步响应不合法", false);
         }
+        context.logProgress("库存同步结果 " + result.outcome() + "，变更 " + result.updatedCount() + " 条");
         return "batchId=" + result.id() + ", warehouseId=" + result.warehouseId() + ", sourceVersion="
                 + result.sourceVersion() + ", outcome=" + result.outcome() + ", updatedCount=" + result.updatedCount();
     }
