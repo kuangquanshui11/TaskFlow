@@ -35,7 +35,7 @@ class RunSummaryTests {
         assertThat(Duration.between(summary.from(), summary.to())).isEqualTo(Duration.ofHours(24));
         assertThat(summary.total()).isZero(); assertThat(summary.successRate()).isNull();
         assertThat(summary.failures()).isEmpty(); assertThat(summary.latency().p95Millis()).isNull();
-        assertThat(summary.stateCounts()).hasSize(5).allSatisfy((k, v) -> assertThat(v).isZero());
+        assertThat(summary.stateCounts()).hasSize(7).allSatisfy((k, v) -> assertThat(v).isZero());
         var response = http("", true);
         assertThat(response.statusCode()).isEqualTo(200);
         assertThat(json.readTree(response.body()).has("successRate")).isTrue();
@@ -46,14 +46,17 @@ class RunSummaryTests {
         seed("RETRY_WAIT", 1, null, from, null);
         var a = seed("SUCCEEDED", 1, null, from, 100L);
         seed("SUCCEEDED", 1, null, from, 200L); seed("FAILED", 2, "BAD", from, 900L);
+        seed("CANCEL_REQUESTED", 1, null, from, null);
+        seed("CANCELLED", 1, "CANCEL_STOP_CONFIRMED", from, 40000L);
         jdbc.update("INSERT INTO run_attempt(id,run_id,attempt_number,lease_version,state,dispatch_count,next_dispatch_at) VALUES(?,?,2,2,'SUCCEEDED',0,?)", UUID.randomUUID().toString(), a, Timestamp.from(from));
         var result = runs.selectSummary(from, to);
-        assertThat(result.total()).isEqualTo(6);
+        assertThat(result.total()).isEqualTo(8);
         assertThat(result.stateCounts()).containsEntry("READY", 1L).containsEntry("RUNNING", 1L)
-                .containsEntry("RETRY_WAIT", 1L).containsEntry("SUCCEEDED", 2L).containsEntry("FAILED", 1L);
-        assertThat(result.finished()).isEqualTo(3); assertThat(result.succeeded()).isEqualTo(2); assertThat(result.failed()).isEqualTo(1);
+                .containsEntry("RETRY_WAIT", 1L).containsEntry("SUCCEEDED", 2L).containsEntry("FAILED", 1L)
+                .containsEntry("CANCEL_REQUESTED", 1L).containsEntry("CANCELLED", 1L);
+        assertThat(result.finished()).isEqualTo(4); assertThat(result.succeeded()).isEqualTo(2); assertThat(result.failed()).isEqualTo(1);
         assertThat(result.successRate()).isEqualByComparingTo("0.6667");
-        assertThat(result.attemptTotal()).isEqualTo(7); assertThat(result.retriedRunCount()).isEqualTo(1);
+        assertThat(result.attemptTotal()).isEqualTo(9); assertThat(result.retriedRunCount()).isEqualTo(1);
         assertThat(result.latency().avgMillis()).isEqualTo(400); assertThat(result.latency().p95Millis()).isEqualTo(900);
         assertThat(result.latency().sampled()).isEqualTo(3); assertThat(result.latency().truncated()).isFalse();
     }

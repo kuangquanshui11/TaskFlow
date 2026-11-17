@@ -51,6 +51,8 @@ public final class ExecutionProtocol {
     public record ReviewOutcome(@NotNull UUID requestKey, @NotNull UUID runId, @NotNull UUID attemptId,
                                 @NotNull Decision decision, @NotBlank @Size(max = 500) String evidence,
                                 @NotBlank @Size(max = 255) String actor) { }
+    public record Cancel(@NotNull UUID requestKey, @NotNull UUID runId,
+                         @NotBlank @Size(max = 250) String reason, @NotBlank @Size(max = 255) String actor) { }
     public record Dispatch(@NotNull UUID attemptId, @NotNull UUID runId, @Min(1) int attemptNumber,
                            @Positive long leaseVersion, @NotNull Instant expiresAt,
                            @NotNull @Valid Snapshot snapshot) { }

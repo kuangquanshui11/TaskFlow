@@ -1,6 +1,6 @@
 param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$InjectWorkerResultSaveFailure, [switch]$InjectWorkerResultSaveExhaustion, [switch]$IncludeExecutionLease, [switch]$IncludeWorkerCluster, [switch]$IncludeConfigReconciliation, [switch]$IncludeAttemptTimeline, [switch]$IncludeRunRerun, [switch]$IncludeConfigRecovery,
     [ValidateSet('http','rabbitmq')][string]$Transport = 'http', [string]$MqSettingsPath,[string]$PlatformSettingsPath,
-    [ValidateRange(1024,65535)][int]$IdentityPort = 19190)
+    [ValidateRange(1024,65535)][int]$IdentityPort = 19190, [switch]$IncludeRunCancellation)
 $ErrorActionPreference = 'Stop'
 if ($InjectWorkerResultSaveExhaustion -and ($InjectWorkerResultSaveFailure -or $Transport -ne 'http' -or $PlatformSettingsPath)) {
     throw 'Result save exhaustion requires isolated standalone HTTP mode and its own fault injector.'
@@ -279,7 +279,7 @@ function New-TestRun($Job, [string]$TraceParent = '') {
 function Wait-TestRun([string]$Id) {
     for ($i = 0; $i -lt 80; $i++) {
         $result = Call-Api 'GET' ("http://127.0.0.1:19080/api/v1/runs/selectById?id=" + $Id)
-        if ($result.status -eq 200 -and $result.body.data.state -in @('SUCCEEDED','FAILED')) { return $result.body.data }
+        if ($result.status -eq 200 -and $result.body.data.state -in @('SUCCEEDED','FAILED','CANCELLED')) { return $result.body.data }
         Start-Sleep -Milliseconds 250
     }
     throw 'Run did not reach a terminal state.'
@@ -450,7 +450,7 @@ try {
         }
         $accessImport = if ($name -eq 'admin') { 'file:' + (Join-Path $PSScriptRoot 'acceptance/application-access-admin.yml').Replace('\','/') } else { '' }
         $testImport = @($testImport, $accessImport | Where-Object { $_ }) -join ','
-        $executionLeaseYaml = if ($IncludeExecutionLease -or $IncludeWorkerCluster -or $IncludeAttemptTimeline -or $InjectWorkerResultSaveExhaustion) { "    lease:`n      duration: 10s`n      renewal-interval: 500ms" } else { '' }
+        $executionLeaseYaml = if ($IncludeExecutionLease -or $IncludeWorkerCluster -or $IncludeAttemptTimeline -or $InjectWorkerResultSaveExhaustion -or $IncludeRunCancellation) { "    lease:`n      duration: 10s`n      renewal-interval: 500ms" } else { '' }
         $resultOrderYaml = if ($name -eq 'worker' -and $InjectWorkerResultSaveExhaustion) {
             "  order:`n    enabled: true`n    token: `"$dispatchToken`"`n    url: http://127.0.0.1:$($ports['result-ledger'])`n    connect-timeout: 500ms`n    request-timeout: 1s"
         } else { '' }
@@ -640,11 +640,57 @@ info:
         Assert-Check $true 'OTLP collector receives the manual trigger and async dispatch execution trace from all four applications'
     }
     if ($Transport -eq 'rabbitmq') {
-        $runEvents = @(Read-TestWorkerLog -split '\r?\n' | Where-Object { $_.StartsWith('{') } |
+        $runEvents = @((Read-TestWorkerLog) -split '\r?\n' | Where-Object { $_.StartsWith('{') -and $_.EndsWith('}') } |
             ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.runId -eq $successResult.id -and $_.traceId -eq $executionTraceId })
         Assert-Check ('attempt.execute' -in $runEvents.event -and 'attempt.report' -in $runEvents.event) 'RabbitMQ delivery preserves trace context across Inbox, execution and reporting'
     }
     Assert-Check ($successResult.state -eq 'SUCCEEDED' -and @($successResult.attempts).Count -eq 1) 'Success handler completes via three real services'
+    if ($IncludeRunCancellation) {
+        $runningJob = New-TestJob 'demoSlow' -Attempts 3 -Timeout 45 -Delay 30000
+        $running = New-TestRun $runningJob
+        $null = Wait-TestAttemptEvents $running.run.id $running.run.attempts[0].id {
+            param($value)
+            $value.worker.events.eventType -contains 'HANDLER_STARTED'
+        }
+        $request = @{ runId=$running.run.id; requestKey=[Guid]::NewGuid().ToString(); reason='isolated running cancellation' }
+        $accepted = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/runs/updateCancellation' $request
+        Assert-Check ($accepted.status -eq 200 -and $accepted.body.data.state -eq 'CANCEL_REQUESTED') 'Running cancellation persists and waits for the identified Worker'
+        $cancelled = Wait-TestRun $running.run.id
+        Assert-Check ($cancelled.state -eq 'CANCELLED' -and $cancelled.cancellation.outcome -eq 'STOP_CONFIRMED' -and
+            $cancelled.cancellation.workerResultCode -eq 'RUN_CANCEL_REQUESTED' -and @($cancelled.attempts).Count -eq 1 -and
+            $cancelled.outcomeCases[0].reason -eq 'CANCEL_STOP_CONFIRMED') 'Worker receives lease cancellation, exits, reports and creates no business retry'
+        $replay = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/runs/updateCancellation' $request
+        Assert-Check ($replay.status -eq 200 -and $replay.body.data.cancellation.requestKey -eq $request.requestKey) 'Cancellation request replay returns the same operation'
+
+        if ($Transport -eq 'rabbitmq') {
+            $queuedJob = New-TestJob 'demoSlow' -Attempts 2 -Timeout 60 -Delay 1000
+            $null = Wait-TestNode 'ONLINE'
+            Stop-TestService 'worker'
+            try {
+                $queued = New-TestRun $queuedJob
+                $published = $null
+                $uri = 'http://127.0.0.1:19080/api/v1/runs/selectById?id=' + $queued.run.id
+                for ($i = 0; $i -lt 40; $i++) {
+                    $observed = (Call-Api 'GET' $uri).body.data
+                    if ($observed.state -eq 'RUNNING' -and !$observed.attempts[0].ownerWorkerId) { $published = $observed; break }
+                    Start-Sleep -Milliseconds 100
+                }
+                Assert-Check ($null -ne $published) 'RabbitMQ confirms delivery before an execution lease is granted'
+                $request = @{ runId=$queued.run.id; requestKey=[Guid]::NewGuid().ToString(); reason='isolated queued message cancellation' }
+                $accepted = Call-Api 'POST' 'http://127.0.0.1:19080/api/v1/runs/updateCancellation' $request
+                Assert-Check ($accepted.status -eq 200 -and $accepted.body.data.state -eq 'CANCELLED' -and
+                    $accepted.body.data.cancellation.outcome -eq 'BEFORE_START') 'Cancellation terminalizes the published Attempt before Worker delivery'
+            } finally { Start-TestService 'worker' }
+            $timeline = Wait-TestAttemptEvents $queued.run.id $published.attempts[0].id {
+                param($value)
+                $value.worker.events.eventType -contains 'REPORT_STALE'
+            }
+            $afterDelivery = Wait-TestRun $queued.run.id
+            Assert-Check ($timeline.worker.events.eventType -contains 'INBOX_ACCEPTED' -and
+                $timeline.worker.events.eventType -notcontains 'HANDLER_STARTED' -and $afterDelivery.state -eq 'CANCELLED' -and
+                @($afterDelivery.attempts).Count -eq 1) 'Late real MQ delivery reaches Inbox; lease denial blocks Handler and stale result cannot overwrite cancellation'
+        }
+    }
     if ($IncludeExecutionLease) {
         $leaseJob = New-TestJob 'demoSlow' -Timeout 20 -Delay 12000
         $leaseRun = New-TestRun $leaseJob

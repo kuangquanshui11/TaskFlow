@@ -47,7 +47,9 @@ public class ExecutionLeaseServiceImpl implements IExecutionLeaseService {
         if (!context.renewable()) return;
         long started = System.nanoTime();
         try { context.renewed(client.updateLease(request), started); }
-        catch (ExecutionException rejected) { context.cancel("LEASE_LOST"); }
+        catch (ExecutionException rejected) {
+            context.cancel("RUN_CANCEL_REQUESTED".equals(rejected.code()) ? rejected.code() : "LEASE_LOST");
+        }
         catch (IllegalArgumentException invalid) { context.cancel("LEASE_LOST"); }
         catch (RuntimeException unavailable) {
             // 网络不确定不等于立即失租；只在最后确认的安全期限内安排下一次显式请求。

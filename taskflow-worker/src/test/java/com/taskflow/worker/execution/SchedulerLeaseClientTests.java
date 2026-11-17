@@ -19,7 +19,8 @@ class SchedulerLeaseClientTests {
     private final SchedulerLeaseRemote remote = mock(SchedulerLeaseRemote.class);
     private final SchedulerLeaseClient client = new SchedulerLeaseClient(remote,
             new ExecutionProperties(URI.create("http://localhost:8081"), "dispatch", "report",
-                    Duration.ofSeconds(2), Duration.ofSeconds(3), 500, 2, 4, 3, Duration.ofSeconds(2), false, Duration.ofSeconds(2)));
+                    Duration.ofSeconds(2), Duration.ofSeconds(3), 500, 2, 4, 3, Duration.ofSeconds(2), false, Duration.ofSeconds(2)),
+            tools.jackson.databind.json.JsonMapper.builder().build());
     private final LeaseRequest request = new LeaseRequest(UUID.randomUUID(), UUID.randomUUID(), 1, "worker-1", UUID.randomUUID());
 
     @ParameterizedTest @ValueSource(ints = {408, 429, 500, 503})
@@ -36,9 +37,18 @@ class SchedulerLeaseClientTests {
                 rejected -> assertThat(rejected.code()).isEqualTo("LEASE_REJECTED"));
         verify(remote, times(1)).updateLease(any(), any());
     }
-    private FeignException failure(int status) {
+    @org.junit.jupiter.api.Test
+    void typedCancellationImmediatelyRevokesWithTheCancellationCode() {
+        when(remote.updateLease(any(), any())).thenThrow(failure(409, "{\"code\":\"RUN_CANCEL_REQUESTED\"}"));
+        assertThatThrownBy(() -> client.updateLease(request)).isInstanceOfSatisfying(ExecutionException.class,
+                rejected -> assertThat(rejected.code()).isEqualTo("RUN_CANCEL_REQUESTED"));
+        verify(remote, times(1)).updateLease(any(), any());
+    }
+    private FeignException failure(int status) { return failure(status, ""); }
+    private FeignException failure(int status, String body) {
         var http = Request.create(Request.HttpMethod.POST, "http://localhost/internal/v1/attempts/updateLease",
                 java.util.Map.of(), null, java.nio.charset.StandardCharsets.UTF_8, null);
-        return FeignException.errorStatus("lease", Response.builder().request(http).status(status).reason("test failure").build());
+        return FeignException.errorStatus("lease", Response.builder().request(http).status(status).reason("test failure")
+                .body(body, java.nio.charset.StandardCharsets.UTF_8).build());
     }
 }

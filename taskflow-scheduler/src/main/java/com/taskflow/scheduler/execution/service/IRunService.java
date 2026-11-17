@@ -16,5 +16,6 @@ public interface IRunService {
     Overview selectSummary(java.time.Instant from, java.time.Instant to);
     void updateResult(Result result);
     OutcomeReview.Review updateOutcomeReview(ReviewOutcome request);
+    RunView updateCancellation(Cancel request);
     void dispatchPending();
 }

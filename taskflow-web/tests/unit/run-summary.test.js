@@ -21,10 +21,11 @@ test('耗时覆盖空值、零、毫秒、秒和分钟边界', () => {
   assert.equal(formatLatency(1000), '1.00 秒'); assert.equal(formatLatency(4300), '4.30 秒');
   assert.equal(formatLatency(59999), '60.00 秒'); assert.equal(formatLatency(60000), '1.00 分钟');
 });
-test('状态分布补齐五项并保护空窗口', () => {
-  const empty = stateDistribution(); assert.equal(empty.length, 5);
+test('状态分布包含取消并保护空窗口', () => {
+  const empty = stateDistribution(); assert.equal(empty.length, 7);
   assert.ok(empty.every(item => item.count === 0 && item.percent === 0));
   const states = stateDistribution({ SUCCEEDED: 3, FAILED: 1 }, 4);
   assert.equal(states.find(item => item.state === 'SUCCEEDED').percent, 75);
+  assert.equal(stateDistribution({ CANCELLED: 1 }, 1).find(item => item.state === 'CANCELLED').percent, 100);
   assert.ok(stateDistribution({ SUCCEEDED: 1 }, 0).every(item => item.percent === 0));
 });

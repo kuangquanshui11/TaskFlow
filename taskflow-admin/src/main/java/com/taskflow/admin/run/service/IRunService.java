@@ -5,6 +5,7 @@ import com.taskflow.admin.run.dto.RunRequests.Insert;
 import com.taskflow.admin.run.dto.RunRequests.Rerun;
 import com.taskflow.admin.run.dto.RunRequests.RerunConfiguration;
 import com.taskflow.admin.run.dto.RunRequests.ReviewOutcome;
+import com.taskflow.admin.run.dto.RunRequests.Cancel;
 import tools.jackson.databind.JsonNode;
 
 public interface IRunService {
@@ -22,4 +23,6 @@ public interface IRunService {
     JsonNode selectByRequestKey(UUID requestKey);
     @org.springframework.security.access.prepost.PreAuthorize("hasAuthority('run:review')")
     JsonNode updateOutcomeReview(ReviewOutcome request);
+    @org.springframework.security.access.prepost.PreAuthorize("hasAuthority('run:cancel')")
+    JsonNode updateCancellation(Cancel request);
 }

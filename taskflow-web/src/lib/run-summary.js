@@ -16,7 +16,7 @@ export function formatLatency(value) {
 }
 
 export function stateDistribution(stateCounts = {}, total = 0) {
-  const labels = { READY: '待执行', RUNNING: '执行中', RETRY_WAIT: '等待重试', SUCCEEDED: '成功', FAILED: '失败' };
+  const labels = { READY: '待执行', RUNNING: '执行中', RETRY_WAIT: '等待重试', CANCEL_REQUESTED: '正在取消', SUCCEEDED: '成功', FAILED: '失败', CANCELLED: '已取消' };
   return Object.entries(labels).map(([state, label]) => {
     const count = stateCounts[state] ?? 0;
     return { state, label, count, percent: total > 0 ? Math.min(100, Math.max(0, count / total * 100)) : 0 };

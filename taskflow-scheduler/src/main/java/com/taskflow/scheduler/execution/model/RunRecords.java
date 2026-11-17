@@ -32,13 +32,13 @@ public final class RunRecords {
         public boolean validAt(Instant now) {
             return expiresAt != null && expiresAt.isAfter(now) && (leaseUntil == null || leaseUntil.isAfter(now));
         }
-        public boolean terminal() { return java.util.Set.of("SUCCEEDED", "FAILED", "TIMED_OUT").contains(state); }
+        public boolean terminal() { return java.util.Set.of("SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED").contains(state); }
     }
     public record RunView(UUID id, long jobId, long configVersion, UUID requestKey, String state,
             Snapshot snapshot, List<Attempt> attempts, String resultCode, String message,
             Instant createdAt, Instant updatedAt, String triggerType, Instant scheduledAt,
             UUID sourceRunId, String rerunActor, boolean rerunEligible, String traceId, RunTiming timing, String triggerActor,
-            List<OutcomeReview.Case> outcomeCases) { }
+            List<OutcomeReview.Case> outcomeCases, RunCancellation cancellation) { }
     public record RunTiming(Long endToEndMillis, Long scheduleDelayMillis, Long initialQueueMillis) { }
     public record Summary(UUID id, long jobId, long configVersion, String state, int attemptCount,
             String resultCode, String message, Instant createdAt, Instant updatedAt, String triggerType,

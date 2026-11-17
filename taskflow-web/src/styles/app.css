@@ -153,8 +153,10 @@ svg { flex-shrink: 0; vertical-align: middle; }
 .run-distribution .ready { background: var(--muted); }
 .run-distribution .running { background: var(--primary); }
 .run-distribution .retry_wait { background: var(--sidebar); }
+.run-distribution .cancel_requested { background: color-mix(in srgb, var(--primary) 45%, var(--red)); }
 .run-distribution .succeeded { background: var(--green); }
 .run-distribution .failed { background: var(--red); }
+.run-distribution .cancelled { background: color-mix(in srgb, var(--muted) 55%, var(--surface)); }
 .run-state-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 16px 0; margin: 0; }
 .run-state-legend li { display: flex; gap: 8px; align-items: center; font-size: 13px; font-variant-numeric: tabular-nums; }
 .run-summary-body h3 { font-size: 15px; margin: 20px 0 12px; }

@@ -148,6 +148,28 @@ class RunApiTests {
         assertThat(post("/updateOutcomeReview", body, com.taskflow.admin.support.TestTokens.admin()).statusCode()).isEqualTo(200);
     }
 
+    @Test void cancellationRequiresOperateAccessAndProxiesTheVerifiedActor() throws Exception {
+        var viewer = com.taskflow.admin.support.TestTokens.token(Map.of("resource_access",
+                Map.of("taskflow-api", Map.of("roles", java.util.List.of("VIEWER")))));
+        com.taskflow.admin.support.TestSessionConfiguration.register(viewer);
+        var operator = com.taskflow.admin.support.TestTokens.token(Map.of("sub", "cancel-operator", "resource_access",
+                Map.of("taskflow-api", Map.of("roles", java.util.List.of("OPERATOR")))));
+        com.taskflow.admin.support.TestSessionConfiguration.register(operator);
+        var id = UUID.randomUUID();
+        var key = UUID.randomUUID();
+        var body = Map.of("runId", id, "requestKey", key, "reason", "duplicate run", "actor", "forged");
+        assertThat(post("/updateCancellation", body, viewer).statusCode()).isEqualTo(403);
+        verifyNoInteractions(scheduler);
+        when(scheduler.post(eq("/internal/v1/runs/updateCancellation"), any())).thenAnswer(call -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            Map<?, ?> sent = call.getArgument(1);
+            assertThat(sent.get("actor")).isEqualTo("cancel-operator");
+            assertThat(sent.get("requestKey")).isEqualTo(key);
+            return json.createObjectNode().put("id", id.toString()).put("state", "CANCEL_REQUESTED");
+        });
+        assertThat(post("/updateCancellation", body, operator).statusCode()).isEqualTo(200);
+    }
+
     @Test void attemptTimelineRequiresRunReadAndProxiesOutsideTheLocalTransaction() throws Exception {
         var runId = UUID.randomUUID();
         var attemptId = UUID.randomUUID();

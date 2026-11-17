@@ -14,6 +14,7 @@ import com.taskflow.admin.run.dto.RunRequests.Insert;
 import com.taskflow.admin.run.dto.RunRequests.Rerun;
 import com.taskflow.admin.run.dto.RunRequests.RerunConfiguration;
 import com.taskflow.admin.run.dto.RunRequests.ReviewOutcome;
+import com.taskflow.admin.run.dto.RunRequests.Cancel;
 import com.taskflow.admin.run.exception.RunException;
 import com.taskflow.admin.run.service.IRunService;
 import org.springframework.stereotype.Service;
@@ -117,6 +118,13 @@ public class RunServiceImpl implements IRunService {
                 "evidence", request.evidence(), "actor", actor));
     }
 
+    @Override
+    public JsonNode updateCancellation(Cancel request) {
+        var actor = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication().getName();
+        return scheduler.post("/internal/v1/runs/updateCancellation", Map.of("requestKey", request.requestKey(),
+                "runId", request.runId(), "reason", request.reason(), "actor", actor));
+    }
+
     private ObjectNode snapshot(JobDefinition job, long configVersion) {
         // 权威配置由数据库读取。本地只读事务在调用 Scheduler 前已结束。
         if (job.configVersion() != configVersion)
@@ -156,7 +164,7 @@ public class RunServiceImpl implements IRunService {
                 || (query.jobId() != null && query.jobId() < 1)
                 || (query.timeField() != null && !java.util.Set.of("CREATED", "FINISHED").contains(query.timeField()))
                 || (query.resultCode() != null && (query.resultCode().isEmpty() || query.resultCode().length() > 64))
-                || (query.state() != null && !java.util.Set.of("READY", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED").contains(query.state()))
+                || (query.state() != null && !java.util.Set.of("READY", "RUNNING", "RETRY_WAIT", "CANCEL_REQUESTED", "SUCCEEDED", "FAILED", "CANCELLED").contains(query.state()))
                 || (query.triggerType() != null && !java.util.Set.of("MANUAL", "CRON").contains(query.triggerType())))
             throw new RunException(400, "INVALID_ARGUMENT", "运行筛选或分页参数不合法");
         var params = new java.util.LinkedHashMap<String, String>();

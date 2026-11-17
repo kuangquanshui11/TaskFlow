@@ -15,6 +15,7 @@ import com.taskflow.scheduler.execution.mapper.RunDataMapper;
 import com.taskflow.scheduler.execution.model.RunRecords.Attempt;
 import com.taskflow.scheduler.execution.model.RunRecords.RunView;
 import com.taskflow.scheduler.execution.model.OutcomeReview.Decision;
+import com.taskflow.scheduler.execution.model.RunCancellation.Outcome;
 import com.taskflow.scheduler.execution.service.IExecutionLeaseService;
 import com.taskflow.scheduler.execution.service.IRunService;
 import com.taskflow.scheduler.execution.service.impl.RunServiceImpl;
@@ -388,6 +389,101 @@ class RunStateConcurrencyTests {
         assertThat(reviewed.state()).isEqualTo(waiting.state());
         assertThat(reviewed.attempts()).isEqualTo(waiting.attempts());
         assertThat(reviewed.rerunEligible()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"http", "rabbitmq"})
+    void cancellationBeforeLeaseBlocksDeliveryAndReleasesSerialSlot(String transport) {
+        var service = service(transport);
+        var initial = service.insert(serialRequest(7));
+        service.dispatchPending();
+        var first = service.selectById(initial.id()).attempts().getFirst();
+        assertThat(first.targetWorkerId()).isNotNull();
+        var cancellation = new Cancel(UUID.randomUUID(), initial.id(), "duplicate task", "operator");
+        var stopped = service.updateCancellation(cancellation);
+        assertThat(stopped.state()).isEqualTo("CANCELLED");
+        assertThat(stopped.attempts().getFirst().state()).isEqualTo("CANCELLED");
+        assertThat(stopped.cancellation().outcome()).isEqualTo(Outcome.BEFORE_START);
+        assertThat(stopped.outcomeCases()).isEmpty();
+        assertThat(service.updateCancellation(cancellation).cancellation()).isEqualTo(stopped.cancellation());
+        assertThatThrownBy(() -> service.updateCancellation(new Cancel(cancellation.requestKey(), initial.id(), "different reason", "operator")))
+                .isInstanceOfSatisfying(RunException.class, error -> assertThat(error.code()).isEqualTo("CANCELLATION_CONFLICT"));
+        assertThatThrownBy(() -> leases.updateLease(new LeaseRequest(first.id(), initial.id(),
+                first.leaseVersion(), first.targetWorkerId(), UUID.randomUUID())))
+                .isInstanceOfSatisfying(RunException.class, error -> assertThat(error.code()).isEqualTo("STALE_LEASE"));
+        if (transport.equals("rabbitmq")) assertThat(outbox.find(first.id(), false).orElseThrow().state()).isEqualTo("CANCELLED");
+        var following = service.insert(serialRequest(7));
+        service.dispatchPending();
+        assertThat(service.selectById(following.id()).attempts().getFirst().expiresAt()).isNotNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void ownedCancellationKeepsWorkerReportAsEvidenceWithoutChangingRunOutcome(boolean reportInTime) {
+        var run = runs.insert(serialRequest(7));
+        runs.dispatchPending();
+        var attempt = runs.selectById(run.id()).attempts().getFirst();
+        var session = UUID.randomUUID();
+        var owner = new LeaseRequest(attempt.id(), run.id(), attempt.leaseVersion(), attempt.targetWorkerId(), session);
+        leases.updateLease(owner);
+        var cancel = new Cancel(UUID.randomUUID(), run.id(), "stop external processing", "operator");
+        assertThat(runs.updateCancellation(cancel).state()).isEqualTo("CANCEL_REQUESTED");
+        assertThatThrownBy(() -> leases.updateLease(owner))
+                .isInstanceOfSatisfying(RunException.class, error -> assertThat(error.code()).isEqualTo("RUN_CANCEL_REQUESTED"));
+        assertThatThrownBy(() -> runs.updateResult(resultFor(run, attempt, "SUCCEEDED", false)))
+                .isInstanceOfSatisfying(RunException.class, error -> assertThat(error.code()).isEqualTo("STALE_ATTEMPT"));
+
+        if (!reportInTime) {
+            jdbc.update("UPDATE run_cancellation SET deadline_at=? WHERE run_id=?",
+                    Timestamp.from(Instant.now().minusSeconds(1)), run.id().toString());
+            runs.dispatchPending();
+            assertThat(runs.selectById(run.id()).cancellation().outcome()).isEqualTo(Outcome.STOP_UNCONFIRMED);
+        }
+        var workerResult = new Result(attempt.id(), run.id(), attempt.leaseVersion(), "SUCCEEDED",
+                "HANDLER_RESULT", "late result", true, attempt.targetWorkerId(), session);
+        runs.updateResult(workerResult);
+        var stopped = runs.selectById(run.id());
+        assertThat(stopped.state()).isEqualTo("CANCELLED");
+        assertThat(stopped.attempts()).hasSize(1);
+        assertThat(stopped.cancellation().outcome()).isEqualTo(reportInTime ? Outcome.STOP_CONFIRMED : Outcome.STOP_UNCONFIRMED);
+        assertThat(stopped.cancellation().workerResultCode()).isEqualTo("HANDLER_RESULT");
+        assertThat(stopped.outcomeCases()).hasSize(1);
+        runs.updateResult(workerResult);
+        assertThat(runs.updateCancellation(cancel).cancellation()).isEqualTo(stopped.cancellation());
+    }
+
+    @Test void cancellationRacingWithSuccessfulCompletionCommitsOneAuthoritativeOutcome() throws Exception {
+        var run = runs.insert(request());
+        runs.dispatchPending();
+        var attempt = runs.selectById(run.id()).attempts().getFirst();
+        var owner = new LeaseRequest(attempt.id(), run.id(), attempt.leaseVersion(), attempt.targetWorkerId(), UUID.randomUUID());
+        leases.updateLease(owner);
+        var go = new CountDownLatch(1);
+        try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            var cancel = threads.submit(() -> {
+                await(go);
+                try {
+                    runs.updateCancellation(new Cancel(UUID.randomUUID(), run.id(), "concurrent request", "operator"));
+                    return true;
+                } catch (RunException rejected) {
+                    assertThat(rejected.code()).isEqualTo("RUN_NOT_CANCELLABLE");
+                    return false;
+                }
+            });
+            var finish = threads.submit(() -> {
+                await(go);
+                runs.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion(), "SUCCEEDED", "SUCCEEDED",
+                        "completed", false, owner.workerId(), owner.sessionId()));
+            });
+            go.countDown();
+            var cancelled = cancel.get(12, TimeUnit.SECONDS);
+            finish.get(12, TimeUnit.SECONDS);
+            var finalRun = runs.selectById(run.id());
+            assertThat(finalRun.state()).isEqualTo(cancelled ? "CANCELLED" : "SUCCEEDED");
+            assertThat(finalRun.attempts()).singleElement().satisfies(item -> assertThat(item.state()).isEqualTo(finalRun.state()));
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM scheduler_attempt_event WHERE run_id=? AND event_type='RUN_FINISHED'",
+                    Integer.class, run.id().toString())).isEqualTo(1);
+        }
     }
 
     private Result resultFor(RunView run, Attempt attempt, String state, boolean retryable) {

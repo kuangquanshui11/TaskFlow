@@ -19,6 +19,8 @@ import com.taskflow.scheduler.execution.mapper.RunDataMapper;
 import com.taskflow.scheduler.execution.model.RunRecords.*;
 import com.taskflow.scheduler.execution.model.RetryDelay;
 import com.taskflow.scheduler.execution.model.OutcomeReview;
+import com.taskflow.scheduler.execution.model.RunCancellation;
+import com.taskflow.scheduler.execution.model.RunCancellation.Outcome;
 import java.util.concurrent.ThreadLocalRandom;
 import com.taskflow.scheduler.execution.service.IRunService;
 import com.taskflow.scheduler.dispatch.config.DispatchProperties;
@@ -150,7 +152,7 @@ public class RunServiceImpl implements IRunService {
                 || (query.jobId() != null && query.jobId() < 1)
                 || (query.timeField() != null && !java.util.Set.of("CREATED", "FINISHED").contains(query.timeField()))
                 || (query.resultCode() != null && (query.resultCode().isEmpty() || query.resultCode().length() > 64))
-                || (query.state() != null && !java.util.Set.of("READY", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED").contains(query.state()))
+                || (query.state() != null && !java.util.Set.of("READY", "RUNNING", "RETRY_WAIT", "CANCEL_REQUESTED", "SUCCEEDED", "FAILED", "CANCELLED").contains(query.state()))
                 || (query.triggerType() != null && !java.util.Set.of("MANUAL", "CRON").contains(query.triggerType())))
             throw new RunException(400, "INVALID_ARGUMENT", "运行筛选或分页参数不合法");
         Instant from = null, to = null;
@@ -184,9 +186,11 @@ public class RunServiceImpl implements IRunService {
         var samples = mapper.summaryLatencies(from, to);
         var failures = mapper.summaryFailures(from, to);
         var counts = new java.util.LinkedHashMap<String, Long>();
-        for (var state : List.of("READY", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED")) counts.put(state, 0L);
+        for (var state : List.of("READY", "RUNNING", "RETRY_WAIT", "CANCEL_REQUESTED", "SUCCEEDED", "FAILED", "CANCELLED")) counts.put(state, 0L);
         states.forEach(row -> counts.put(row.state(), row.count()));
-        long succeeded = counts.get("SUCCEEDED"), failed = counts.get("FAILED"), finished = succeeded + failed;
+        long succeeded = counts.get("SUCCEEDED"), failed = counts.get("FAILED");
+        long judged = succeeded + failed;
+        long finished = judged + counts.get("CANCELLED");
         long timed = states.stream().mapToLong(StateCount::timedCount).sum();
         var totalMillis = states.stream().map(StateCount::totalMillis).filter(java.util.Objects::nonNull)
                 .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
@@ -194,8 +198,8 @@ public class RunServiceImpl implements IRunService {
         var endToEndTotal = states.stream().map(StateCount::endToEndTotalMillis).filter(Objects::nonNull)
                 .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
         var endToEndSamples = mapper.summaryEndToEndLatencies(from, to);
-        var rate = finished == 0 ? null : java.math.BigDecimal.valueOf(succeeded)
-                .divide(java.math.BigDecimal.valueOf(finished), 4, java.math.RoundingMode.HALF_UP);
+        var rate = judged == 0 ? null : java.math.BigDecimal.valueOf(succeeded)
+                .divide(java.math.BigDecimal.valueOf(judged), 4, java.math.RoundingMode.HALF_UP);
         return new Overview(from, to, observed, counts.values().stream().mapToLong(Long::longValue).sum(), counts,
                 finished, succeeded, failed, rate, attempts.attemptTotal(), attempts.retriedRunCount(),
                 latency(totalMillis, timed, samples), failures, latency(endToEndTotal, endToEndCount, endToEndSamples));
@@ -228,6 +232,11 @@ public class RunServiceImpl implements IRunService {
                     || attempt.ownerWorkerId() != null && (!attempt.ownerWorkerId().equals(result.workerId())
                         || !attempt.ownerSessionId().equals(result.sessionId())))
                 throw stale();
+            if (attempt.ownerWorkerId() != null && run.currentAttempt() == attempt.attemptNumber()
+                    && ("CANCEL_REQUESTED".equals(run.state()) || "CANCELLED".equals(run.state()))) {
+                confirmCancellationResult(run, attempt, result);
+                return;
+            }
             // 已确认的相同终态可以在租约到期或后续重试启动后再次确认，不能再次改变状态。
             if (attempt.terminal()) {
                 if (attempt.state().equals(result.status()) && java.util.Objects.equals(attempt.resultCode(), result.resultCode())
@@ -243,10 +252,21 @@ public class RunServiceImpl implements IRunService {
 
     @Override
     public void dispatchPending() {
+        for (var id : mapper.expiredCancellations(Instant.now())) {
+            transactions.executeWithoutResult(status -> {
+                var pair = locked(id);
+                if (!"CANCEL_REQUESTED".equals(pair.run().state())) return;
+                var cancellation = mapper.cancellation(pair.run().id(), true).orElseThrow(this::stale);
+                var now = Instant.now();
+                if (!cancellation.deadlineAt().isAfter(now))
+                    finishCancellation(pair.run(), pair.attempt(), Outcome.STOP_UNCONFIRMED, now);
+            });
+        }
         for (var id : mapper.expired(Instant.now())) {
             transactions.executeWithoutResult(status -> {
                 var pair = locked(id);
-                if (!pair.attempt().terminal() && pair.attempt().expiresAt() != null
+                if (!"CANCEL_REQUESTED".equals(pair.run().state())
+                        && !pair.attempt().terminal() && pair.attempt().expiresAt() != null
                         && !pair.attempt().validAt(Instant.now()))
                     finish(pair.run(), pair.attempt(), "TIMED_OUT", "LEASE_EXPIRED", "执行租约已过期，迟到结果将被拒绝", properties.retryOnLeaseLoss());
             });
@@ -294,7 +314,7 @@ public class RunServiceImpl implements IRunService {
             readCommittedTransactions.executeWithoutResult(status -> {
                 var pair = locked(id);
                 var attempt = pair.attempt();
-                if (attempt.terminal() || terminal(pair.run()) || pair.run().currentAttempt() != attempt.attemptNumber()) return;
+                if (attempt.terminal() || !canDispatch(pair.run()) || pair.run().currentAttempt() != attempt.attemptNumber()) return;
                 // 先锁 Run、Attempt，再访问 Outbox；Relay 只锁 Outbox，不反向锁业务记录。
                 var event = outbox.find(id, true).orElseThrow();
                 switch (event.state()) {
@@ -319,7 +339,7 @@ public class RunServiceImpl implements IRunService {
     private record Prepared(Dispatch command, DispatchTarget target, int dispatchNumber, Context traceContext) { }
     private Prepared claim(UUID id) {
         var pair = locked(id); var run = pair.run(); var attempt = pair.attempt(); var now = Instant.now();
-        if (attempt.terminal() || terminal(run) || !java.util.Set.of("READY", "DISPATCHING").contains(attempt.state())
+        if (attempt.terminal() || !canDispatch(run) || !java.util.Set.of("READY", "DISPATCHING").contains(attempt.state())
                 || attempt.nextDispatchAt().isAfter(now) || run.currentAttempt() != attempt.attemptNumber()) return null;
         if (attempt.expiresAt() != null && !attempt.validAt(now)) {
             finish(run, attempt, "TIMED_OUT", "LEASE_EXPIRED", "执行租约已过期", properties.retryOnLeaseLoss()); return null;
@@ -358,7 +378,7 @@ public class RunServiceImpl implements IRunService {
 
     private void confirmAccepted(Pair pair, long leaseVersion) {
         var run = pair.run(); var attempt = pair.attempt(); var now = Instant.now();
-        if (terminal(run) || run.currentAttempt() != attempt.attemptNumber() || attempt.leaseVersion() != leaseVersion
+        if (!canDispatch(run) || run.currentAttempt() != attempt.attemptNumber() || attempt.leaseVersion() != leaseVersion
                 || !java.util.Set.of("READY", "DISPATCHING").contains(attempt.state())
                 || !attempt.validAt(now)) return;
         // SQL 没有完成 Attempt 转换时，不得推进 Run；两条转换仍处于同一本地事务。
@@ -366,10 +386,10 @@ public class RunServiceImpl implements IRunService {
                 && !mapper.runState(run, "RUNNING", attempt.attemptNumber(), null, null, now)) throw stale();
     }
 
-    private boolean terminal(RunRow run) { return java.util.Set.of("SUCCEEDED", "FAILED").contains(run.state()); }
+    private boolean canDispatch(RunRow run) { return java.util.Set.of("READY", "RUNNING", "RETRY_WAIT").contains(run.state()); }
 
     private void finish(RunRow run, Attempt attempt, String state, String code, String message, boolean retryable) {
-        if (run.currentAttempt() != attempt.attemptNumber() || terminal(run)) throw stale();
+        if (run.currentAttempt() != attempt.attemptNumber() || !canDispatch(run)) throw stale();
         var now = Instant.now();
         if (!mapper.finish(attempt, state, code, message, now)) throw stale();
         outbox.cancel(attempt.id());
@@ -404,6 +424,91 @@ public class RunServiceImpl implements IRunService {
         if (dispatch.rabbitmq()) outbox.insert(attempt.id(), when, run.traceContext());
     }
     private record Pair(RunRow run, Attempt attempt) { }
+
+    @Override
+    public RunView updateCancellation(Cancel request) {
+        try {
+            return readCommittedTransactions.execute(status -> cancelRun(request));
+        } catch (DuplicateKeyException conflict) {
+            throw cancellationConflict();
+        }
+    }
+
+    private RunView cancelRun(Cancel request) {
+        var run = mapper.lock(request.runId()).orElseThrow(() -> new RunException(404, "RUN_NOT_FOUND", "运行不存在"));
+        var existing = mapper.cancellation(run.id(), false).orElse(null);
+        var reason = request.reason().strip();
+        if (existing != null) {
+            if (!existing.requestKey().equals(request.requestKey()) || !existing.actor().equals(request.actor())
+                    || !existing.reason().equals(reason)) throw cancellationConflict();
+            return view(run);
+        }
+        if (!canDispatch(run)) throw new RunException(409, "RUN_NOT_CANCELLABLE", "运行已进入终态");
+        var attempt = mapper.lockCurrentAttempt(run).orElseThrow(this::stale);
+        if (attempt.terminal()) throw stale();
+        var now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        var deadline = now.plus(properties.leaseGrace());
+        if (attempt.expiresAt() != null && deadline.isAfter(attempt.expiresAt())) deadline = attempt.expiresAt();
+        mapper.insertCancellation(new RunCancellation(run.id(), attempt.id(), request.requestKey(), reason, request.actor(),
+                now, deadline, Outcome.REQUESTED, null, null, null, null));
+        outbox.cancel(attempt.id());
+        mapper.appendAttemptEvent(run.id(), attempt.id(), attempt.targetWorkerId(), attempt.leaseVersion(),
+                "RUN_CANCEL_REQUESTED", now, null, "CANCEL_REQUESTED", null, deadline);
+        if (attempt.ownerWorkerId() == null) {
+            finishCancellation(run, attempt, Outcome.BEFORE_START, now);
+        } else if (!mapper.runState(run, "CANCEL_REQUESTED", attempt.attemptNumber(), "RUN_CANCEL_REQUESTED",
+                "等待执行者报告停止", now)) {
+            throw stale();
+        }
+        return view(mapper.find(run.id()).orElseThrow(this::stale));
+    }
+
+    private RunException cancellationConflict() {
+        return new RunException(409, "CANCELLATION_CONFLICT", "取消请求标识或 Run 已绑定其他取消操作");
+    }
+
+    private void confirmCancellationResult(RunRow run, Attempt attempt, Result result) {
+        // 上报身份已按原 Worker、会话与租约版本校验。取消后，报告只证明执行退出或提供迟到证据。
+        var cancellation = mapper.cancellation(run.id(), true).orElseThrow(this::stale);
+        if (!cancellation.attemptId().equals(attempt.id())) throw stale();
+        if (cancellation.workerResultAt() != null) {
+            if (cancellation.workerResultStatus().equals(result.status())
+                    && cancellation.workerResultCode().equals(result.resultCode())) return;
+            throw stale();
+        }
+        var now = Instant.now();
+        if ("CANCEL_REQUESTED".equals(run.state())) {
+            var outcome = cancellation.deadlineAt().isAfter(now) ? Outcome.STOP_CONFIRMED : Outcome.STOP_UNCONFIRMED;
+            finishCancellation(run, attempt, outcome, now);
+        }
+        if (!mapper.recordCancellationResult(run.id(), result.status(), result.resultCode(), now)) throw stale();
+        mapper.appendAttemptEvent(run.id(), attempt.id(), result.workerId(), attempt.leaseVersion(),
+                "CANCEL_WORKER_RESULT", now, null, result.status(), result.resultCode(), null);
+    }
+
+    private void finishCancellation(RunRow run, Attempt attempt, Outcome outcome, Instant now) {
+        String code = switch (outcome) {
+            case BEFORE_START -> "CANCELLED_BEFORE_START";
+            case STOP_CONFIRMED -> "CANCEL_STOP_CONFIRMED";
+            case STOP_UNCONFIRMED -> "CANCEL_STOP_UNCONFIRMED";
+            case REQUESTED -> throw new IllegalArgumentException("取消尚未结束");
+        };
+        String message = switch (outcome) {
+            case BEFORE_START -> "取消时尚未授予此 Attempt 执行租约";
+            case STOP_CONFIRMED -> "已收到执行者结束报告，外部副作用待核对";
+            case STOP_UNCONFIRMED -> "停止确认超时，外部副作用待核对";
+            case REQUESTED -> throw new IllegalArgumentException("取消尚未结束");
+        };
+        if (!mapper.finish(attempt, "CANCELLED", code, message, now)
+                || !mapper.runState(run, "CANCELLED", attempt.attemptNumber(), code, message, now)
+                || !mapper.finishCancellation(run.id(), outcome, now)) throw stale();
+        mapper.releaseExecutionSlot(run.id());
+        if (outcome != Outcome.BEFORE_START) mapper.recordUnknownOutcome(attempt, code, now);
+        mapper.appendAttemptEvent(run.id(), attempt.id(), attempt.targetWorkerId(), attempt.leaseVersion(),
+                "ATTEMPT_FINISHED", now, null, "CANCELLED", code, null);
+        mapper.appendAttemptEvent(run.id(), attempt.id(), attempt.targetWorkerId(), attempt.leaseVersion(),
+                "RUN_FINISHED", now, null, "CANCELLED", code, null);
+    }
 
     @Override
     public OutcomeReview.Review updateOutcomeReview(ReviewOutcome request) {
@@ -454,7 +559,7 @@ public class RunServiceImpl implements IRunService {
                 row.sourceRunId(), row.rerunActor(), canRerun(row, attempts), row.traceContext().traceId(),
                 new RunTiming(elapsedMillis(row.createdAt(), row.finishedAt()), elapsedMillis(row.scheduledAt(), row.createdAt()),
                         elapsedMillis(row.createdAt(), attempts.isEmpty() ? null : attempts.getFirst().startedAt())), row.triggerActor(),
-                mapper.outcomeCases(row.id()));
+                mapper.outcomeCases(row.id()), mapper.cancellation(row.id(), false).orElse(null));
     }
 
     static Long elapsedMillis(Instant from, Instant to) {

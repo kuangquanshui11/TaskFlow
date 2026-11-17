@@ -207,7 +207,8 @@ public class ExecutionServiceImpl implements IExecutionService {
                         if (context != null) {
                             if (context.cancelled()) {
                                 state = "FAILED"; code = context.cancellationCode();
-                                message = "执行超时或租约已失效"; retryable = false;
+                                message = "RUN_CANCEL_REQUESTED".equals(code) ? "执行者已退出已请求取消的运行" : "执行超时或租约已失效";
+                                retryable = false;
                             }
                             context.handlerFinished();
                         }

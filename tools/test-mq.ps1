@@ -1,5 +1,5 @@
 param([switch]$SkipBuild, [switch]$SkipBrowser, [switch]$SkipFailover, [switch]$IncludeWorkerCluster, [switch]$CleanupOnly, [switch]$DeadLetterOnly,
-    [string]$ClusterSettingsPath, [switch]$ManualFailover, [switch]$AllowLegacyBroker)
+    [string]$ClusterSettingsPath, [switch]$ManualFailover, [switch]$AllowLegacyBroker, [switch]$IncludeRunCancellation)
 $ErrorActionPreference = 'Stop'
 if ($DeadLetterOnly) {
     if (!$ClusterSettingsPath -or $ManualFailover -or $CleanupOnly -or $IncludeWorkerCluster) {
@@ -77,7 +77,7 @@ function Wait-Topology([int]$OnlineCount, [string]$Label) {
 }
 function Invoke-ExecutionAcceptance([string]$Label, [bool]$SkipPhaseBuild) {
     Write-TestSettings
-    & (Join-Path $PSScriptRoot 'test-execution.ps1') -Transport rabbitmq -MqSettingsPath $settingsPath -SkipBuild:$SkipPhaseBuild -SkipBrowser:$SkipBrowser -IncludeWorkerCluster:$IncludeWorkerCluster |
+    & (Join-Path $PSScriptRoot 'test-execution.ps1') -Transport rabbitmq -MqSettingsPath $settingsPath -SkipBuild:$SkipPhaseBuild -SkipBrowser:$SkipBrowser -IncludeWorkerCluster:$IncludeWorkerCluster -IncludeRunCancellation:$IncludeRunCancellation |
         Tee-Object -FilePath (Join-Path $runPath ($Label + '.log')) | Tee-Object -Variable phaseOutput
     $location = @($phaseOutput | Where-Object { "$_".StartsWith('Execution evidence: ') })
     if ($location.Count -ne 1) { throw 'Execution acceptance did not produce a completed evidence report.' }

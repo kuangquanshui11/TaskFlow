@@ -65,6 +65,8 @@ Gateway 保留以下 API 路径，只路由 `/api/v1/**`；`/internal/v1/**`、�
 | GET | /api/v1/runs/selectAttemptEvents?runId=UUID&attemptId=UUID | run:read；单次 Attempt 的执行事件 |
 | GET | /api/v1/runs/selectDispatchFailures | run:read，查询派发故障 |
 | POST | /api/v1/runs/updateDispatchFailure | dispatch:resolve，确认或结案 |
+| POST | /api/v1/runs/updateOutcomeReview | run:review，保存实质副作用的核对结论 |
+| POST | /api/v1/runs/updateCancellation | run:cancel，请求取消一次运行 |
 
 成功响应：
 
@@ -277,7 +279,7 @@ GET /api/v1/runs/selectGlobal 是独立的全局查询，不改变上述单任�
 | from / to | 同时省略或同时提供以 Z 结尾的 UTC ISO-8601。窗口为 `[from,to)`，起点早于终点，最长 7 天 |
 | timeField | 可选，`CREATED`（默认）按创建时间，`FINISHED` 按权威 Run 结束时间。结束时间窗口排除尚无结束时间的 Run |
 | jobId | 可选，正整数；按运行保存的任务 ID 查询，不要求任务当前存在 |
-| state | 可选，READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED；TIMED_OUT 是 Attempt 状态，不是 Run 状态 |
+| state | 可选，READY、RUNNING、RETRY_WAIT、CANCEL_REQUESTED、SUCCEEDED、FAILED、CANCELLED |
 | triggerType | 可选，MANUAL、CRON |
 | resultCode | 可选，1–64 个字符，按结果码等值筛选；数据库中为空或 NULL 的结果码归入 UNKNOWN，与失败统计分组一致 |
 | runId | 可选，UUID 精确匹配；不存在返回成功空页 |
@@ -301,7 +303,7 @@ Worker 内部续租使用 `POST /internal/v1/attempts/updateLease`，请求含 a
 
 运行详情包含可空的 `traceId`，用于查询异步派发、执行及结果上报的 Trace。历史 Run 可能缺少该字段。
 
-Run 的 state 为 READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED。明确的 Handler 失败可按快照配置新增 Attempt 重试；人工再次执行总是新建 Run。接收/发布不确定不立即创建业务重试；Worker 已上报的超时或重启失败保持非重试。Scheduler 观察到租约失效时，默认按快照上限新增 Attempt，`TASKFLOW_RETRY_ON_LEASE_LOSS=false` 可关闭。内置 demoSlow 可用 payload.durationMillis 控制耗时，demoFailOnce 的首次尝试失败，后续尝试成功。内部认证、超时、租约和故障边界见 [执行协议](execution-protocol.md)，实际验收见 [执行验证](execution-verification.md)。
+Run 的 state 为 READY、RUNNING、RETRY_WAIT、CANCEL_REQUESTED、SUCCEEDED、FAILED、CANCELLED。明确的 Handler 失败可按快照配置新增 Attempt 重试；人工再次执行总是新建 Run。接收/发布不确定不立即创建业务重试；Worker 已上报的超时或重启失败保持非重试。Scheduler 观察到租约失效时，默认按快照上限新增 Attempt，`TASKFLOW_RETRY_ON_LEASE_LOSS=false` 可关闭。内置 demoSlow 可用 payload.durationMillis 控制耗时，demoFailOnce 的首次尝试失败，后续尝试成功。内部认证、超时、租约和故障边界见 [执行协议](execution-protocol.md)，实际验收见 [执行验证](execution-verification.md)。
 
 Worker 本地结果保存失败会有限重试保存同一份结果，不重新执行 Handler，不增加 Run / Attempt 或业务重试次数。恢复后按原租约上报；已失效租约不会被延长或绕过。持续保存失败可能最终表现为 Scheduler 租约超时，不能据此断言业务未执行。公开路径、请求参数与响应结构不变；日志诊断和完整故障边界见 [Worker 结果保存恢复](worker-result-recovery.md)。
 
@@ -339,6 +341,12 @@ POST `/api/v1/runs/insertRerun` 接收 `sourceRunId`、`configVersion` 和 UUID 
 
 运行详情的 `outcomeCases` 按 Attempt 返回触发原因、发现时间和最新结论。提交 `POST /api/v1/runs/updateOutcomeReview` 需 ADMIN 的 `run:review` 权限，传 `requestKey`、`runId`、`attemptId`、`decision` 和最多 500 字的非空 `evidence`。结论支持 `EFFECT_APPLIED`（已生效）、`NO_EFFECT`（未生效）、`STILL_UNKNOWN`（仍未知）。Admin 从认证取得操作者。相同请求键和内容返回原回执，内容冲突或已确认后再次提交返回 409。内部同名路径使用 Scheduler 控制密钥。
 
+### 运行取消
+
+`POST /api/v1/runs/updateCancellation` 需要 `run:cancel`，由 OPERATOR 和 ADMIN 获得。请求传 UUID `runId`、UUID `requestKey` 和最多 250 字的非空 `reason`。Admin 使用认证身份写入操作者。在相同 Run、原因及操作者下重放同一个请求键时返回当前详情。已提交终态返回 409 / `RUN_NOT_CANCELLABLE`，Run 或请求键已绑定其他取消操作时返回 409 / `CANCELLATION_CONFLICT`。
+
+成功返回 Run 详情，`cancellation.outcome` 为 `BEFORE_START`（当前 Attempt 在授予租约前取消）、`REQUESTED`（等待 Worker 停止报告）、`STOP_CONFIRMED` 或 `STOP_UNCONFIRMED`。结果上报的时间、原状态和结果码作为独立证据显示。内部同名路径使用 Scheduler 控制密钥。
+
 ## 运行统计语义
 
 GET /api/v1/runs/selectSummary?from=2026-10-30T00:00:00Z&to=2026-10-31T00:00:00Z 需要 run:read，返回 ApiResponse。内部 GET /internal/v1/runs/selectSummary 使用控制密钥，返回相同 data 的裸 JSON，不经 Gateway 公开。Admin 在事务外请求 Scheduler；时间窗非法为 400 / INVALID_ARGUMENT，Scheduler 不可用为 503 / SCHEDULER_UNAVAILABLE，缺少必要结构为 503 / SCHEDULER_PROTOCOL_ERROR。统计不缓存。
@@ -346,7 +354,7 @@ GET /api/v1/runs/selectSummary?from=2026-10-30T00:00:00Z&to=2026-10-31T00:00:00Z
 ```json
 {
   "from":"2026-10-30T00:00:00Z", "to":"2026-10-31T00:00:00Z", "observedAt":"2026-10-31T08:00:00Z",
-  "total":42, "stateCounts":{"READY":1,"RUNNING":2,"RETRY_WAIT":1,"SUCCEEDED":34,"FAILED":4},
+  "total":42, "stateCounts":{"READY":1,"RUNNING":2,"RETRY_WAIT":1,"CANCEL_REQUESTED":0,"SUCCEEDED":34,"FAILED":4,"CANCELLED":0},
   "finished":38, "succeeded":34, "failed":4, "successRate":0.8947,
   "attemptTotal":47, "retriedRunCount":5,
   "latency":{"avgMillis":1240,"p95Millis":4300,"sampled":38,"truncated":false},
@@ -357,14 +365,14 @@ GET /api/v1/runs/selectSummary?from=2026-10-30T00:00:00Z&to=2026-10-31T00:00:00Z
 - 时间窗按 `run_execution.created_at` 过滤，`from` 含、`to` 不含，均为带时区的 UTC ISO-8601（以 `Z` 结尾）。
 - `from`、`to` 要么都省略（默认最近 24 小时），要么都提供；只给一个为 400。
 - 窗口必须 `from < to` 且跨度 ≤ 7 天，否则 400 / `INVALID_ARGUMENT`。
-- Run 状态只有 `READY / RUNNING / RETRY_WAIT / SUCCEEDED / FAILED`；`TIMED_OUT` 只属于 Attempt。
-- `finished` = `SUCCEEDED + FAILED`；`successRate = succeeded / finished`，四舍五入 4 位小数，`finished = 0` 时为 `null`（不要返回 0 或 NaN）。
+- Run 状态包含 `READY / RUNNING / RETRY_WAIT / CANCEL_REQUESTED / SUCCEEDED / FAILED / CANCELLED`。
+- `finished = SUCCEEDED + FAILED + CANCELLED`。`successRate` 的分母由成功和失败组成，四舍五入至 4 位小数，分母为零时返回 `null`。延迟统计使用成功和失败的 Run。
 - Run 耗时 = `run_execution.finished_at - started_at`，包含首次进入 RUNNING 后的等待、派发与重试间隔。
 - `p95` 用 nearest-rank。为控制查询量，只取窗口内按 `created_at, id` 升序的前 10,000 个已完成 Run 作为样本；`sampled` 返回实际样本数，`truncated` 表示样本已截断（此时 p95 为近似值，文档必须写明）。
 - 失败列表按 `(jobId, resultCode)` 聚合，`resultCode` 为空时记作 `UNKNOWN`，按 `runCount` 倒序，最多 5 条。
 - 统计由同一 Scheduler 数据库上的多次读取组成，**不是一致性快照**；`observedAt` 只表示观察时刻。
 
-我将四次读取划分为状态与完整窗口平均耗时、Attempt 总量与重试 Run 数、耗时样本、失败分组。attemptTotal 统计窗口内 Run 的所有 Attempt，retriedRunCount 为存在 attempt_number > 1 的不同 Run 数；不按 Attempt 自身时间过滤。stateCounts 始终补齐五个状态键。失败组同数量时按 jobId、resultCode 排序，lastFailedAt 取组内 Run 的最大 finished_at，null 和空字符串均归 UNKNOWN。
+我将四次读取划分为状态与完整窗口平均耗时、Attempt 总量与重试 Run 数、耗时样本、失败分组。attemptTotal 统计窗口内 Run 的所有 Attempt，retriedRunCount 为存在 attempt_number > 1 的不同 Run 数；不按 Attempt 自身时间过滤。stateCounts 始终补齐七个状态键。失败组同数量时按 jobId、resultCode 排序，lastFailedAt 取组内 Run 的最大 finished_at，null 和空字符串均归 UNKNOWN。
 
 失败组的 `jobIdText` 是 `jobId` 的十进制字符串。浏览器可用它原样填入全局运行查询，避免长整数在 JSON 解析时舍入。
 

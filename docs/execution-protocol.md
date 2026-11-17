@@ -42,7 +42,13 @@
 - 我在 HTTP 和 MQ 共用的派发领取中用 Job 行锁保护 Run 占位。串行 Run 等待其他占位释放，允许并行的 Run 也等待已占位的串行 Run。等待只推迟派发检查，不增加派发次数或启动租约。占位贯穿同一 Run 的自动重试，Run 终态提交时释放。Scheduler 撤销旧执行资格后仍有 Handler 继续执行的可能，业务写入通过幂等或下游业务 fencing 控制。
 - Scheduler V16 为已经派发的在途 Run 回填默认并行占位。迁移前停止旧 Scheduler，完成迁移后启动新版 Scheduler，再启用串行配置，避免旧节点绕过占位检查。
 - 我在 Worker 重启、结果丢失，以及已有执行者的租约失效、执行超时或中断时，随 Attempt 收尾保存待核对记录。开启 `pauseOnUnknownOutcome` 的 Run 在该条件下结束为失败，未开启时继续按原重试资格和次数上限处理。核对结论独立保存，Run 和 Attempt 保留原状态，重跑资格仍按现有规则判定。
-- Run 状态为 READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED；Attempt 为 READY、DISPATCHING、RUNNING、SUCCEEDED、FAILED、TIMED_OUT。终态不可被迟到结果覆盖。
+- Run 状态为 READY、RUNNING、RETRY_WAIT、CANCEL_REQUESTED、SUCCEEDED、FAILED、CANCELLED。Attempt 状态包括 READY、DISPATCHING、RUNNING、SUCCEEDED、FAILED、TIMED_OUT 和 CANCELLED。
+
+## 运行取消
+
+我在 Scheduler 的 Run 行锁下决定取消与结果的顺序。先提交的正常终态保留。先提交的取消撤销新派发和续租资格，并关闭未发布完的 Outbox。已经发布的消息仍可送达，Worker 调用 Handler 前须通过执行租约检查。当前 Attempt 尚无执行者时，Scheduler 当场结束取消。此前 Attempt 已做的业务操作仍以各自结果及核对为准。
+
+当前 Attempt 已有执行者时，Run 进入 `CANCEL_REQUESTED` 并继续保留串行占位。Scheduler 对原执行者的续租返回 `RUN_CANCEL_REQUESTED`。Worker 撤销本地执行资格，由 watchdog 中断执行线程，并在 Handler 退出后通过原结果通道持久上报。Scheduler 使用取消提交时间加 `leaseGrace` 和原硬截止的较早值作为确认期限。期限内的原 Worker、会话和租约版本报告可确认停止。到期扫描结束取消并登记停止未确认。两种情形均保存副作用待核对记录，并在终态事务释放占位。超过确认期限的报告仅保存结果证据。
 
 ## 超时与故障
 

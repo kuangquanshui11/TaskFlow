@@ -11,4 +11,5 @@ public final class RunRequests {
     public record ReviewOutcome(@NotNull UUID requestKey, @NotNull UUID runId, @NotNull UUID attemptId,
                                 @NotBlank @Pattern(regexp = "EFFECT_APPLIED|NO_EFFECT|STILL_UNKNOWN") String decision,
                                 @NotBlank @Size(max = 500) String evidence) { }
+    public record Cancel(@NotNull UUID requestKey, @NotNull UUID runId, @NotBlank @Size(max = 250) String reason) { }
 }

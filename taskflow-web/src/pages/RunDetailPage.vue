@@ -8,6 +8,7 @@ import RunAttemptTimeline from '../components/RunAttemptTimeline.vue';
 import RunDispatchFailures from '../components/RunDispatchFailures.vue';
 import RunOutcomeReviews from '../components/RunOutcomeReviews.vue';
 import RunRerunAction from '../components/RunRerunAction.vue';
+import RunCancelAction from '../components/RunCancelAction.vue';
 import RunStatusBadge from '../components/RunStatusBadge.vue';
 import { fullDate } from '../lib/format.js';
 import { isRunId, TRIGGER_TYPES } from '../lib/run-query.js';
@@ -23,6 +24,10 @@ const run = ref(null);
 const loading = ref(false);
 const error = ref(null);
 const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const cancellationOutcomes = {
+  REQUESTED: '等待 Worker 确认停止', BEFORE_START: '授予执行租约前已取消',
+  STOP_CONFIRMED: 'Worker 已报告执行结束', STOP_UNCONFIRMED: 'Worker 停止未确认',
+};
 let controller;
 
 async function load() {
@@ -70,6 +75,8 @@ onBeforeUnmount(() => controller?.abort());
       <div v-if="run" class="detail-actions">
         <button class="button secondary" @click="load"><AppIcon name="refresh" :size="16" />刷新详情</button>
         <RunRerunAction v-if="can('run:trigger') && run.rerunEligible === true" :key="run.id" :source-run-id="run.id" @accepted="openRun" />
+        <RunCancelAction v-if="can('run:cancel') && ['READY', 'RUNNING', 'RETRY_WAIT'].includes(run.state)"
+          :key="'cancel-' + run.id" :run-id="run.id" @updated="run = $event" />
       </div>
     </div>
 
@@ -106,6 +113,13 @@ onBeforeUnmount(() => controller?.abort());
           <div v-if="run.scheduledAt"><dt>计划触发时间</dt><dd>{{ fullDate(run.scheduledAt, timezone) }}</dd></div>
           <div><dt>结果码 / 错误码</dt><dd><code>{{ run.resultCode || '—' }}</code></dd></div>
           <div v-if="run.message" class="wide"><dt>结果说明</dt><dd class="result-message">{{ run.message }}</dd></div>
+          <template v-if="run.cancellation">
+            <div><dt>取消进度</dt><dd>{{ cancellationOutcomes[run.cancellation.outcome] }}</dd></div>
+            <div><dt>请求时间</dt><dd>{{ fullDate(run.cancellation.requestedAt, timezone) }}</dd></div>
+            <div><dt>取消操作者</dt><dd>{{ run.cancellation.actor }}</dd></div>
+            <div class="wide"><dt>取消原因</dt><dd class="result-message">{{ run.cancellation.reason }}</dd></div>
+            <div v-if="run.cancellation.workerResultAt"><dt>Worker 报告</dt><dd><code>{{ run.cancellation.workerResultCode }}</code> · {{ fullDate(run.cancellation.workerResultAt, timezone) }}</dd></div>
+          </template>
           <div v-if="can('run:trigger') && run.state === 'FAILED' && run.rerunEligible !== true" class="wide">
             <dt>人工重跑</dt><dd>仅可重跑已确认各次 Attempt 均未启动 Handler 的运行。请先核对下游业务结果。</dd>
           </div>

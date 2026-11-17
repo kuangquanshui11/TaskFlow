@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.*;
 import com.taskflow.scheduler.execution.dto.ExecutionProtocol.Create;
 import com.taskflow.scheduler.execution.dto.ExecutionProtocol.Rerun;
 import com.taskflow.scheduler.execution.dto.ExecutionProtocol.ReviewOutcome;
+import com.taskflow.scheduler.execution.dto.ExecutionProtocol.Cancel;
 import com.taskflow.scheduler.execution.model.OutcomeReview;
 import com.taskflow.scheduler.execution.model.RunRecords.*;
 import com.taskflow.scheduler.execution.dto.AttemptEvents;
@@ -32,6 +33,8 @@ public class RunController {
     public OutcomeReview.Review updateOutcomeReview(@Valid @RequestBody ReviewOutcome request) {
         return runs.updateOutcomeReview(request);
     }
+    @PostMapping("/updateCancellation")
+    public RunView updateCancellation(@Valid @RequestBody Cancel request) { return runs.updateCancellation(request); }
     @GetMapping("/selectAttemptEvents")
     public AttemptEvents.Timeline selectAttemptEvents(@RequestParam UUID runId, @RequestParam UUID attemptId) {
         return events.select(runId, attemptId);

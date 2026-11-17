@@ -14,6 +14,7 @@ import java.util.UUID;
 import com.taskflow.scheduler.execution.dto.AttemptEvents.SchedulerEvent;
 import com.taskflow.scheduler.execution.model.RunRecords.*;
 import com.taskflow.scheduler.execution.model.OutcomeReview;
+import com.taskflow.scheduler.execution.model.RunCancellation;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -94,6 +95,47 @@ public class RunDataMapper {
                 UUID.fromString(rs.getString("attempt_id")),
                 OutcomeReview.Decision.valueOf(rs.getString("decision")),
                 rs.getString("evidence"), rs.getString("actor"), instant(rs, "reviewed_at"));
+    }
+
+    public Optional<Attempt> lockCurrentAttempt(RunRow run) {
+        return jdbc.query("SELECT * FROM run_attempt WHERE run_id=? AND attempt_number=? FOR UPDATE",
+                this::readAttempt, run.id().toString(), run.currentAttempt()).stream().findFirst();
+    }
+
+    public void insertCancellation(RunCancellation cancellation) {
+        jdbc.update("""
+                INSERT INTO run_cancellation(run_id,attempt_id,request_key,reason,actor,requested_at,deadline_at,outcome)
+                VALUES (?,?,?,?,?,?,?,'REQUESTED')
+                """, cancellation.runId().toString(), cancellation.attemptId().toString(), cancellation.requestKey().toString(),
+                cancellation.reason(), cancellation.actor(), ts(cancellation.requestedAt()), ts(cancellation.deadlineAt()));
+    }
+
+    public Optional<RunCancellation> cancellation(UUID runId, boolean lock) {
+        return jdbc.query("SELECT * FROM run_cancellation WHERE run_id=?" + (lock ? " FOR UPDATE" : ""), (rs, row) ->
+                new RunCancellation(runId, UUID.fromString(rs.getString("attempt_id")), UUID.fromString(rs.getString("request_key")),
+                        rs.getString("reason"), rs.getString("actor"), instant(rs, "requested_at"), instant(rs, "deadline_at"),
+                        RunCancellation.Outcome.valueOf(rs.getString("outcome")), instant(rs, "finished_at"),
+                        rs.getString("worker_result_status"), rs.getString("worker_result_code"), instant(rs, "worker_result_at")),
+                runId.toString()).stream().findFirst();
+    }
+
+    public List<UUID> expiredCancellations(Instant now) {
+        return jdbc.query("""
+                SELECT attempt_id FROM run_cancellation WHERE outcome='REQUESTED' AND deadline_at<=?
+                ORDER BY deadline_at,run_id LIMIT 100
+                """, (rs, row) -> UUID.fromString(rs.getString(1)), ts(now));
+    }
+
+    public boolean finishCancellation(UUID runId, RunCancellation.Outcome outcome, Instant now) {
+        return jdbc.update("UPDATE run_cancellation SET outcome=?,finished_at=? WHERE run_id=? AND outcome='REQUESTED'",
+                outcome.name(), ts(now), runId.toString()) == 1;
+    }
+
+    public boolean recordCancellationResult(UUID runId, String state, String resultCode, Instant now) {
+        return jdbc.update("""
+                UPDATE run_cancellation SET worker_result_status=?,worker_result_code=?,worker_result_at=?
+                WHERE run_id=? AND worker_result_at IS NULL
+                """, state, resultCode, ts(now), runId.toString()) == 1;
     }
 
     public void releaseExecutionSlot(UUID runId) {
@@ -179,7 +221,11 @@ public class RunDataMapper {
                 (rs, index) -> UUID.fromString(rs.getString(1)), ts(now));
     }
     public List<UUID> expired(Instant now) {
-        return jdbc.query("SELECT id FROM run_attempt WHERE state IN ('READY','DISPATCHING','RUNNING') AND expires_at IS NOT NULL AND (expires_at<=? OR lease_until<=?) LIMIT 100",
+        return jdbc.query("""
+                SELECT a.id FROM run_attempt a JOIN run_execution r ON r.id=a.run_id
+                WHERE a.state IN ('READY','DISPATCHING','RUNNING') AND r.state<>'CANCEL_REQUESTED'
+                  AND a.expires_at IS NOT NULL AND (a.expires_at<=? OR a.lease_until<=?) LIMIT 100
+                """,
                 (rs, index) -> UUID.fromString(rs.getString(1)), ts(now), ts(now));
     }
     public List<UUID> mqDue(Instant now) {
@@ -225,9 +271,9 @@ public class RunDataMapper {
                 type, ts(now), sequence, state, code, ts(deadline));
     }
     public boolean runState(RunRow expected, String state, int attempt, String code, String message, Instant now) {
-        return jdbc.update("UPDATE run_execution SET state=?,current_attempt=?,result_code=?,message=?,updated_at=?,started_at=COALESCE(started_at,?),finished_at=COALESCE(finished_at,?) WHERE id=? AND current_attempt=? AND state=? AND state IN ('READY','RUNNING','RETRY_WAIT')",
+        return jdbc.update("UPDATE run_execution SET state=?,current_attempt=?,result_code=?,message=?,updated_at=?,started_at=COALESCE(started_at,?),finished_at=COALESCE(finished_at,?) WHERE id=? AND current_attempt=? AND state=? AND state IN ('READY','RUNNING','RETRY_WAIT','CANCEL_REQUESTED')",
                 state, attempt, code, message, ts(now), ts("RUNNING".equals(state) ? now : null),
-                ts(java.util.Set.of("SUCCEEDED", "FAILED").contains(state) ? now : null),
+                ts(java.util.Set.of("SUCCEEDED", "FAILED", "CANCELLED").contains(state) ? now : null),
                 expected.id().toString(), expected.currentAttempt(), expected.state()) == 1;
     }
     public List<StateCount> summaryStates(Instant from, Instant to) {

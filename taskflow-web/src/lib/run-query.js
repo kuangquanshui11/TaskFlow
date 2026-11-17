@@ -1,4 +1,4 @@
-export const RUN_STATES = { READY: '待派发', RUNNING: '运行中', RETRY_WAIT: '等待重试', SUCCEEDED: '成功', FAILED: '失败' };
+export const RUN_STATES = { READY: '待派发', RUNNING: '运行中', RETRY_WAIT: '等待重试', CANCEL_REQUESTED: '正在取消', SUCCEEDED: '成功', FAILED: '失败', CANCELLED: '已取消' };
 export const TRIGGER_TYPES = { MANUAL: '手动触发', CRON: '定时触发' };
 export const emptyRunFilters = () => ({ timeField: 'CREATED', range: '24h', from: '', to: '', jobId: '', state: '', triggerType: '', runId: '', resultCode: '' });
 export const isRunId = (value) => /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(value);

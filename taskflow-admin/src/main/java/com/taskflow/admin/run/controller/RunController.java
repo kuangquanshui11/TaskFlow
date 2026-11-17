@@ -8,6 +8,7 @@ import com.taskflow.admin.run.dto.RunRequests.Insert;
 import com.taskflow.admin.run.dto.RunRequests.Rerun;
 import com.taskflow.admin.run.dto.RunRequests.RerunConfiguration;
 import com.taskflow.admin.run.dto.RunRequests.ReviewOutcome;
+import com.taskflow.admin.run.dto.RunRequests.Cancel;
 import com.taskflow.admin.run.service.IRunService;
 import com.taskflow.admin.system.dto.ApiResponse;
 import tools.jackson.databind.JsonNode;
@@ -37,6 +38,10 @@ public class RunController {
     @PostMapping("/updateOutcomeReview")
     public ApiResponse<JsonNode> updateOutcomeReview(@Valid @RequestBody ReviewOutcome request) {
         return ApiResponse.success(runs.updateOutcomeReview(request));
+    }
+    @PostMapping("/updateCancellation")
+    public ApiResponse<JsonNode> updateCancellation(@Valid @RequestBody Cancel request) {
+        return ApiResponse.success(runs.updateCancellation(request));
     }
     @GetMapping("/selectAttemptEvents")
     public ApiResponse<JsonNode> selectAttemptEvents(@RequestParam UUID runId, @RequestParam UUID attemptId) {

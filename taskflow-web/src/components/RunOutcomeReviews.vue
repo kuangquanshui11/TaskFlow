@@ -79,7 +79,7 @@ async function submit() {
 
 <style scoped>
 .outcome-review { padding-block: 12px; overflow-wrap: anywhere; }
-.outcome-review + .outcome-review { border-top: 1px solid var(--border); }
+.outcome-review + .outcome-review { border-top: 1px solid var(--line); }
 .outcome-review-form { display: grid; gap: 12px; margin-top: 12px; }
 .outcome-review-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 </style>

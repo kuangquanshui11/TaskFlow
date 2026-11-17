@@ -29,6 +29,12 @@ public class ExecutionLeaseServiceImpl implements IExecutionLeaseService {
         var run = mapper.lock(initial.runId()).orElseThrow(this::stale);
         var attempt = mapper.lockAttempt(request.attemptId()).orElseThrow(this::stale);
         var now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        if (("CANCEL_REQUESTED".equals(run.state()) || "CANCELLED".equals(run.state()))
+                && request.runId().equals(run.id()) && run.currentAttempt() == attempt.attemptNumber()
+                && attempt.leaseVersion() == request.leaseVersion() && request.workerId().equals(attempt.ownerWorkerId())
+                && request.sessionId().equals(attempt.ownerSessionId())) {
+            throw new RunException(409, "RUN_CANCEL_REQUESTED", "运行执行资格已取消");
+        }
         if (!request.runId().equals(run.id()) || run.currentAttempt() != attempt.attemptNumber()
                 || !java.util.Set.of("READY", "RUNNING", "RETRY_WAIT").contains(run.state())
                 || attempt.leaseVersion() != request.leaseVersion()

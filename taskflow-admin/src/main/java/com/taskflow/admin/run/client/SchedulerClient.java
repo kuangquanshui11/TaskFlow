@@ -29,6 +29,7 @@ public class SchedulerClient {
         boolean disposition = path.equals("/internal/v1/runs/updateDispatchFailure");
         boolean failures = RemoteErrors.action(path).equals("selectDispatchFailures");
         boolean outcomeReview = path.equals("/internal/v1/runs/updateOutcomeReview");
+        boolean cancellation = path.equals("/internal/v1/runs/updateCancellation");
         String response;
         try {
             var headers=RemoteErrors.headers(properties.controlToken(),java.util.UUID.randomUUID().toString());
@@ -36,6 +37,7 @@ public class SchedulerClient {
             else if (rerun) response = remote.insertRerun(body, headers);
             else if (disposition) response = remote.updateDispatchFailure(body, headers);
             else if (outcomeReview) response = remote.updateOutcomeReview(body, headers);
+            else if (cancellation) response = remote.updateCancellation(body, headers);
             else response = remote.insert(body, headers);
         } catch (RuntimeException failure) {
             int status=RemoteErrors.status(failure);
@@ -43,6 +45,8 @@ public class SchedulerClient {
                 throw operationFailure(status, failure, "DISPATCH_FAILURE_REQUEST_REJECTED", "派发故障请求无法处理");
             if (outcomeReview && (status == 400 || status == 404 || status == 409))
                 throw operationFailure(status, failure, "OUTCOME_REVIEW_REJECTED", "副作用核对请求无法处理");
+            if (cancellation && (status == 400 || status == 404 || status == 409))
+                throw operationFailure(status, failure, "CANCELLATION_REJECTED", "运行取消请求无法处理");
             if (status == 404 && path.startsWith("/internal/v1/runs/selectAttemptEvents?"))
                 throw new RunException(404, "ATTEMPT_NOT_FOUND", "该运行中未找到此 Attempt");
             if (status==404) throw new RunException(404,"RUN_NOT_FOUND","运行记录尚未找到");
@@ -100,6 +104,9 @@ public class SchedulerClient {
                         case "DISPATCH_FAILURE_NOT_FOUND", "ATTEMPT_NOT_FOUND" -> "未找到对应的故障或 Attempt";
                         case "OUTCOME_ALREADY_CONFIRMED" -> "该 Attempt 的副作用已核对，请刷新";
                         case "OUTCOME_CASE_NOT_FOUND" -> "未找到对应的副作用核对记录";
+                        case "RUN_NOT_CANCELLABLE" -> "运行已进入终态，请刷新";
+                        case "CANCELLATION_CONFLICT" -> "取消请求标识或 Run 已绑定其他取消操作，请刷新";
+                        case "RUN_NOT_FOUND" -> "运行不存在";
                         default -> fallbackMessage;
                     };
                     if (code.matches("[A-Z_]{1,64}")) return new RunException(status, code, message);
