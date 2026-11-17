@@ -77,6 +77,7 @@ public class MybatisJobDataMapper implements JobDataMapper {
                 .set(JobEntity::getRetryPolicy, configuration.retryPolicy())
                 .set(JobEntity::getRetryMaxIntervalSeconds, configuration.retryMaxIntervalSeconds())
                 .set(JobEntity::getOverlapPolicy, configuration.overlapPolicy())
+                .set(JobEntity::getPauseOnUnknownOutcome, configuration.pauseOnUnknownOutcome())
                 .set(JobEntity::getMisfirePolicy, configuration.misfirePolicy().name());
         return mapper.update(null, update) == 1;
     }

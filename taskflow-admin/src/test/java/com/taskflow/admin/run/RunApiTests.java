@@ -129,6 +129,25 @@ class RunApiTests {
         com.taskflow.admin.support.TestSessionConfiguration.register(otherAdmin);
         assertThat(post(action, body, otherAdmin).statusCode()).isEqualTo(409);
     }
+    @Test void outcomeReviewRequiresAdminAndRecordsTheAuthenticatedActor() throws Exception {
+        var viewer = com.taskflow.admin.support.TestTokens.token(Map.of("resource_access",
+                Map.of("taskflow-api", Map.of("roles", java.util.List.of("VIEWER")))));
+        com.taskflow.admin.support.TestSessionConfiguration.register(viewer);
+        var key = UUID.randomUUID();
+        var body = Map.of("runId", UUID.randomUUID(), "attemptId", UUID.randomUUID(), "requestKey", key,
+                "decision", "NO_EFFECT", "evidence", "业务流水未入账", "actor", "forged");
+        assertThat(post("/updateOutcomeReview", body, viewer).statusCode()).isEqualTo(403);
+        verifyNoInteractions(scheduler);
+        when(scheduler.post(eq("/internal/v1/runs/updateOutcomeReview"), any())).thenAnswer(call -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            Map<?, ?> sent = call.getArgument(1);
+            assertThat(sent.get("actor")).isEqualTo("test-admin");
+            assertThat(sent.get("requestKey")).isEqualTo(key);
+            return json.createObjectNode().put("requestKey", key.toString()).put("decision", "NO_EFFECT");
+        });
+        assertThat(post("/updateOutcomeReview", body, com.taskflow.admin.support.TestTokens.admin()).statusCode()).isEqualTo(200);
+    }
+
     @Test void attemptTimelineRequiresRunReadAndProxiesOutsideTheLocalTransaction() throws Exception {
         var runId = UUID.randomUUID();
         var attemptId = UUID.randomUUID();

@@ -31,7 +31,7 @@ public final class JobRequests {
             MisfirePolicy misfirePolicy,
             RetryPolicy retryPolicy,
             @Min(1) @Max(86400) Integer retryMaxIntervalSeconds,
-            OverlapPolicy overlapPolicy) {
+            OverlapPolicy overlapPolicy, Boolean pauseOnUnknownOutcome) {
 
         public Write {
             name = name == null ? null : name.strip();
@@ -53,7 +53,8 @@ public final class JobRequests {
             return new Configuration(name, description, handlerKey,
                     payload == null || payload.isNull() ? null : payload.toString(),
                     scheduleType, cronExpression, timeZone, enabled, timeoutSeconds,
-                    maxAttempts, retryIntervalSeconds, misfirePolicy, retryPolicy, retryMaxIntervalSeconds, overlapPolicy);
+                    maxAttempts, retryIntervalSeconds, misfirePolicy, retryPolicy, retryMaxIntervalSeconds, overlapPolicy,
+                    pauseOnUnknownOutcome);
         }
     }
 

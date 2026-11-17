@@ -18,6 +18,7 @@ import com.taskflow.scheduler.execution.exception.RunException;
 import com.taskflow.scheduler.execution.mapper.RunDataMapper;
 import com.taskflow.scheduler.execution.model.RunRecords.*;
 import com.taskflow.scheduler.execution.model.RetryDelay;
+import com.taskflow.scheduler.execution.model.OutcomeReview;
 import java.util.concurrent.ThreadLocalRandom;
 import com.taskflow.scheduler.execution.service.IRunService;
 import com.taskflow.scheduler.dispatch.config.DispatchProperties;
@@ -46,7 +47,7 @@ public class RunServiceImpl implements IRunService {
     private final RunProperties properties;
     private final JsonMapper json;
     private final TransactionTemplate transactions;
-    private final TransactionTemplate dispatchTransactions;
+    private final TransactionTemplate readCommittedTransactions;
     private final DispatchProperties dispatch;
     private final DispatchOutboxMapper outbox;
     private final com.taskflow.scheduler.node.service.IWorkerNodeService nodes;
@@ -55,8 +56,8 @@ public class RunServiceImpl implements IRunService {
                           DispatchProperties dispatch, DispatchOutboxMapper outbox,com.taskflow.scheduler.node.service.IWorkerNodeService nodes, AsyncTracing tracing) {
         this.mapper = mapper; this.worker = worker; this.properties = properties; this.json = json;
         this.transactions = new TransactionTemplate(transactionManager);
-        this.dispatchTransactions = new TransactionTemplate(transactionManager);
-        this.dispatchTransactions.setIsolationLevel(Isolation.READ_COMMITTED.value());
+        this.readCommittedTransactions = new TransactionTemplate(transactionManager);
+        this.readCommittedTransactions.setIsolationLevel(Isolation.READ_COMMITTED.value());
         this.dispatch = dispatch; this.outbox = outbox;
         this.nodes=nodes;
         this.tracing = tracing;
@@ -252,7 +253,7 @@ public class RunServiceImpl implements IRunService {
         }
         if (dispatch.rabbitmq()) { prepareMqDispatches(); return; }
         for (var id : mapper.due(Instant.now())) {
-            var prepared = dispatchTransactions.execute(status -> claim(id));
+            var prepared = readCommittedTransactions.execute(status -> claim(id));
             if (prepared == null) continue;
             var command = prepared.command();
             try (var trace = tracing.start("dispatch.http", prepared.traceContext(), Map.of(
@@ -290,7 +291,7 @@ public class RunServiceImpl implements IRunService {
 
     private void prepareMqDispatches() {
         for (var id : mapper.mqDue(Instant.now())) {
-            dispatchTransactions.executeWithoutResult(status -> {
+            readCommittedTransactions.executeWithoutResult(status -> {
                 var pair = locked(id);
                 var attempt = pair.attempt();
                 if (attempt.terminal() || terminal(pair.run()) || pair.run().currentAttempt() != attempt.attemptNumber()) return;
@@ -375,7 +376,10 @@ public class RunServiceImpl implements IRunService {
         mapper.appendAttemptEvent(run.id(), attempt.id(), attempt.targetWorkerId(), attempt.leaseVersion(),
                 "ATTEMPT_FINISHED", now, null, state, code, null);
         var snapshot = json.readValue(run.snapshotJson(), Snapshot.class);
-        if (!state.equals("SUCCEEDED") && retryable && attempt.attemptNumber() < snapshot.maxAttempts()) {
+        boolean unknown = !state.equals("SUCCEEDED") && OutcomeReview.unknown(code, attempt.ownerWorkerId() != null);
+        if (unknown) mapper.recordUnknownOutcome(attempt, code, now);
+        if (!state.equals("SUCCEEDED") && retryable && !(unknown && Boolean.TRUE.equals(snapshot.pauseOnUnknownOutcome()))
+                && attempt.attemptNumber() < snapshot.maxAttempts()) {
             int next = attempt.attemptNumber() + 1;
             var delay = RetryDelay.calculate(snapshot.retryPolicy(),
                     snapshot.retryIntervalSeconds(), snapshot.retryMaxIntervalSeconds(), attempt.attemptNumber(),
@@ -400,6 +404,42 @@ public class RunServiceImpl implements IRunService {
         if (dispatch.rabbitmq()) outbox.insert(attempt.id(), when, run.traceContext());
     }
     private record Pair(RunRow run, Attempt attempt) { }
+
+    @Override
+    public OutcomeReview.Review updateOutcomeReview(ReviewOutcome request) {
+        var proposed = new OutcomeReview.Review(request.requestKey(), request.runId(), request.attemptId(),
+                request.decision(), request.evidence().strip(), request.actor(), Instant.now());
+        try {
+            return readCommittedTransactions.execute(status -> {
+                var pair = locked(request.attemptId());
+                if (!pair.run().id().equals(request.runId())) throw outcomeCaseNotFound();
+                var prior = mapper.outcomeReview(request.requestKey());
+                if (prior.isPresent()) return requireSameReview(prior.get(), proposed);
+                var reviewCase = mapper.outcomeCases(request.runId()).stream()
+                        .filter(candidate -> candidate.attemptId().equals(request.attemptId())).findFirst()
+                        .orElseThrow(this::outcomeCaseNotFound);
+                if (reviewCase.confirmed())
+                    throw new RunException(409, "OUTCOME_ALREADY_CONFIRMED", "该 Attempt 的副作用已核对");
+                mapper.insertOutcomeReview(proposed);
+                return mapper.outcomeReview(request.requestKey()).orElseThrow();
+            });
+        } catch (DuplicateKeyException duplicate) {
+            var prior = mapper.outcomeReview(request.requestKey()).orElseThrow(() -> duplicate);
+            return requireSameReview(prior, proposed);
+        }
+    }
+
+    private OutcomeReview.Review requireSameReview(OutcomeReview.Review stored, OutcomeReview.Review proposed) {
+        if (!stored.runId().equals(proposed.runId()) || !stored.attemptId().equals(proposed.attemptId())
+                || stored.decision() != proposed.decision() || !stored.actor().equals(proposed.actor())
+                || !stored.evidence().equals(proposed.evidence()))
+            throw new RunException(409, "IDEMPOTENCY_CONFLICT", "请求标识已绑定其他核对内容");
+        return stored;
+    }
+
+    private RunException outcomeCaseNotFound() {
+        return new RunException(404, "OUTCOME_CASE_NOT_FOUND", "该运行未找到对应的副作用核对记录");
+    }
     private Pair locked(UUID id) {
         var initial = mapper.attempt(id).orElseThrow(() -> new RunException(404, "ATTEMPT_NOT_FOUND", "执行尝试不存在"));
         var run = mapper.lock(initial.runId()).orElseThrow(() -> new RunException(404, "RUN_NOT_FOUND", "运行不存在"));
@@ -413,7 +453,8 @@ public class RunServiceImpl implements IRunService {
                 row.message(), row.createdAt(), row.updatedAt(), row.triggerType(), row.scheduledAt(),
                 row.sourceRunId(), row.rerunActor(), canRerun(row, attempts), row.traceContext().traceId(),
                 new RunTiming(elapsedMillis(row.createdAt(), row.finishedAt()), elapsedMillis(row.scheduledAt(), row.createdAt()),
-                        elapsedMillis(row.createdAt(), attempts.isEmpty() ? null : attempts.getFirst().startedAt())), row.triggerActor());
+                        elapsedMillis(row.createdAt(), attempts.isEmpty() ? null : attempts.getFirst().startedAt())), row.triggerActor(),
+                mapper.outcomeCases(row.id()));
     }
 
     static Long elapsedMillis(Instant from, Instant to) {

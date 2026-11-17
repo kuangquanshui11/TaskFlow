@@ -32,6 +32,7 @@ public class JobEntity {
     private RetryPolicy retryPolicy;
     private Integer retryMaxIntervalSeconds;
     private OverlapPolicy overlapPolicy;
+    private Boolean pauseOnUnknownOutcome;
     private String misfirePolicy;
     private Long configVersion;
     private LocalDateTime createdAt;
@@ -55,6 +56,7 @@ public class JobEntity {
         entity.retryPolicy = configuration.retryPolicy();
         entity.retryMaxIntervalSeconds = configuration.retryMaxIntervalSeconds();
         entity.overlapPolicy = configuration.overlapPolicy();
+        entity.pauseOnUnknownOutcome = configuration.pauseOnUnknownOutcome();
         entity.misfirePolicy = configuration.misfirePolicy().name();
         return entity;
     }
@@ -63,7 +65,7 @@ public class JobEntity {
         var configuration = new Configuration(name, description, handlerKey, payloadJson,
                 ScheduleType.valueOf(scheduleType), cronExpression, timeZone, enabled,
                 timeoutSeconds, maxAttempts, retryIntervalSeconds, MisfirePolicy.valueOf(misfirePolicy),
-                retryPolicy, retryMaxIntervalSeconds, overlapPolicy);
+                retryPolicy, retryMaxIntervalSeconds, overlapPolicy, pauseOnUnknownOutcome);
         // DATETIME 不包含时区；数据库连接继续采用 UTC，与原仓储的时间语义一致。
         return new JobDefinition(id, configuration, configVersion,
                 createdAt.toInstant(ZoneOffset.UTC), updatedAt.toInstant(ZoneOffset.UTC));
@@ -99,6 +101,8 @@ public class JobEntity {
     public void setRetryMaxIntervalSeconds(Integer retryMaxIntervalSeconds) { this.retryMaxIntervalSeconds = retryMaxIntervalSeconds; }
     public OverlapPolicy getOverlapPolicy() { return overlapPolicy; }
     public void setOverlapPolicy(OverlapPolicy overlapPolicy) { this.overlapPolicy = overlapPolicy; }
+    public Boolean getPauseOnUnknownOutcome() { return pauseOnUnknownOutcome; }
+    public void setPauseOnUnknownOutcome(Boolean pauseOnUnknownOutcome) { this.pauseOnUnknownOutcome = pauseOnUnknownOutcome; }
     public String getMisfirePolicy() { return misfirePolicy; }
     public void setMisfirePolicy(String misfirePolicy) { this.misfirePolicy = misfirePolicy; }
     public Long getConfigVersion() { return configVersion; }

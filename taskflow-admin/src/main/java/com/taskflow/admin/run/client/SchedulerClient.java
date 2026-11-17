@@ -28,17 +28,21 @@ public class SchedulerClient {
         boolean rerun = path.equals("/internal/v1/runs/insertRerun");
         boolean disposition = path.equals("/internal/v1/runs/updateDispatchFailure");
         boolean failures = RemoteErrors.action(path).equals("selectDispatchFailures");
+        boolean outcomeReview = path.equals("/internal/v1/runs/updateOutcomeReview");
         String response;
         try {
             var headers=RemoteErrors.headers(properties.controlToken(),java.util.UUID.randomUUID().toString());
             if (body == null) response = remote.get(RemoteErrors.action(path), params, headers);
             else if (rerun) response = remote.insertRerun(body, headers);
             else if (disposition) response = remote.updateDispatchFailure(body, headers);
+            else if (outcomeReview) response = remote.updateOutcomeReview(body, headers);
             else response = remote.insert(body, headers);
         } catch (RuntimeException failure) {
             int status=RemoteErrors.status(failure);
             if ((disposition || failures) && (status == 400 || status == 404 || status == 409))
-                throw dispatchFailure(status, failure);
+                throw operationFailure(status, failure, "DISPATCH_FAILURE_REQUEST_REJECTED", "派发故障请求无法处理");
+            if (outcomeReview && (status == 400 || status == 404 || status == 409))
+                throw operationFailure(status, failure, "OUTCOME_REVIEW_REJECTED", "副作用核对请求无法处理");
             if (status == 404 && path.startsWith("/internal/v1/runs/selectAttemptEvents?"))
                 throw new RunException(404, "ATTEMPT_NOT_FOUND", "该运行中未找到此 Attempt");
             if (status==404) throw new RunException(404,"RUN_NOT_FOUND","运行记录尚未找到");
@@ -49,6 +53,11 @@ public class SchedulerClient {
         }
         try {
             var data = json.readTree(response);
+            if (outcomeReview) {
+                if (data == null || !data.isObject() || !data.path("requestKey").isString() || !data.path("decision").isString())
+                    throw new RunException(503, "SCHEDULER_PROTOCOL_ERROR", "副作用核对返回格式不合法");
+                return data;
+            }
             if (disposition || failures) {
                 if (data == null || !data.isObject() || (disposition
                         ? !data.path("requestKey").isString() || !data.path("action").isString()
@@ -78,7 +87,7 @@ public class SchedulerClient {
         }
     }
 
-    private RunException dispatchFailure(int status, RuntimeException error) {
+    private RunException operationFailure(int status, RuntimeException error, String fallbackCode, String fallbackMessage) {
         for (Throwable cause = error; cause != null; cause = cause.getCause()) {
             if (cause instanceof feign.FeignException feignError) {
                 try {
@@ -89,14 +98,16 @@ public class SchedulerClient {
                         case "DISPOSITION_EXISTS" -> "该处置动作已记录，请刷新";
                         case "IDEMPOTENCY_CONFLICT" -> "处置请求键已绑定其他内容";
                         case "DISPATCH_FAILURE_NOT_FOUND", "ATTEMPT_NOT_FOUND" -> "未找到对应的故障或 Attempt";
-                        default -> "派发故障请求无法处理";
+                        case "OUTCOME_ALREADY_CONFIRMED" -> "该 Attempt 的副作用已核对，请刷新";
+                        case "OUTCOME_CASE_NOT_FOUND" -> "未找到对应的副作用核对记录";
+                        default -> fallbackMessage;
                     };
                     if (code.matches("[A-Z_]{1,64}")) return new RunException(status, code, message);
                 } catch (tools.jackson.core.JacksonException invalid) { break; }
                 break;
             }
         }
-        return new RunException(status, "DISPATCH_FAILURE_REQUEST_REJECTED", "派发故障请求无法处理");
+        return new RunException(status, fallbackCode, fallbackMessage);
     }
 
     private static void validateAttemptEvents(JsonNode data, java.util.Map<String, String> query) {

@@ -11,5 +11,6 @@ export const runsApi = {
   selectAttemptEvents: (runId, attemptId, signal) => request('/api/v1/runs/selectAttemptEvents?' + new URLSearchParams({ runId, attemptId }), { signal }),
   selectDispatchFailures: (query, signal) => request('/api/v1/runs/selectDispatchFailures?' + new URLSearchParams(query), { signal }),
   updateDispatchFailure: (body) => request('/api/v1/runs/updateDispatchFailure', { method: 'POST', body }),
+  updateOutcomeReview: (body) => request('/api/v1/runs/updateOutcomeReview', { method: 'POST', body }),
   selectByRequestKey: (requestKey, signal) => request('/api/v1/runs/selectByRequestKey?' + new URLSearchParams({ requestKey }), { signal }),
 };

@@ -14,6 +14,8 @@ import com.taskflow.scheduler.execution.exception.RunException;
 import com.taskflow.scheduler.execution.mapper.RunDataMapper;
 import com.taskflow.scheduler.execution.model.RunRecords.Attempt;
 import com.taskflow.scheduler.execution.model.RunRecords.RunView;
+import com.taskflow.scheduler.execution.model.OutcomeReview.Decision;
+import com.taskflow.scheduler.execution.service.IExecutionLeaseService;
 import com.taskflow.scheduler.execution.service.IRunService;
 import com.taskflow.scheduler.execution.service.impl.RunServiceImpl;
 import com.taskflow.scheduler.node.service.IWorkerNodeService;
@@ -39,6 +41,7 @@ import static org.mockito.ArgumentMatchers.*;
 class RunStateConcurrencyTests {
     @org.springframework.beans.factory.annotation.Autowired com.taskflow.scheduler.observability.config.AsyncTracing tracing;
     @Autowired IRunService runs;
+    @Autowired IExecutionLeaseService leases;
     @Autowired JdbcTemplate jdbc;
     @Autowired JsonMapper json;
     @Autowired PlatformTransactionManager manager;
@@ -350,6 +353,43 @@ class RunStateConcurrencyTests {
         assertThat(runs.selectById(anotherLegacy.id()).attempts().getFirst().expiresAt()).isNull();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void recordsUnknownOutcomeAndHonorsTheRunSnapshot(boolean pause) {
+        var snapshot = new Snapshot(7, 1, "outcome review", "demoSuccess", json.readTree("{}"),
+                30, 3, 5, "MANUAL", null, "UTC", "SKIP", false, null, null, null, null, pause);
+        var run = runs.insert(new Create(UUID.randomUUID(), snapshot));
+        runs.dispatchPending();
+        var attempt = runs.selectById(run.id()).attempts().getFirst();
+        var ownerSession = UUID.randomUUID();
+        leases.updateLease(new LeaseRequest(attempt.id(), run.id(), attempt.leaseVersion(), attempt.targetWorkerId(), ownerSession));
+        runs.updateResult(new Result(attempt.id(), run.id(), attempt.leaseVersion(), "FAILED", "LEASE_LOST",
+                "outcome unavailable", true, attempt.targetWorkerId(), ownerSession));
+        var waiting = runs.selectById(run.id());
+        assertThat(waiting.state()).isEqualTo(pause ? "FAILED" : "RETRY_WAIT");
+        assertThat(waiting.attempts()).hasSize(pause ? 1 : 2);
+        assertThat(waiting.outcomeCases()).singleElement().satisfies(reviewCase -> {
+            assertThat(reviewCase.attemptId()).isEqualTo(attempt.id());
+            assertThat(reviewCase.reason()).isEqualTo("LEASE_LOST");
+            assertThat(reviewCase.review()).isNull();
+        });
+        var pending = new ReviewOutcome(UUID.randomUUID(), run.id(), attempt.id(), Decision.STILL_UNKNOWN, "未查到业务流水", "operator-a");
+        var initial = runs.updateOutcomeReview(pending);
+        assertThat(runs.updateOutcomeReview(pending)).isEqualTo(initial);
+        assertThatThrownBy(() -> runs.updateOutcomeReview(new ReviewOutcome(pending.requestKey(), run.id(), attempt.id(),
+                Decision.NO_EFFECT, pending.evidence(), pending.actor()))).isInstanceOf(RunException.class).hasMessageContaining("请求标识已绑定");
+        var confirmed = runs.updateOutcomeReview(new ReviewOutcome(UUID.randomUUID(), run.id(), attempt.id(),
+                Decision.EFFECT_APPLIED, "业务流水 #41", "operator-b"));
+        assertThat(runs.updateOutcomeReview(pending)).isEqualTo(initial);
+        assertThatThrownBy(() -> runs.updateOutcomeReview(new ReviewOutcome(UUID.randomUUID(), run.id(), attempt.id(),
+                Decision.NO_EFFECT, "另一个结论", "operator-a"))).isInstanceOf(RunException.class).hasMessageContaining("已核对");
+        var reviewed = runs.selectById(run.id());
+        assertThat(reviewed.outcomeCases().getFirst().review()).isEqualTo(confirmed);
+        assertThat(reviewed.state()).isEqualTo(waiting.state());
+        assertThat(reviewed.attempts()).isEqualTo(waiting.attempts());
+        assertThat(reviewed.rerunEligible()).isFalse();
+    }
+
     private Result resultFor(RunView run, Attempt attempt, String state, boolean retryable) {
         return new Result(attempt.id(), run.id(), attempt.leaseVersion(), state, state, "completed",
                 retryable, attempt.targetWorkerId(), UUID.randomUUID());
@@ -357,7 +397,7 @@ class RunStateConcurrencyTests {
 
     private Create serialRequest(long jobId) {
         return new Create(UUID.randomUUID(), new Snapshot(jobId, 2, "serial", "demoSuccess", json.readTree("{}"),
-                30, 3, 5, "MANUAL", null, "UTC", "SKIP", false, null, null, null, "SERIAL"));
+                30, 3, 5, "MANUAL", null, "UTC", "SKIP", false, null, null, null, "SERIAL", null));
     }
 
     private IRunService service(String transport) {

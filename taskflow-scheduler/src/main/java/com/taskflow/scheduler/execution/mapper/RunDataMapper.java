@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.UUID;
 import com.taskflow.scheduler.execution.dto.AttemptEvents.SchedulerEvent;
 import com.taskflow.scheduler.execution.model.RunRecords.*;
+import com.taskflow.scheduler.execution.model.OutcomeReview;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -52,6 +53,47 @@ public class RunDataMapper {
                 ON DUPLICATE KEY UPDATE run_id=run_id
                 """, run.id().toString(), run.jobId(), serial);
         return true;
+    }
+
+    public void recordUnknownOutcome(Attempt attempt, String code, Instant now) {
+        jdbc.update("""
+                INSERT INTO run_outcome_case(attempt_id,run_id,reason,detected_at) VALUES (?,?,?,?)
+                ON DUPLICATE KEY UPDATE attempt_id=attempt_id
+                """, attempt.id().toString(), attempt.runId().toString(), code, ts(now));
+    }
+
+    public List<OutcomeReview.Case> outcomeCases(UUID runId) {
+        return jdbc.query("""
+                SELECT c.attempt_id,c.run_id,c.reason,c.detected_at,r.request_key,r.decision,r.evidence,r.actor,r.reviewed_at
+                FROM run_outcome_case c LEFT JOIN run_outcome_review r
+                  ON r.review_id=(SELECT MAX(history.review_id) FROM run_outcome_review history WHERE history.attempt_id=c.attempt_id)
+                WHERE c.run_id=? ORDER BY c.detected_at,c.attempt_id
+                """, (rs, row) -> new OutcomeReview.Case(
+                UUID.fromString(rs.getString("attempt_id")), rs.getString("reason"), instant(rs, "detected_at"),
+                rs.getString("request_key") == null ? null : readOutcomeReview(rs, row)), runId.toString());
+    }
+
+    public Optional<OutcomeReview.Review> outcomeReview(UUID requestKey) {
+        return jdbc.query("""
+                SELECT c.run_id,r.attempt_id,r.request_key,r.decision,r.evidence,r.actor,r.reviewed_at
+                FROM run_outcome_review r JOIN run_outcome_case c ON c.attempt_id=r.attempt_id
+                WHERE r.request_key=?
+                """, this::readOutcomeReview, requestKey.toString()).stream().findFirst();
+    }
+
+    public void insertOutcomeReview(OutcomeReview.Review review) {
+        jdbc.update("""
+                INSERT INTO run_outcome_review(request_key,attempt_id,decision,evidence,actor,reviewed_at) VALUES (?,?,?,?,?,?)
+                """, review.requestKey().toString(), review.attemptId().toString(), review.decision().name(),
+                review.evidence(), review.actor(), ts(review.reviewedAt()));
+    }
+
+    private OutcomeReview.Review readOutcomeReview(ResultSet rs, int row) throws SQLException {
+        return new OutcomeReview.Review(
+                UUID.fromString(rs.getString("request_key")), UUID.fromString(rs.getString("run_id")),
+                UUID.fromString(rs.getString("attempt_id")),
+                OutcomeReview.Decision.valueOf(rs.getString("decision")),
+                rs.getString("evidence"), rs.getString("actor"), instant(rs, "reviewed_at"));
     }
 
     public void releaseExecutionSlot(UUID runId) {

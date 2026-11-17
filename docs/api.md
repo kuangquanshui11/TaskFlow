@@ -141,6 +141,7 @@ name 和 handlerKey 必填。其他配置默认如下：
 | retryPolicy | 可选，`FIXED`（默认）或 `EXPONENTIAL`（指数退避与抖动） |
 | retryMaxIntervalSeconds | 仅在 `EXPONENTIAL` 时必填，范围为基础间隔至 86400 秒 |
 | overlapPolicy | 可选，`ALLOW_OVERLAP`（默认）或 `SERIAL`（同一 Job 的运行串行排队） |
+| pauseOnUnknownOutcome | 可选布尔值，默认 false。启用后，发现副作用未知时结束当前 Run 并留待核对 |
 | misfirePolicy | SKIP；可选 SKIP、FIRE_ONCE |
 
 创建结果 data 为完整任务配置，另含 id、configVersion、createdAt、updatedAt。日期用 UTC ISO-8601 格式，尾部为 Z。JSON 参数以对象返回，不返回数据库内的 JSON 字符串。
@@ -333,6 +334,10 @@ POST `/api/v1/runs/insertRerun` 接收 `sourceRunId`、`configVersion` 和 UUID 
 `GET /api/v1/runs/selectDispatchFailures` 接收可选 UUID `runId`、`attemptId`、`eventId`。仅传 Run 时返回最新 Attempt，指定 Attempt 时可同时用 Run 校验归属。v1 派发事件 ID 等于 Attempt ID。按事件 ID 可查到无法关联的死信。无筛选时返回最近死信，每次最多 25 条并标注 `truncated`。有 Attempt 时额外返回派发 Outbox 耗尽和目标 Worker 的结果上报诊断。响应包含权威 Attempt 状态、租约版本与截止时间、Worker 查询状态以及每条记录的处置历史。Worker 暂不可读时为 `UNAVAILABLE`。
 
 `POST /api/v1/runs/updateDispatchFailure` 需要 `dispatch:resolve`，由 ADMIN 角色获得。请求传 `requestKey`（UUID）、`source`（`DEAD_LETTER`、`OUTBOX`、`RESULT_REPORT`）、查询返回的 `id`、`action`（`ACKNOWLEDGE` 或 `RESOLVE`）、`conclusion` 和 `evidence`（均为非空且最多 250 字）。Admin 从认证身份取得操作者。已关联的 Attempt 必须进入终态才可结案，结案前须先确认收到。相同请求键及内容返回原处置结果，动作已记录或条件冲突返回 409。处置只写审计记录，Run、Attempt 和 Broker 消息继续由原流程管理。内部同名路径使用 Scheduler 控制密钥。
+
+### 副作用核对
+
+运行详情的 `outcomeCases` 按 Attempt 返回触发原因、发现时间和最新结论。提交 `POST /api/v1/runs/updateOutcomeReview` 需 ADMIN 的 `run:review` 权限，传 `requestKey`、`runId`、`attemptId`、`decision` 和最多 500 字的非空 `evidence`。结论支持 `EFFECT_APPLIED`（已生效）、`NO_EFFECT`（未生效）、`STILL_UNKNOWN`（仍未知）。Admin 从认证取得操作者。相同请求键和内容返回原回执，内容冲突或已确认后再次提交返回 409。内部同名路径使用 Scheduler 控制密钥。
 
 ## 运行统计语义
 

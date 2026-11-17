@@ -75,7 +75,7 @@ public class PlanTriggerServiceImpl implements IPlanTriggerService {
                     config.payloadJson() == null ? null : json.readTree(config.payloadJson()), config.timeoutSeconds(),
                     config.maxAttempts(), config.retryIntervalSeconds(), config.scheduleType(), config.cronExpression(),
                     config.timeZone(), config.misfirePolicy(), config.enabled(), config.description(),
-                    config.retryPolicy(), config.retryMaxIntervalSeconds(), config.overlapPolicy());
+                    config.retryPolicy(), config.retryMaxIntervalSeconds(), config.overlapPolicy(), config.pauseOnUnknownOutcome());
         } catch (IllegalArgumentException | tools.jackson.core.JacksonException invalid) {
             plans.advance(plan, new Calculation(null, now, CalculationState.INVALID));
             logFailure(jobId, invalid);

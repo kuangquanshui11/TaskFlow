@@ -6,6 +6,7 @@ import { can } from '../auth/access.js';
 import AppIcon from '../components/AppIcon.vue';
 import RunAttemptTimeline from '../components/RunAttemptTimeline.vue';
 import RunDispatchFailures from '../components/RunDispatchFailures.vue';
+import RunOutcomeReviews from '../components/RunOutcomeReviews.vue';
 import RunRerunAction from '../components/RunRerunAction.vue';
 import RunStatusBadge from '../components/RunStatusBadge.vue';
 import { fullDate } from '../lib/format.js';
@@ -134,6 +135,7 @@ onBeforeUnmount(() => controller?.abort());
       </section>
 
       <RunDispatchFailures :key="run.id" :run="run" :timezone="timezone" />
+      <RunOutcomeReviews v-if="run.outcomeCases?.length" :key="'outcomes-' + run.id" :run="run" :timezone="timezone" @reviewed="load" />
 
       <section class="panel" aria-labelledby="run-snapshot-title">
         <div class="panel-heading">

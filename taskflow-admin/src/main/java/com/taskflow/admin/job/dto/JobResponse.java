@@ -14,7 +14,8 @@ public record JobResponse(long id, String name, String description, String handl
                           ScheduleType scheduleType, String cronExpression, String timeZone,
                           boolean enabled, int timeoutSeconds, int maxAttempts, int retryIntervalSeconds,
                           MisfirePolicy misfirePolicy, long configVersion, Instant createdAt, Instant updatedAt,
-                          RetryPolicy retryPolicy, Integer retryMaxIntervalSeconds, OverlapPolicy overlapPolicy) {
+                          RetryPolicy retryPolicy, Integer retryMaxIntervalSeconds, OverlapPolicy overlapPolicy,
+                          boolean pauseOnUnknownOutcome) {
 
     public static JobResponse from(JobDefinition job, JsonMapper json) {
         var configuration = job.configuration();
@@ -27,6 +28,7 @@ public record JobResponse(long id, String name, String description, String handl
                 job.createdAt(), job.updatedAt(),
                 configuration.retryPolicy() == null ? RetryPolicy.FIXED : configuration.retryPolicy(),
                 configuration.retryMaxIntervalSeconds(),
-                configuration.overlapPolicy() == null ? OverlapPolicy.ALLOW_OVERLAP : configuration.overlapPolicy());
+                configuration.overlapPolicy() == null ? OverlapPolicy.ALLOW_OVERLAP : configuration.overlapPolicy(),
+                Boolean.TRUE.equals(configuration.pauseOnUnknownOutcome()));
     }
 }

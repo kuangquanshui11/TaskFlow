@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.*;
 import com.taskflow.admin.run.dto.RunRequests.Insert;
 import com.taskflow.admin.run.dto.RunRequests.Rerun;
 import com.taskflow.admin.run.dto.RunRequests.RerunConfiguration;
+import com.taskflow.admin.run.dto.RunRequests.ReviewOutcome;
 import com.taskflow.admin.run.service.IRunService;
 import com.taskflow.admin.system.dto.ApiResponse;
 import tools.jackson.databind.JsonNode;
@@ -33,6 +34,10 @@ public class RunController {
     }
     @GetMapping("/selectById")
     public ApiResponse<JsonNode> selectById(@RequestParam UUID id) { return ApiResponse.success(runs.selectById(id)); }
+    @PostMapping("/updateOutcomeReview")
+    public ApiResponse<JsonNode> updateOutcomeReview(@Valid @RequestBody ReviewOutcome request) {
+        return ApiResponse.success(runs.updateOutcomeReview(request));
+    }
     @GetMapping("/selectAttemptEvents")
     public ApiResponse<JsonNode> selectAttemptEvents(@RequestParam UUID runId, @RequestParam UUID attemptId) {
         return ApiResponse.success(runs.selectAttemptEvents(runId, attemptId));

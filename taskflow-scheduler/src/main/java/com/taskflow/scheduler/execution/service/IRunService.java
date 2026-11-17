@@ -2,6 +2,7 @@ package com.taskflow.scheduler.execution.service;
 
 import java.util.UUID;
 import com.taskflow.scheduler.execution.dto.ExecutionProtocol.*;
+import com.taskflow.scheduler.execution.model.OutcomeReview;
 import com.taskflow.scheduler.execution.model.RunRecords.*;
 
 public interface IRunService {
@@ -14,5 +15,6 @@ public interface IRunService {
     Page selectGlobal(com.taskflow.scheduler.execution.dto.RunQuery query);
     Overview selectSummary(java.time.Instant from, java.time.Instant to);
     void updateResult(Result result);
+    OutcomeReview.Review updateOutcomeReview(ReviewOutcome request);
     void dispatchPending();
 }

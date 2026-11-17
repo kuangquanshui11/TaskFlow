@@ -228,7 +228,7 @@ class RunExecutionTests {
             return null;
         }).when(worker).dispatch(any());
         var snapshot = new Snapshot(7, 2, "exponential", "demoSuccess", null, 30, 4, 5, "MANUAL",
-                null, "Asia/Shanghai", "SKIP", true, null, "EXPONENTIAL", 12, null);
+                null, "Asia/Shanghai", "SKIP", true, null, "EXPONENTIAL", 12, null, null);
         var run = runs.insert(new Create(UUID.randomUUID(), snapshot));
         long[] ceilings = {5, 10, 12};
         for (int index = 0; index < ceilings.length; index++) {

@@ -20,17 +20,19 @@ public record PlanSyncRequest(@NotNull UUID eventId, @Positive long jobId, @Posi
             @NotNull @Pattern(regexp = "SKIP|FIRE_ONCE") String misfirePolicy,
             @JsonInclude(JsonInclude.Include.NON_NULL) @Pattern(regexp = "FIXED|EXPONENTIAL") String retryPolicy,
             @JsonInclude(JsonInclude.Include.NON_NULL) Integer retryMaxIntervalSeconds,
-            @JsonInclude(JsonInclude.Include.NON_NULL) @Pattern(regexp = "ALLOW_OVERLAP|SERIAL") String overlapPolicy) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) @Pattern(regexp = "ALLOW_OVERLAP|SERIAL") String overlapPolicy,
+            @JsonInclude(JsonInclude.Include.NON_NULL) Boolean pauseOnUnknownOutcome) {
         public Configuration {
             if ("FIXED".equals(retryPolicy)) retryPolicy = null;
             if ("ALLOW_OVERLAP".equals(overlapPolicy)) overlapPolicy = null;
+            if (Boolean.FALSE.equals(pauseOnUnknownOutcome)) pauseOnUnknownOutcome = null;
         }
 
         public Configuration(String name, String description, String handlerKey, String payloadJson,
                              String scheduleType, String cronExpression, String timeZone, boolean enabled,
                              int timeoutSeconds, int maxAttempts, int retryIntervalSeconds, String misfirePolicy) {
             this(name, description, handlerKey, payloadJson, scheduleType, cronExpression, timeZone, enabled,
-                    timeoutSeconds, maxAttempts, retryIntervalSeconds, misfirePolicy, null, null, null);
+                    timeoutSeconds, maxAttempts, retryIntervalSeconds, misfirePolicy, null, null, null, null);
         }
 
         @AssertTrue(message = "重试间隔上限与策略不匹配")

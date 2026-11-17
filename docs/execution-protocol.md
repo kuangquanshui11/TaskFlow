@@ -41,6 +41,7 @@
 - 指数退避对第 n 次失败计算 `min(retryMaxIntervalSeconds, retryIntervalSeconds × 2^(n−1))`，在该值的 80% 至 100% 之间按毫秒取样。新 Attempt 的 `next_dispatch_at` 与派发 Outbox 同事务提交。历史快照继续按固定间隔重试。启用新策略前先升级 Worker、Scheduler，再升级 Admin 和控制台。
 - 我在 HTTP 和 MQ 共用的派发领取中用 Job 行锁保护 Run 占位。串行 Run 等待其他占位释放，允许并行的 Run 也等待已占位的串行 Run。等待只推迟派发检查，不增加派发次数或启动租约。占位贯穿同一 Run 的自动重试，Run 终态提交时释放。Scheduler 撤销旧执行资格后仍有 Handler 继续执行的可能，业务写入通过幂等或下游业务 fencing 控制。
 - Scheduler V16 为已经派发的在途 Run 回填默认并行占位。迁移前停止旧 Scheduler，完成迁移后启动新版 Scheduler，再启用串行配置，避免旧节点绕过占位检查。
+- 我在 Worker 重启、结果丢失，以及已有执行者的租约失效、执行超时或中断时，随 Attempt 收尾保存待核对记录。开启 `pauseOnUnknownOutcome` 的 Run 在该条件下结束为失败，未开启时继续按原重试资格和次数上限处理。核对结论独立保存，Run 和 Attempt 保留原状态，重跑资格仍按现有规则判定。
 - Run 状态为 READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED；Attempt 为 READY、DISPATCHING、RUNNING、SUCCEEDED、FAILED、TIMED_OUT。终态不可被迟到结果覆盖。
 
 ## 超时与故障

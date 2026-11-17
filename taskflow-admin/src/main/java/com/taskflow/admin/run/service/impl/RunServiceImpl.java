@@ -13,6 +13,7 @@ import com.taskflow.admin.run.client.SchedulerClient;
 import com.taskflow.admin.run.dto.RunRequests.Insert;
 import com.taskflow.admin.run.dto.RunRequests.Rerun;
 import com.taskflow.admin.run.dto.RunRequests.RerunConfiguration;
+import com.taskflow.admin.run.dto.RunRequests.ReviewOutcome;
 import com.taskflow.admin.run.exception.RunException;
 import com.taskflow.admin.run.service.IRunService;
 import org.springframework.stereotype.Service;
@@ -108,6 +109,14 @@ public class RunServiceImpl implements IRunService {
         return new RunException(409, "IDEMPOTENCY_CONFLICT", "该请求标识已用于其他运行、操作者或配置版本");
     }
 
+    @Override
+    public JsonNode updateOutcomeReview(ReviewOutcome request) {
+        var actor = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication().getName();
+        return scheduler.post("/internal/v1/runs/updateOutcomeReview", Map.of("requestKey", request.requestKey(),
+                "runId", request.runId(), "attemptId", request.attemptId(), "decision", request.decision(),
+                "evidence", request.evidence(), "actor", actor));
+    }
+
     private ObjectNode snapshot(JobDefinition job, long configVersion) {
         // 权威配置由数据库读取。本地只读事务在调用 Scheduler 前已结束。
         if (job.configVersion() != configVersion)
@@ -127,6 +136,7 @@ public class RunServiceImpl implements IRunService {
             snapshot.put("retryMaxIntervalSeconds", configuration.retryMaxIntervalSeconds());
         }
         if (configuration.overlapPolicy() != null) snapshot.put("overlapPolicy", configuration.overlapPolicy().name());
+        if (Boolean.TRUE.equals(configuration.pauseOnUnknownOutcome())) snapshot.put("pauseOnUnknownOutcome", true);
         return snapshot;
     }
     @Override

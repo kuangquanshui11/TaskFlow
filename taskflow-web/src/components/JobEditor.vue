@@ -247,6 +247,10 @@ async function preview() {
               </select>
               <p id="job-overlapHint" class="field-hint">串行时，前一运行及其自动重试完成后才派发下一运行。</p>
             </div>
+            <div class="field">
+              <label><input type="checkbox" v-model="form.pauseOnUnknownOutcome" aria-describedby="job-outcomeHint">副作用未知时停止自动重试</label>
+              <p id="job-outcomeHint" class="field-hint">有外部写入的任务可开启。运行失败后在运行详情核对业务结果。</p>
+            </div>
             <div class="field"><label for="job-misfirePolicy">错过计划时</label><select id="job-misfirePolicy" v-model="form.misfirePolicy"><option value="SKIP">跳过本次</option><option value="FIRE_ONCE">补发一次</option></select></div>
           </div>
         </details>

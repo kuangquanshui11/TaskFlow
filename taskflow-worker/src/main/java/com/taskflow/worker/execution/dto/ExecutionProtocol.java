@@ -18,17 +18,19 @@ public final class ExecutionProtocol {
             boolean enabled, @Size(max = 500) String description,
             @JsonInclude(JsonInclude.Include.NON_NULL) @Pattern(regexp = "FIXED|EXPONENTIAL") String retryPolicy,
             @JsonInclude(JsonInclude.Include.NON_NULL) Integer retryMaxIntervalSeconds,
-            @JsonInclude(JsonInclude.Include.NON_NULL) @Pattern(regexp = "ALLOW_OVERLAP|SERIAL") String overlapPolicy) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) @Pattern(regexp = "ALLOW_OVERLAP|SERIAL") String overlapPolicy,
+            @JsonInclude(JsonInclude.Include.NON_NULL) Boolean pauseOnUnknownOutcome) {
         public Snapshot {
             if ("FIXED".equals(retryPolicy)) retryPolicy = null;
             if ("ALLOW_OVERLAP".equals(overlapPolicy)) overlapPolicy = null;
+            if (Boolean.FALSE.equals(pauseOnUnknownOutcome)) pauseOnUnknownOutcome = null;
         }
 
         public Snapshot(long jobId, long configVersion, String name, String handlerKey, JsonNode payload,
                         int timeoutSeconds, int maxAttempts, int retryIntervalSeconds, String scheduleType,
                         String cronExpression, String timeZone, String misfirePolicy, boolean enabled, String description) {
             this(jobId, configVersion, name, handlerKey, payload, timeoutSeconds, maxAttempts, retryIntervalSeconds,
-                    scheduleType, cronExpression, timeZone, misfirePolicy, enabled, description, null, null, null);
+                    scheduleType, cronExpression, timeZone, misfirePolicy, enabled, description, null, null, null, null);
         }
     }
     public record Create(@NotNull UUID requestKey, @NotNull @Valid Snapshot snapshot) { }

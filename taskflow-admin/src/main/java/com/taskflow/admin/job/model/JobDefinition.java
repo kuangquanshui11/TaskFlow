@@ -17,11 +17,13 @@ public record JobDefinition(long id, Configuration configuration, long configVer
                                 int retryIntervalSeconds, MisfirePolicy misfirePolicy,
                                 @JsonInclude(JsonInclude.Include.NON_NULL) RetryPolicy retryPolicy,
                                 @JsonInclude(JsonInclude.Include.NON_NULL) Integer retryMaxIntervalSeconds,
-                                @JsonInclude(JsonInclude.Include.NON_NULL) OverlapPolicy overlapPolicy) {
+                                @JsonInclude(JsonInclude.Include.NON_NULL) OverlapPolicy overlapPolicy,
+                                @JsonInclude(JsonInclude.Include.NON_NULL) Boolean pauseOnUnknownOutcome) {
         public Configuration {
             // 固定间隔保留既有快照的 JSON 形状，历史配置事件可用原指纹重放。
             if (retryPolicy == RetryPolicy.FIXED) retryPolicy = null;
             if (overlapPolicy == OverlapPolicy.ALLOW_OVERLAP) overlapPolicy = null;
+            if (Boolean.FALSE.equals(pauseOnUnknownOutcome)) pauseOnUnknownOutcome = null;
         }
 
         public Configuration(String name, String description, String handlerKey, String payloadJson,
@@ -29,7 +31,7 @@ public record JobDefinition(long id, Configuration configuration, long configVer
                              boolean enabled, int timeoutSeconds, int maxAttempts,
                              int retryIntervalSeconds, MisfirePolicy misfirePolicy) {
             this(name, description, handlerKey, payloadJson, scheduleType, cronExpression, timeZone,
-                    enabled, timeoutSeconds, maxAttempts, retryIntervalSeconds, misfirePolicy, null, null, null);
+                    enabled, timeoutSeconds, maxAttempts, retryIntervalSeconds, misfirePolicy, null, null, null, null);
         }
     }
 }

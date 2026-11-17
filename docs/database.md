@@ -47,6 +47,7 @@ DESCRIBE job_definition;
 | retry_interval_seconds | 重试基础间隔，默认 5 秒 |
 | retry_policy / retry_max_interval_seconds | 指数退避策略及秒数上限；历史行的 NULL 使用固定间隔 |
 | overlap_policy | `SERIAL` 使同一 Job 的运行串行排队；NULL 表示允许并行 |
+| pause_on_unknown_outcome | 为 true 时遇到副作用未知即结束该 Run；历史行的 NULL 保留原重试语义 |
 | misfire_policy | 错过计划时 SKIP 跳过，或 FIRE_ONCE 补发一次 |
 | config_version | 单个任务版本，默认 1；每次修改及启停都由应用显式递增 |
 | created_at | 创建时间，UTC，毫秒精度 |

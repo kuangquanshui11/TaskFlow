@@ -5,6 +5,7 @@ export function emptyJob() {
     timeoutSeconds: 30, maxAttempts: 3, retryIntervalSeconds: 5, misfirePolicy: 'SKIP', payloadText: '{}',
     retryPolicy: 'FIXED', retryMaxIntervalSeconds: null,
     overlapPolicy: 'ALLOW_OVERLAP',
+    pauseOnUnknownOutcome: false,
   };
 }
 
@@ -56,5 +57,6 @@ export function toJobPayload(form, payload) {
     retryPolicy: form.retryPolicy,
     retryMaxIntervalSeconds: form.retryPolicy === 'EXPONENTIAL' ? Number(form.retryMaxIntervalSeconds) : null,
     overlapPolicy: form.overlapPolicy,
+    pauseOnUnknownOutcome: form.pauseOnUnknownOutcome,
   };
 }

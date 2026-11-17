@@ -15,6 +15,7 @@ CREATE TABLE job_definition (
     retry_policy VARCHAR(16),
     retry_max_interval_seconds INT,
     overlap_policy VARCHAR(16),
+    pause_on_unknown_outcome BOOLEAN,
     misfire_policy VARCHAR(16) DEFAULT 'SKIP' NOT NULL,
     config_version BIGINT DEFAULT 1 NOT NULL,
     created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) NOT NULL,
