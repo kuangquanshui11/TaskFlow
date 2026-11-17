@@ -38,6 +38,26 @@ public class RunDataMapper {
                 row.id().toString(), row.runId().toString(), row.attemptNumber(), row.leaseVersion(),
                 row.state(), row.dispatchCount(), ts(row.nextDispatchAt()));
     }
+    public boolean reserveExecutionSlot(RunRow run, boolean serial) {
+        // 派发事务使用 READ COMMITTED。Job 行锁串行化占位，查询无需锁住其他 Job 的索引间隙。
+        jdbc.update("INSERT INTO job_execution_gate(job_id) VALUES (?) ON DUPLICATE KEY UPDATE job_id=job_id", run.jobId());
+        var conflicts = jdbc.query("""
+                SELECT run_id FROM job_execution_slot
+                WHERE job_id=? AND run_id<>? AND (serial_execution=TRUE OR ?=TRUE)
+                LIMIT 1
+                """, (rs, row) -> rs.getString(1), run.jobId(), run.id().toString(), serial);
+        if (!conflicts.isEmpty()) return false;
+        jdbc.update("""
+                INSERT INTO job_execution_slot(run_id,job_id,serial_execution) VALUES (?,?,?)
+                ON DUPLICATE KEY UPDATE run_id=run_id
+                """, run.id().toString(), run.jobId(), serial);
+        return true;
+    }
+
+    public void releaseExecutionSlot(UUID runId) {
+        jdbc.update("DELETE FROM job_execution_slot WHERE run_id=?", runId.toString());
+    }
+
     public Optional<RunRow> find(UUID id) {
         return jdbc.query("SELECT * FROM run_execution WHERE id=?", this::readRun, id.toString()).stream().findFirst();
     }

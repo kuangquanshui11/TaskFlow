@@ -19,16 +19,18 @@ public record PlanSyncRequest(@NotNull UUID eventId, @Positive long jobId, @Posi
             @Min(1) @Max(10) int maxAttempts, @Min(1) @Max(86400) int retryIntervalSeconds,
             @NotNull @Pattern(regexp = "SKIP|FIRE_ONCE") String misfirePolicy,
             @JsonInclude(JsonInclude.Include.NON_NULL) @Pattern(regexp = "FIXED|EXPONENTIAL") String retryPolicy,
-            @JsonInclude(JsonInclude.Include.NON_NULL) Integer retryMaxIntervalSeconds) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) Integer retryMaxIntervalSeconds,
+            @JsonInclude(JsonInclude.Include.NON_NULL) @Pattern(regexp = "ALLOW_OVERLAP|SERIAL") String overlapPolicy) {
         public Configuration {
             if ("FIXED".equals(retryPolicy)) retryPolicy = null;
+            if ("ALLOW_OVERLAP".equals(overlapPolicy)) overlapPolicy = null;
         }
 
         public Configuration(String name, String description, String handlerKey, String payloadJson,
                              String scheduleType, String cronExpression, String timeZone, boolean enabled,
                              int timeoutSeconds, int maxAttempts, int retryIntervalSeconds, String misfirePolicy) {
             this(name, description, handlerKey, payloadJson, scheduleType, cronExpression, timeZone, enabled,
-                    timeoutSeconds, maxAttempts, retryIntervalSeconds, misfirePolicy, null, null);
+                    timeoutSeconds, maxAttempts, retryIntervalSeconds, misfirePolicy, null, null, null);
         }
 
         @AssertTrue(message = "重试间隔上限与策略不匹配")

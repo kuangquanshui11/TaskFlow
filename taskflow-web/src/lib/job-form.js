@@ -4,6 +4,7 @@ export function emptyJob() {
     cronExpression: '0 */5 * * * *', timeZone: 'Asia/Shanghai', enabled: false,
     timeoutSeconds: 30, maxAttempts: 3, retryIntervalSeconds: 5, misfirePolicy: 'SKIP', payloadText: '{}',
     retryPolicy: 'FIXED', retryMaxIntervalSeconds: null,
+    overlapPolicy: 'ALLOW_OVERLAP',
   };
 }
 
@@ -54,5 +55,6 @@ export function toJobPayload(form, payload) {
     retryIntervalSeconds: Number(form.retryIntervalSeconds), misfirePolicy: form.misfirePolicy,
     retryPolicy: form.retryPolicy,
     retryMaxIntervalSeconds: form.retryPolicy === 'EXPONENTIAL' ? Number(form.retryMaxIntervalSeconds) : null,
+    overlapPolicy: form.overlapPolicy,
   };
 }

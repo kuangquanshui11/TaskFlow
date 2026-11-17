@@ -126,6 +126,7 @@ public class RunServiceImpl implements IRunService {
             snapshot.put("retryPolicy", configuration.retryPolicy().name());
             snapshot.put("retryMaxIntervalSeconds", configuration.retryMaxIntervalSeconds());
         }
+        if (configuration.overlapPolicy() != null) snapshot.put("overlapPolicy", configuration.overlapPolicy().name());
         return snapshot;
     }
     @Override

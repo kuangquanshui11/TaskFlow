@@ -5,6 +5,7 @@ import java.time.Instant;
 import com.taskflow.admin.job.exception.JobException;
 import com.taskflow.admin.job.model.JobDefinition.Configuration;
 import com.taskflow.admin.job.model.JobDefinition.MisfirePolicy;
+import com.taskflow.admin.job.model.JobDefinition.OverlapPolicy;
 import com.taskflow.admin.job.model.JobDefinition.RetryPolicy;
 import com.taskflow.admin.job.model.JobDefinition.ScheduleType;
 import jakarta.validation.Valid;
@@ -29,7 +30,8 @@ public final class JobRequests {
             @Min(1) @Max(86400) Integer retryIntervalSeconds,
             MisfirePolicy misfirePolicy,
             RetryPolicy retryPolicy,
-            @Min(1) @Max(86400) Integer retryMaxIntervalSeconds) {
+            @Min(1) @Max(86400) Integer retryMaxIntervalSeconds,
+            OverlapPolicy overlapPolicy) {
 
         public Write {
             name = name == null ? null : name.strip();
@@ -51,7 +53,7 @@ public final class JobRequests {
             return new Configuration(name, description, handlerKey,
                     payload == null || payload.isNull() ? null : payload.toString(),
                     scheduleType, cronExpression, timeZone, enabled, timeoutSeconds,
-                    maxAttempts, retryIntervalSeconds, misfirePolicy, retryPolicy, retryMaxIntervalSeconds);
+                    maxAttempts, retryIntervalSeconds, misfirePolicy, retryPolicy, retryMaxIntervalSeconds, overlapPolicy);
         }
     }
 

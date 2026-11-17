@@ -294,6 +294,72 @@ class RunStateConcurrencyTests {
         assertThat(after.attempts().getFirst().state()).isEqualTo("RUNNING");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"http", "rabbitmq"})
+    void twoScannersAdmitOnlyOneSerialRunAndRetainItsSlotDuringRetry(String transport) throws Exception {
+        var service = service(transport);
+        var peer = transport.equals("rabbitmq") ? service(transport)
+                : new RunServiceImpl(mapper, worker, runProperties, json, manager, dispatchProperties, outbox, nodes, tracing);
+        var first = service.insert(serialRequest(7));
+        var second = peer.insert(serialRequest(7));
+        var otherJob = peer.insert(serialRequest(8));
+        var start = new CountDownLatch(1);
+        try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            var left = threads.submit(() -> { await(start); service.dispatchPending(); });
+            var right = threads.submit(() -> { await(start); peer.dispatchPending(); });
+            start.countDown();
+            left.get(12, TimeUnit.SECONDS);
+            right.get(12, TimeUnit.SECONDS);
+        }
+        var active = Stream.of(first, second).map(run -> service.selectById(run.id())).toList();
+        assertThat(active.stream().filter(run -> run.attempts().getFirst().expiresAt() != null)).hasSize(1);
+        var owner = active.stream().filter(run -> run.attempts().getFirst().expiresAt() != null).findFirst().orElseThrow();
+        var queued = active.stream().filter(run -> !run.id().equals(owner.id())).findFirst().orElseThrow();
+        assertThat(queued.attempts().getFirst().dispatchCount()).isZero();
+        assertThat(service.selectById(otherJob.id()).attempts().getFirst().expiresAt()).isNotNull();
+
+        var attempt = owner.attempts().getFirst();
+        service.updateResult(resultFor(owner, attempt, "FAILED", true));
+        jdbc.update("UPDATE run_attempt SET next_dispatch_at=CURRENT_TIMESTAMP(3) WHERE id=?",
+                queued.attempts().getFirst().id().toString());
+        peer.dispatchPending();
+        assertThat(service.selectById(queued.id()).attempts().getFirst().expiresAt()).isNull();
+        makeDue();
+        service.dispatchPending();
+        var retry = service.selectById(owner.id()).attempts().getLast();
+        assertThat(retry.expiresAt()).isNotNull();
+        service.updateResult(resultFor(owner, retry, "SUCCEEDED", false));
+        makeDue();
+        peer.dispatchPending();
+        assertThat(service.selectById(queued.id()).attempts().getFirst().expiresAt()).isNotNull();
+    }
+
+    @Test void overlappingLegacyRunAndNewSerialRunObserveTheSameAdmissionGate() {
+        var legacy = runs.insert(request());
+        runs.dispatchPending();
+        var serial = runs.insert(serialRequest(7));
+        runs.dispatchPending();
+        assertThat(runs.selectById(serial.id()).attempts().getFirst().expiresAt()).isNull();
+        var legacyAttempt = runs.selectById(legacy.id()).attempts().getFirst();
+        runs.updateResult(resultFor(legacy, legacyAttempt, "SUCCEEDED", false));
+        makeDue();
+        runs.dispatchPending();
+        assertThat(runs.selectById(serial.id()).attempts().getFirst().expiresAt()).isNotNull();
+        var anotherLegacy = runs.insert(request());
+        runs.dispatchPending();
+        assertThat(runs.selectById(anotherLegacy.id()).attempts().getFirst().expiresAt()).isNull();
+    }
+
+    private Result resultFor(RunView run, Attempt attempt, String state, boolean retryable) {
+        return new Result(attempt.id(), run.id(), attempt.leaseVersion(), state, state, "completed",
+                retryable, attempt.targetWorkerId(), UUID.randomUUID());
+    }
+
+    private Create serialRequest(long jobId) {
+        return new Create(UUID.randomUUID(), new Snapshot(jobId, 2, "serial", "demoSuccess", json.readTree("{}"),
+                30, 3, 5, "MANUAL", null, "UTC", "SKIP", false, null, null, null, "SERIAL"));
+    }
+
     private IRunService service(String transport) {
         if (transport.equals("http")) return runs;
         var p = dispatchProperties;

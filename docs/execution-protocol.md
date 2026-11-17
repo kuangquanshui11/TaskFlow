@@ -39,6 +39,8 @@
 - HTTP 接收确认和 MQ 发布确认共用状态转换保护：必须匹配当前 Attempt、消息租约版本和有效期；Attempt SQL 更新成功才推进 Run，Run SQL 同时检查原状态和当前 Attempt，终态不允许回退。终态写入、创建重试与 Outbox 变更也检查影响行数，任一转换失败则回滚整个本地事务。本地确认失败不归类为 Worker 拒绝；保留原 Attempt，由既有扫描及租约机制恢复。此修复不自动重写历史异常记录，验证见 [状态并发修复](run-state-concurrency-verification.md)。
 - 明确的 HANDLER_FAILED 可按快照 maxAttempts 和 retryIntervalSeconds 有限重试；不确定派发失败不立即创建业务重试；已报告的执行超时和 Worker 重启保持原非重试语义。Scheduler 观察到租约失效时，默认按快照上限新增 Attempt，并重新选择节点，可用 `TASKFLOW_RETRY_ON_LEASE_LOSS=false` 关闭。业务失败重试必须考虑副作用幂等。
 - 指数退避对第 n 次失败计算 `min(retryMaxIntervalSeconds, retryIntervalSeconds × 2^(n−1))`，在该值的 80% 至 100% 之间按毫秒取样。新 Attempt 的 `next_dispatch_at` 与派发 Outbox 同事务提交。历史快照继续按固定间隔重试。启用新策略前先升级 Worker、Scheduler，再升级 Admin 和控制台。
+- 我在 HTTP 和 MQ 共用的派发领取中用 Job 行锁保护 Run 占位。串行 Run 等待其他占位释放，允许并行的 Run 也等待已占位的串行 Run。等待只推迟派发检查，不增加派发次数或启动租约。占位贯穿同一 Run 的自动重试，Run 终态提交时释放。Scheduler 撤销旧执行资格后仍有 Handler 继续执行的可能，业务写入通过幂等或下游业务 fencing 控制。
+- Scheduler V16 为已经派发的在途 Run 回填默认并行占位。迁移前停止旧 Scheduler，完成迁移后启动新版 Scheduler，再启用串行配置，避免旧节点绕过占位检查。
 - Run 状态为 READY、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED；Attempt 为 READY、DISPATCHING、RUNNING、SUCCEEDED、FAILED、TIMED_OUT。终态不可被迟到结果覆盖。
 
 ## 超时与故障

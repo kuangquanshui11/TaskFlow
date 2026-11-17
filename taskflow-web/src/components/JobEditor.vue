@@ -226,7 +226,7 @@ async function preview() {
       <section class="form-section">
         <div class="section-label"><span class="step-number">03</span><h3>参数与策略</h3></div>
         <div class="field"><label for="job-payload">任务参数 <span class="optional">JSON</span></label><textarea id="job-payload" v-model="form.payloadText" class="code-input" rows="5" spellcheck="false" :aria-invalid="!!errors.payload"></textarea><p v-if="errors.payload" class="field-error">{{ errors.payload }}</p><p v-if="selectedTemplate" class="field-hint">{{ selectedTemplate.parameters }}</p><p class="field-hint">使用 JSON 对象传递业务参数，避免填入密码等敏感值。</p></div>
-        <details class="advanced-settings"><summary>失败与超时设置 <span>最多尝试 {{ form.maxAttempts }} 次</span></summary>
+        <details class="advanced-settings"><summary>执行、失败与超时设置 <span>最多尝试 {{ form.maxAttempts }} 次</span></summary>
           <div class="form-grid">
             <div class="field"><label for="job-timeoutSeconds">执行超时（秒）</label><input id="job-timeoutSeconds" v-model.number="form.timeoutSeconds" type="number" min="1" max="86400"><p v-if="errors.timeoutSeconds" class="field-error">{{ errors.timeoutSeconds }}</p></div>
             <div class="field"><label for="job-maxAttempts">最大尝试次数</label><input id="job-maxAttempts" v-model.number="form.maxAttempts" type="number" min="1" max="10"><p class="field-hint">包含首次执行。</p><p v-if="errors.maxAttempts" class="field-error">{{ errors.maxAttempts }}</p></div>
@@ -238,6 +238,14 @@ async function preview() {
                 :min="form.retryIntervalSeconds" max="86400" :aria-invalid="Boolean(errors.retryMaxIntervalSeconds)"
                 aria-describedby="job-retryMaxIntervalHint">
               <p id="job-retryMaxIntervalHint" :class="errors.retryMaxIntervalSeconds ? 'field-error' : 'field-hint'">{{ errors.retryMaxIntervalSeconds || '每次重试最多等待这个时长。' }}</p>
+            </div>
+            <div class="field">
+              <label for="job-overlapPolicy">同一任务的运行</label>
+              <select id="job-overlapPolicy" v-model="form.overlapPolicy" aria-describedby="job-overlapHint">
+                <option value="ALLOW_OVERLAP">允许并行</option>
+                <option value="SERIAL">串行排队</option>
+              </select>
+              <p id="job-overlapHint" class="field-hint">串行时，前一运行及其自动重试完成后才派发下一运行。</p>
             </div>
             <div class="field"><label for="job-misfirePolicy">错过计划时</label><select id="job-misfirePolicy" v-model="form.misfirePolicy"><option value="SKIP">跳过本次</option><option value="FIRE_ONCE">补发一次</option></select></div>
           </div>

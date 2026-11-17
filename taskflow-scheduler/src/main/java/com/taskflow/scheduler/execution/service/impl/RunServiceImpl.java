@@ -46,6 +46,7 @@ public class RunServiceImpl implements IRunService {
     private final RunProperties properties;
     private final JsonMapper json;
     private final TransactionTemplate transactions;
+    private final TransactionTemplate dispatchTransactions;
     private final DispatchProperties dispatch;
     private final DispatchOutboxMapper outbox;
     private final com.taskflow.scheduler.node.service.IWorkerNodeService nodes;
@@ -54,6 +55,8 @@ public class RunServiceImpl implements IRunService {
                           DispatchProperties dispatch, DispatchOutboxMapper outbox,com.taskflow.scheduler.node.service.IWorkerNodeService nodes, AsyncTracing tracing) {
         this.mapper = mapper; this.worker = worker; this.properties = properties; this.json = json;
         this.transactions = new TransactionTemplate(transactionManager);
+        this.dispatchTransactions = new TransactionTemplate(transactionManager);
+        this.dispatchTransactions.setIsolationLevel(Isolation.READ_COMMITTED.value());
         this.dispatch = dispatch; this.outbox = outbox;
         this.nodes=nodes;
         this.tracing = tracing;
@@ -249,7 +252,7 @@ public class RunServiceImpl implements IRunService {
         }
         if (dispatch.rabbitmq()) { prepareMqDispatches(); return; }
         for (var id : mapper.due(Instant.now())) {
-            var prepared = transactions.execute(status -> claim(id));
+            var prepared = dispatchTransactions.execute(status -> claim(id));
             if (prepared == null) continue;
             var command = prepared.command();
             try (var trace = tracing.start("dispatch.http", prepared.traceContext(), Map.of(
@@ -287,7 +290,7 @@ public class RunServiceImpl implements IRunService {
 
     private void prepareMqDispatches() {
         for (var id : mapper.mqDue(Instant.now())) {
-            transactions.executeWithoutResult(status -> {
+            dispatchTransactions.executeWithoutResult(status -> {
                 var pair = locked(id);
                 var attempt = pair.attempt();
                 if (attempt.terminal() || terminal(pair.run()) || pair.run().currentAttempt() != attempt.attemptNumber()) return;
@@ -336,6 +339,10 @@ public class RunServiceImpl implements IRunService {
             if (!mapper.deferDispatch(attempt, now.plus(dispatch.nodeRecheckDelay()), now)) throw stale();
             return null;
         }
+        if (!mapper.reserveExecutionSlot(run, "SERIAL".equals(snapshot.overlapPolicy()))) {
+            if (!mapper.deferDispatch(attempt, now.plus(dispatch.nodeRecheckDelay()), now)) throw stale();
+            return null;
+        }
         if (attempt.targetWorkerId() == null) mapper.bindTarget(id, target.workerId());
         var expires = attempt.expiresAt() == null
                 ? now.plusSeconds(snapshot.timeoutSeconds()).plus(properties.leaseGrace()).truncatedTo(java.time.temporal.ChronoUnit.MILLIS) : attempt.expiresAt();
@@ -378,6 +385,7 @@ public class RunServiceImpl implements IRunService {
         } else {
             var finalState = state.equals("SUCCEEDED") ? "SUCCEEDED" : "FAILED";
             if (!mapper.runState(run, finalState, attempt.attemptNumber(), code, message, now)) throw stale();
+            mapper.releaseExecutionSlot(run.id());
             mapper.appendAttemptEvent(run.id(), attempt.id(), attempt.targetWorkerId(), attempt.leaseVersion(),
                     "RUN_FINISHED", now, null, finalState, code, null);
         }

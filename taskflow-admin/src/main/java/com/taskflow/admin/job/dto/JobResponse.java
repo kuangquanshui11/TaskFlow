@@ -4,6 +4,7 @@ import java.time.Instant;
 
 import com.taskflow.admin.job.model.JobDefinition;
 import com.taskflow.admin.job.model.JobDefinition.MisfirePolicy;
+import com.taskflow.admin.job.model.JobDefinition.OverlapPolicy;
 import com.taskflow.admin.job.model.JobDefinition.RetryPolicy;
 import com.taskflow.admin.job.model.JobDefinition.ScheduleType;
 import tools.jackson.databind.JsonNode;
@@ -13,7 +14,7 @@ public record JobResponse(long id, String name, String description, String handl
                           ScheduleType scheduleType, String cronExpression, String timeZone,
                           boolean enabled, int timeoutSeconds, int maxAttempts, int retryIntervalSeconds,
                           MisfirePolicy misfirePolicy, long configVersion, Instant createdAt, Instant updatedAt,
-                          RetryPolicy retryPolicy, Integer retryMaxIntervalSeconds) {
+                          RetryPolicy retryPolicy, Integer retryMaxIntervalSeconds, OverlapPolicy overlapPolicy) {
 
     public static JobResponse from(JobDefinition job, JsonMapper json) {
         var configuration = job.configuration();
@@ -25,6 +26,7 @@ public record JobResponse(long id, String name, String description, String handl
                 configuration.retryIntervalSeconds(), configuration.misfirePolicy(), job.configVersion(),
                 job.createdAt(), job.updatedAt(),
                 configuration.retryPolicy() == null ? RetryPolicy.FIXED : configuration.retryPolicy(),
-                configuration.retryMaxIntervalSeconds());
+                configuration.retryMaxIntervalSeconds(),
+                configuration.overlapPolicy() == null ? OverlapPolicy.ALLOW_OVERLAP : configuration.overlapPolicy());
     }
 }

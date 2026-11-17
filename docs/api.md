@@ -140,6 +140,7 @@ name 和 handlerKey 必填。其他配置默认如下：
 | retryIntervalSeconds | 5；范围 1–86400 |
 | retryPolicy | 可选，`FIXED`（默认）或 `EXPONENTIAL`（指数退避与抖动） |
 | retryMaxIntervalSeconds | 仅在 `EXPONENTIAL` 时必填，范围为基础间隔至 86400 秒 |
+| overlapPolicy | 可选，`ALLOW_OVERLAP`（默认）或 `SERIAL`（同一 Job 的运行串行排队） |
 | misfirePolicy | SKIP；可选 SKIP、FIRE_ONCE |
 
 创建结果 data 为完整任务配置，另含 id、configVersion、createdAt、updatedAt。日期用 UTC ISO-8601 格式，尾部为 Z。JSON 参数以对象返回，不返回数据库内的 JSON 字符串。

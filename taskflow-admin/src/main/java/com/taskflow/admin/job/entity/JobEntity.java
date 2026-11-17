@@ -10,6 +10,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import com.taskflow.admin.job.model.JobDefinition;
 import com.taskflow.admin.job.model.JobDefinition.Configuration;
 import com.taskflow.admin.job.model.JobDefinition.MisfirePolicy;
+import com.taskflow.admin.job.model.JobDefinition.OverlapPolicy;
 import com.taskflow.admin.job.model.JobDefinition.RetryPolicy;
 import com.taskflow.admin.job.model.JobDefinition.ScheduleType;
 
@@ -30,6 +31,7 @@ public class JobEntity {
     private Integer retryIntervalSeconds;
     private RetryPolicy retryPolicy;
     private Integer retryMaxIntervalSeconds;
+    private OverlapPolicy overlapPolicy;
     private String misfirePolicy;
     private Long configVersion;
     private LocalDateTime createdAt;
@@ -52,6 +54,7 @@ public class JobEntity {
         entity.retryIntervalSeconds = configuration.retryIntervalSeconds();
         entity.retryPolicy = configuration.retryPolicy();
         entity.retryMaxIntervalSeconds = configuration.retryMaxIntervalSeconds();
+        entity.overlapPolicy = configuration.overlapPolicy();
         entity.misfirePolicy = configuration.misfirePolicy().name();
         return entity;
     }
@@ -60,7 +63,7 @@ public class JobEntity {
         var configuration = new Configuration(name, description, handlerKey, payloadJson,
                 ScheduleType.valueOf(scheduleType), cronExpression, timeZone, enabled,
                 timeoutSeconds, maxAttempts, retryIntervalSeconds, MisfirePolicy.valueOf(misfirePolicy),
-                retryPolicy, retryMaxIntervalSeconds);
+                retryPolicy, retryMaxIntervalSeconds, overlapPolicy);
         // DATETIME 不包含时区；数据库连接继续采用 UTC，与原仓储的时间语义一致。
         return new JobDefinition(id, configuration, configVersion,
                 createdAt.toInstant(ZoneOffset.UTC), updatedAt.toInstant(ZoneOffset.UTC));
@@ -94,6 +97,8 @@ public class JobEntity {
     public void setRetryPolicy(RetryPolicy retryPolicy) { this.retryPolicy = retryPolicy; }
     public Integer getRetryMaxIntervalSeconds() { return retryMaxIntervalSeconds; }
     public void setRetryMaxIntervalSeconds(Integer retryMaxIntervalSeconds) { this.retryMaxIntervalSeconds = retryMaxIntervalSeconds; }
+    public OverlapPolicy getOverlapPolicy() { return overlapPolicy; }
+    public void setOverlapPolicy(OverlapPolicy overlapPolicy) { this.overlapPolicy = overlapPolicy; }
     public String getMisfirePolicy() { return misfirePolicy; }
     public void setMisfirePolicy(String misfirePolicy) { this.misfirePolicy = misfirePolicy; }
     public Long getConfigVersion() { return configVersion; }
