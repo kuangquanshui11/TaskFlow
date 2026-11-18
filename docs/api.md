@@ -15,7 +15,8 @@ VIEWER 可查询及 POST 预览；OPERATOR 另可启停、触发 Run、重试同
 | 任务配置新增、查询、修改、启停、删除 | Admin | 已实现，MyBatis-Plus 持久化 |
 | 任务数量统计 | Admin | 已实现，只统计任务配置，不混入运行次数 |
 | 任务详情 Redis 缓存 | Admin | 已实现，默认 TTL 60 秒、提交后失效、故障回退数据库 |
-| 配置对账与受控修复 | Admin 编排，Scheduler 提供当前副本 | 已实现，批量版本/墓碑检查、幂等限速补发及持久化记录；见 [协议](config-reconciliation.md) |
+| 配置对账与受控修复 | Admin 编排，Scheduler 提供当前副本 | 已实现，按 Job ID 的双向全量对账、版本/墓碑/指纹检查、幂等限速补发及持久化记录；见 [协议](config-reconciliation.md) |
+| 配置事件增量追赶（P03） | Admin 提供权威事件，Scheduler 维护消费断点 | 未实现，当前无全局事件游标及增量查询 API；见 [剩余设计与验收范围](config-reconciliation.md#配置事件增量追赶p03未实现) |
 | Cron 时间预览 | Admin | 已实现，只计算，不创建 Run |
 | 可选处理器查询 | Admin | 已实现，返回配置白名单，不代表 Worker 已在线注册 |
 | 手动触发、Run/Attempt 查询 | Scheduler；Admin 代理 | 已实现，独立状态库、幂等键、完整快照 |

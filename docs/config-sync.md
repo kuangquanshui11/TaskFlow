@@ -6,6 +6,8 @@ Admin 是 Job 配置的权威来源；Scheduler 独立保存计划副本。新�
 
 配置同步、Scheduler 下一计划时间及自动触发已完成。管理台分别显示同步确认、节点触发开关、计划时间和执行状态，接收配置不等同于任务成功。现有手动执行仍使用调用时的配置快照。计算规则见 [计划计算](plan-calculation.md)，到期事务和错过补偿见 [自动调度](automatic-scheduling.md)。
 
+我将当前同步范围限定为 Outbox 逐事件推送、按 Job ID 的双向全量对账、受控补发和维护恢复。全局配置事件游标的增量追赶（P03）尚未实现，已有事件 UUID、单 Job 版本和对账续扫进度均不构成全局消费断点。剩余设计与验收见 [P03](config-reconciliation.md#配置事件增量追赶p03未实现)。
+
 ## 写入与发送
 
 1. `JobServiceImpl` 在同一个 Admin 数据库事务内修改 `job_definition`，并通过 `IJobSyncService.enqueue` 写入 `job_sync_outbox`。任一写入失败，两者一起回滚。
@@ -90,7 +92,7 @@ Scheduler 在自己的本地事务中写入 `schedule_sync_inbox` 和 `schedule_
 
 人工重试只允许最新配置的 `FAILED` 事件，沿用事件 ID 与快照，重置重试周期的尝试次数。与 Job 写入使用同一行锁串行化；不会重新创建配置版本或生成 Run。若最新版本仍在发送，返回 409。
 
-最新同步状态直接查询 Admin 数据库，不放入 Redis 详情缓存，不依赖缓存失效才能看到确认。`SYNCED` 是历史接收确认，不能当作 Scheduler 实时健康状态或数据丢失后的重建证明。Outbox/Inbox 保留全部事件。Admin 支持自动双向对账、受控补发，以及完整权威配置下的副本与 Inbox 恢复，见 [配置对账](config-reconciliation.md)。
+最新同步状态直接查询 Admin 数据库，不放入 Redis 详情缓存，不依赖缓存失效才能看到确认。`SYNCED` 是历史接收确认，不能当作 Scheduler 实时健康状态或数据丢失后的重建证明。配置事件标识和 Inbox 去重记录继续保留；符合条件的旧版 Outbox 正文可按 [历史归档](history-archive.md) 搬迁，现行版本快照和删除墓碑保留在线。Admin 支持自动双向全量对账、受控补发，以及完整权威配置下的副本与 Inbox 恢复，见 [配置对账](config-reconciliation.md)。
 
 ## 管理 API 与控制台
 

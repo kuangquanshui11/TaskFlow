@@ -1,5 +1,7 @@
 # 配置对账与受控修复验证
 
+本记录覆盖按 Job ID 的手工/自动双向全量对账、受控补发和维护恢复。全局配置事件游标的增量追赶（P03）尚未实现，以下历史结果和文件名中的 `p03` 均不能作为其验收证据。剩余场景见 [P03 设计与验收范围](config-reconciliation.md#配置事件增量追赶p03未实现)。
+
 ## 2026-11-16 自动全量对账
 
 Java 21，Maven 3.10.0，Admin 与 Scheduler 独立 H2 库。执行根目录 Maven `verify`，Admin 的 V4 → V5 迁移测试 1 项、对账测试 11 项和 Scheduler 配置协议测试 17 项均通过。新用例覆盖双向分页上界、墓碑、实际快照指纹、缺失/落后/超前/同版本冲突/孤立，以及远端不可用和退避续扫。完整构建在示例 `taskflow-order-service` 的 `CleanupTests.exhaustedDeliveryHasDiagnosisAndConcurrentCompensationReplaysOneReceipt` 遇到 `NoSuchElementException`。本地证据为 `.tools/p03-automatic-verify.log`。

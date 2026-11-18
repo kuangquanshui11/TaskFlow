@@ -89,6 +89,8 @@ Admin Job ID 在 Scheduler 中是逻辑引用，不建立跨 schema 外键。Wor
 
 我用 Admin 事务 Outbox 推送版本化 HTTP 事件。保存只提交本地事务，后台线程取得持久化租约后在事务外调用 Scheduler。Scheduler 以 Inbox 和单 Job 版本检查处理重复、乱序与删除墓碑。Admin V4 持久化手工对账和补发记录，V5 持久化自动轮次和双向分页进度。自动扫描比较实际副本指纹并定位孤立副本，操作员确认后可补发缺失和落后。计划副本及 Inbox 同时丢失时，在维护窗口从 Admin 的当前快照和墓碑恢复。完整协议和恢复边界见 [配置同步](config-sync.md) 与 [配置对账](config-reconciliation.md)。
 
+我将当前自动对账限定为按 Job ID 的双向全量扫描。全局配置事件游标的增量追赶（P03）尚未实现；提交顺序与安全水位、消费断点、缺口及保留期外恢复仍属于 [剩余设计与验收范围](config-reconciliation.md#配置事件增量追赶p03未实现)。
+
 Scheduler 的 dispatch 模块维护自己的 Outbox、领取版本和有限发布重试，经 correlated confirm 与 mandatory return 判断是否交给 Broker。Worker 的 dispatch 模块校验 v1 事件，复用 execution 模块持久化去重，提交后手动 ACK，永久错误和耗尽接收重试的消息进入死信队列。三节点使用 quorum 队列，应用使用多节点连接地址。Admin 配置同步和 Worker 结果上报仍走 HTTP。Worker 有界续租及 Handler 执行上下文见 [执行租约](execution-leases.md)。新增 Attempt 可重新选择 Worker，同一 Attempt 跨 Inbox 接管仍待实现。
 
 节点管理使用独立 HTTP 契约及节点密钥。Scheduler V6 保存 worker_node 和不可复用的 worker_node_session，按接收时间计算有效期，较旧心跳不延长存活，新会话只能替代已过期会话。MQ 派发准备按能力/负载选择节点并绑定目标与路由，发布前仅检查原目标在线及能力/路由匹配；HTTP 保留固定目标。Worker 的独立心跳线程不会占用执行槽位，Admin 代理查询而不建节点副本或缓存。节点 generation 只约束注册和心跳，不代替执行 leaseVersion，不撤销已派发任务，详见 [节点协议](worker-nodes.md)。
