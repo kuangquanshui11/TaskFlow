@@ -1,9 +1,20 @@
 param([Parameter(Mandatory)][string]$ClusterSettingsPath, [switch]$AllowLegacyBroker,
-    [switch]$SkipBuild, [switch]$ConfirmNodeFailure)
+    [switch]$SkipBuild, [switch]$ConfirmNodeFailure, [switch]$OrderPaymentRace,
+    [ValidateSet('Baseline','WorkerLink','PublisherShort','PublisherExhausted','QuorumShort','QuorumExhausted','BrokerPartition')]
+    [string]$Scenario = 'Baseline', [switch]$DedicatedCluster)
 $ErrorActionPreference = 'Stop'
+if ($OrderPaymentRace -and ($ConfirmNodeFailure -or $Scenario -ne 'Baseline')) {
+    throw '-OrderPaymentRace is a standalone publisher connection fault scenario.'
+}
+if ($ConfirmNodeFailure -and $Scenario -ne 'Baseline') { throw '-ConfirmNodeFailure applies to Baseline only.' }
+if ($Scenario -in @('QuorumShort','QuorumExhausted','BrokerPartition') -and !$DedicatedCluster) {
+    throw 'Topology faults require an isolated disposable cluster. Confirm its scope with -DedicatedCluster.'
+}
 $repoPath = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoPath
 . (Join-Path $PSScriptRoot 'lib/mq-management.ps1')
+. (Join-Path $PSScriptRoot 'lib/order-mq-race.ps1')
+. (Join-Path $PSScriptRoot 'lib/dispatch-topology-faults.ps1')
 $cluster = Read-MqClusterSettings $ClusterSettingsPath
 $java = (Get-Command java -CommandType Application | Select-Object -First 1).Source
 $node = (Get-Command node -CommandType Application | Select-Object -First 1).Source
@@ -18,7 +29,7 @@ $root = Join-Path $repoPath ('.tools/dispatch-mysql/' + $vhost)
 $classes = Join-Path $root 'classes'; $libs = Join-Path $root 'libs'
 New-Item -ItemType Directory -Path $classes,$libs,(Join-Path $root 'data') -Force | Out-Null
 $ports = @{}; $allocated = [Collections.Generic.HashSet[int]]::new()
-foreach ($name in @('scheduler','worker','order','proxy','mysql')) {
+foreach ($name in @('scheduler','worker','order','proxy','worker-link','mysql')) {
     do { $socket = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0)
         $socket.Start(); $port = $socket.LocalEndpoint.Port; $socket.Stop()
     } while (!$allocated.Add($port))
@@ -27,7 +38,9 @@ foreach ($name in @('scheduler','worker','order','proxy','mysql')) {
 $processes = @{}; $checks = [Collections.Generic.List[object]]::new(); $saved = @{}
 $management = New-MqManagementClient $cluster.username $cluster.password
 $http = [Net.Http.HttpClient]::new(); $http.Timeout = [TimeSpan]::FromSeconds(20)
+if ($OrderPaymentRace) { $http.Timeout = [TimeSpan]::FromSeconds(55) }
 $base = $cluster.managementUrls[0]; $created = $false; $completed = $false; $faultNode = $null
+$topologyRecoveryPending = $false
 $token = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
 $utf8 = [Text.UTF8Encoding]::new($false)
 function Env([string]$Name, [string]$Value) {
@@ -85,10 +98,18 @@ function Start-App([string]$Name,[bool]$Consumer=$true) {
     Env TASKFLOW_FAULT_MQ_USERNAME $credentials.username
     Env TASKFLOW_FAULT_MQ_PASSWORD $credentials.password
     Env TASKFLOW_FAULT_MQ_ADDRESSES $(if ($Name -eq 'scheduler') { "127.0.0.1:$($ports.proxy)" } else { $cluster.addresses })
+    $schedulerPort = if ($Name -eq 'worker' -and $Scenario -eq 'WorkerLink') { $ports['worker-link'] } else { $ports.scheduler }
+    Env TASKFLOW_FAULT_SCHEDULER_URL "http://127.0.0.1:$schedulerPort"
     $stamp = Get-Date -Format HHmmssfff
+    $config = (Join-Path $PSScriptRoot 'acceptance/application-dispatch-mysql.yml').Replace('\','/')
+    if ($OrderPaymentRace -and $Name -eq 'order') {
+        $config += ',file:' + (Join-Path $PSScriptRoot 'acceptance/application-order-mq-race.yml').Replace('\','/')
+    }
     $arguments = @('-Xms64m','-Xmx256m',('"-Dloader.path=' + $classes + '"'),
-        ('"-Dspring.config.additional-location=file:' + (Join-Path $PSScriptRoot 'acceptance/application-dispatch-mysql.yml').Replace('\','/') + '"'),
+        ('"-Dspring.config.additional-location=file:' + $config + '"'),
         ('-Dtaskflow.dispatch.consumer-enabled=' + $Consumer.ToString().ToLowerInvariant()))
+    if ($OrderPaymentRace -and $Name -eq 'order') { $arguments += '-Dloader.main=OrderMqRaceProbe' }
+    if ($OrderPaymentRace -and $Name -eq 'worker') { $arguments += '-Dtaskflow.order.request-timeout=45s' }
     if ($Name -eq 'scheduler') { $arguments += @('-Dloader.main=MysqlDispatchFaultProbe','-Dtaskflow.fault.boot=true',('"-Dtaskflow.fault.root=' + $root + '"')) }
     $arguments += @('-cp',('"' + (Join-Path $root "$Name.jar") + '"'),'org.springframework.boot.loader.launch.PropertiesLauncher')
     $processes[$Name] = Start-Process -FilePath $java -ArgumentList $arguments -WindowStyle Hidden -PassThru -WorkingDirectory $root `
@@ -155,6 +176,10 @@ try {
     $capability = Get-MqBrokerCapability $management $base ([bool]$AllowLegacyBroker)
     $nodes = @(Broker GET nodes)
     Check ($nodes.Count -eq 3 -and @($nodes | Where-Object running).Count -eq 3) 'All three existing Broker nodes are online before testing'
+    $disruptBroker = $Scenario -in @('QuorumShort','QuorumExhausted','BrokerPartition')
+    if ($disruptBroker) {
+        Check (@(Broker GET connections).Count -eq 0) 'Dedicated fault cluster has no pre-existing AMQP connections'
+    }
     $null = Broker PUT "vhosts/$vhost" @{}; $created = $true
     $null = Broker PUT "permissions/$vhost/$([Uri]::EscapeDataString($cluster.username))" @{configure='.*';write='.*';read='.*'}
     foreach ($role in @('scheduler','worker')) {
@@ -202,7 +227,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Test schema creation failed.' }
     }
     $targets = @($cluster.addresses.Split(',') | ForEach-Object { $uri=[Uri]('amqp://' + $_); @{host=$uri.Host;port=$uri.Port} })
-    Json proxy @{port=$ports.proxy;targets=$targets}
+    $proxyTargets = if ($Scenario -eq 'BrokerPartition') { @($targets[0]) } else { $targets }
+    Json proxy @{port=$ports.proxy;targets=@($proxyTargets)}
     $processes.proxy = Start-Process -FilePath $node -ArgumentList @(('"' + (Join-Path $PSScriptRoot 'local/mq-confirm-fault-proxy.mjs') + '"'),('"' + (Join-Path $root 'proxy.json') + '"')) `
         -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $root 'proxy.out.log') -RedirectStandardError (Join-Path $root 'proxy.err.log')
     Wait-For { Test-Path -LiteralPath (Join-Path $root 'proxy.ready') } 'Proxy ready'
@@ -213,12 +239,42 @@ try {
     Env TASKFLOW_FAULT_SCHEDULER_URL "http://127.0.0.1:$($ports.scheduler)"
     Env TASKFLOW_FAULT_ORDER_URL "http://127.0.0.1:$($ports.order)"
     Env TASKFLOW_FAULT_WORKER_URL "http://127.0.0.1:$($ports.worker)"
-    Env TASKFLOW_FAULT_CONFIRM_TIMEOUT '1s'; Env TASKFLOW_FAULT_CLAIM_LEASE '8s'
+    Env TASKFLOW_FAULT_CONFIRM_TIMEOUT '1s'
+    Env TASKFLOW_FAULT_CLAIM_LEASE $(if ($disruptBroker) { '300s' } elseif ($Scenario -like 'Publisher*') { '30s' } else { '8s' })
+    Env TASKFLOW_FAULT_PUBLISH_RETRY_DELAY $(if ($Scenario -in @('QuorumShort','BrokerPartition')) { '45s' }
+        elseif ($Scenario -eq 'PublisherShort') { '6s' } else { '2s' })
+    Env TASKFLOW_FAULT_EXECUTION_LEASE $(if ($Scenario -eq 'WorkerLink') { '12s' } else { '300s' })
+    Env TASKFLOW_FAULT_RENEWAL_INTERVAL $(if ($Scenario -eq 'WorkerLink') { '1s' } else { '5s' })
+    if ($Scenario -eq 'WorkerLink') {
+        Json worker-link @{port=$ports['worker-link'];schedulerPort=$ports.scheduler}
+        $processes['worker-link'] = Start-Process -FilePath $node -ArgumentList @(
+            ('"' + (Join-Path $PSScriptRoot 'local/worker-link-fault-proxy.mjs') + '"'),
+            ('"' + (Join-Path $root 'worker-link.json') + '"')) -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $root 'worker-link.out.log') -RedirectStandardError (Join-Path $root 'worker-link.err.log')
+        Wait-For { Test-Path -LiteralPath (Join-Path $root 'worker-link.ready') } 'Worker link proxy ready'
+    }
+    if ($OrderPaymentRace) {
+        Env TASKFLOW_FAULT_CONFIRM_TIMEOUT '45s'
+        Env TASKFLOW_FAULT_CLAIM_LEASE '55s'
+        Env TASKFLOW_ORDER_RACE_ROOT $root
+        Env TASKFLOW_ORDER_RACE_PAYMENT_KEY ([Guid]::NewGuid().ToString('N'))
+        & (Join-Path (Split-Path -Parent $java) 'javac.exe') -cp "$libs/*" -d $classes (Join-Path $PSScriptRoot 'local/OrderMqRaceProbe.java')
+        if ($LASTEXITCODE -ne 0) { throw 'Order race probe compilation failed.' }
+        & $node (Join-Path $PSScriptRoot 'local/order-payment-notification.mjs') init
+        if ($LASTEXITCODE -ne 0) { throw 'Order payment test key generation failed.' }
+    }
     Start-App order; Start-App scheduler; Start-App worker
     Json environment @{time=[DateTimeOffset]::Now.ToString('o');ports=$ports;brokerVersion=$capability.version;
         database=@(Db scheduler 'SELECT VERSION() AS version, @@transaction_isolation AS isolation_level');
         jars=@(Get-FileHash (Join-Path $root '*.jar') -Algorithm SHA256 | Select-Object Hash,Path)}
 
+    if ($OrderPaymentRace) {
+        Invoke-OrderPaymentRaces
+    } elseif ($Scenario -eq 'WorkerLink') {
+        Invoke-WorkerLinkFault
+    } elseif ($Scenario -ne 'Baseline') {
+        Invoke-PublisherAvailabilityFault
+    } else {
     # The commit is paused with real InnoDB changes still uncommitted, then the JVM is killed.
     $order = Seed 41001; $key = [Guid]::NewGuid().ToString(); $body = Run-Body $key
     Arm before-commit
@@ -318,6 +374,7 @@ try {
         $faultNode = $null
         Check $true 'Stopped Broker restored with all three quorum replicas online'
     }
+    }
     Queue-Snapshot quorum-final 0
     $queues = @(Broker GET "queues/$vhost")
     Check (@($queues | Where-Object { $_.messages_ready -ne 0 -or $_.messages_unacknowledged -ne 0 }).Count -eq 0) 'All test queues including DLQ drained after recovery'
@@ -325,15 +382,16 @@ try {
     $completed = $true
 } finally {
     if ($faultNode) { Write-Warning "RESTORE REQUIRED: $faultNode. Test did not accept node recovery." }
-    foreach ($name in @('worker','scheduler','order','proxy')) { Stop-Owned $name }
+    if ($topologyRecoveryPending) { Write-Warning 'RESTORE REQUIRED: remove the injected Broker fault and verify all replicas are online.' }
+    foreach ($name in @('worker','scheduler','order','worker-link','proxy')) { Stop-Owned $name }
     if ($processes.ContainsKey('mysql')) {
         & (Join-Path $mysqlBin 'mysqladmin.exe') --no-defaults --protocol=TCP --host=127.0.0.1 "--port=$($ports.mysql)" --user=root shutdown *> $null
         if (!$processes.mysql.WaitForExit(10000)) { Stop-Owned mysql } else { $processes.mysql.Dispose(); $processes.Remove('mysql') }
     }
     if ($created -and $completed) { $null = Broker DELETE "vhosts/$vhost" }
-    Json report @{time=[DateTimeOffset]::Now.ToString('o');completed=$completed;brokerVersion=$capability.version;
-        confirmFault=$(if ($ConfirmNodeFailure) {'BROKER_NODE_EXIT'} else {'PUBLISHER_CONNECTION_LOSS'});checks=$checks;
-        boundaries=@('Single host temporary MySQL, independent schemas','External multi-host partition and host failure not tested',
+    Json report @{time=[DateTimeOffset]::Now.ToString('o');completed=$completed;brokerVersion=$capability.version;scenario=$(if ($OrderPaymentRace) {'OrderPaymentRace'} else {$Scenario});
+        confirmFault=$(if ($Scenario -eq 'Baseline') { if ($ConfirmNodeFailure) {'BROKER_NODE_EXIT'} else {'PUBLISHER_CONNECTION_LOSS'} });checks=$checks;
+        boundaries=@('Single host temporary MySQL, independent schemas','Physical host failure not covered',
             'No arbitrary external side-effect exactly-once guarantee','Legacy Broker does not accept at-least-once dead-letter transfer')}
     foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name,$saved[$name],'Process') }
     $http.Dispose(); $management.Dispose()

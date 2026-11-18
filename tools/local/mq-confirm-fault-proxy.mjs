@@ -10,6 +10,10 @@ if (!root.replaceAll('\\', '/').includes('/.tools/dispatch-mysql/')) throw Error
 const marker = name => path.join(root, name);
 const clients = new Set();
 const server = net.createServer(client => {
+  if (fs.existsSync(marker('publisher.block'))) {
+    client.destroy();
+    return;
+  }
   clients.add(client);
   let upstream, pending = Buffer.alloc(0), holding = false;
   const close = () => { client.destroy(); upstream?.destroy(); };
@@ -53,6 +57,9 @@ const server = net.createServer(client => {
 });
 server.listen(config.port, '127.0.0.1', () => fs.writeFileSync(marker('proxy.ready'), 'ready'));
 setInterval(() => {
+  if (fs.existsSync(marker('publisher.block'))) {
+    for (const client of clients) client.destroy();
+  }
   if (fs.existsSync(marker('confirm.cut'))) {
     fs.renameSync(marker('confirm.cut'), marker('confirm.cut.done'));
     for (const client of clients) client.destroy();

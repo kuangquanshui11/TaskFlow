@@ -39,6 +39,8 @@
 
 本专项不覆盖多数派丢失、跨主机网络分区、宿主机退出、历史异常状态修复、付款与关单竞争、监控/追踪系统或浏览器回归。旧版 RabbitMQ 的空 DLQ 不能证明至少一次死信转移。
 
+同一启动器的其他故障场景和隔离环境操作见 [派发链路与集群故障验收](dispatch-topology-fault-verification.md)。
+
 ## 2026-11-18 实测
 
 环境为 Windows、Java 21.0.12.1、MySQL 8.0.34 / InnoDB / `REPEATABLE-READ`、现有 RabbitMQ 3.8.34 三节点集群，代码基线为 `e5cf3ab`。Scheduler / Worker / 订单服务分别从空 schema 迁移到 V19 / V7 / V8，使用同一轮模块构建的 JAR，哈希保存在 `environment.json`。

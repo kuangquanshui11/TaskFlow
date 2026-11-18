@@ -42,8 +42,8 @@ taskflow:
     confirm-timeout: "${TASKFLOW_FAULT_CONFIRM_TIMEOUT:1s}"
     claim-lease: "${TASKFLOW_FAULT_CLAIM_LEASE:8s}"
     scan-interval: 200ms
-    retry-delay: 2s
-    max-retry-delay: 2s
+    retry-delay: "${TASKFLOW_FAULT_PUBLISH_RETRY_DELAY:2s}"
+    max-retry-delay: "${TASKFLOW_FAULT_PUBLISH_RETRY_DELAY:2s}"
     max-publish-attempts: 3
   execution:
     scheduler-url: "${TASKFLOW_FAULT_SCHEDULER_URL}"
@@ -54,8 +54,8 @@ taskflow:
     scan-interval: 200
     request-timeout: 2s
     lease:
-      duration: 300s
-      renewal-interval: 5s
+      duration: "${TASKFLOW_FAULT_EXECUTION_LEASE:300s}"
+      renewal-interval: "${TASKFLOW_FAULT_RENEWAL_INTERVAL:5s}"
       safety-margin: 2s
   order:
     enabled: true
