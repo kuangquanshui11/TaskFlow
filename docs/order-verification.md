@@ -36,3 +36,27 @@ Redis 故障降级及错误正库存快照通过故障注入回归验证：缓�
 默认 `verify` 有条件跳过真实 MySQL/Redis/Broker 专项，不能将这些跳过项计为通过；本次 MySQL 和 Redis 使用专用脚本分别实测。订单专项的进程派发使用 HTTP；现有 RabbitMQ 消费链路随平台单元回归执行，但未实测订单专项跨 Broker 故障。服务名发现采用本机静态实例集成验证，本轮不声称重新完成 Eureka/配置中心集群验收。真实支付、资金扣款、迟到支付退款、跨服务库存补偿及跨机器网络分区未验证。
 
 所有原始日志、临时数据库、测试 JAR 和进程输出位于忽略的 `.tools`，不纳入 Git。重复验证会创建新的日期目录；本记录指向2026-11-01本次执行证据。
+
+## 订单付款与关单竞争的 RabbitMQ 验收
+
+我在同一轮测试中使用真实 MySQL、现有 RabbitMQ 集群和独立的 Scheduler、Worker、订单服务进程。验收器为每个服务建立独立 schema，为本轮建立临时 vhost 和 quorum 队列。订单服务用临时测试密钥对付款通知做真实 RSA 验签和 AES-GCM 解密，退款工作扫描在测试配置中关闭，便于检查待办是否只入队一次。
+
+```powershell
+.\tools\test-dispatch-mysql-faults.ps1 -ClusterSettingsPath .tools/mq-cluster-settings.json -AllowLegacyBroker -OrderPaymentRace
+.\tools\test-order-mysql.ps1 -IncludePayment
+```
+
+已构建三个服务的 JAR 时可加 `-SkipBuild`。新版本 Broker 可省略 `-AllowLegacyBroker`。所需 Java、Node.js 和 MySQL 命令及集群设置见 [MySQL 与 RabbitMQ 故障专项](dispatch-mysql-fault-verification.md)。
+
+我先创建已预占库存且有 Native 支付单的订单，再缩短测试行的付款截止时间，使关单可扫描到它。测试付款时间早于该截止点。验收器在先到者取得 InnoDB 行锁后暂停它，查 `performance_schema.data_lock_waits` 证明另一个请求在等同一订单行。此时截留真实 Broker `Basic.Ack` 并关闭测试 Publisher 的 AMQP 连接，等同一 Outbox 事件重新发布成功后放开行锁。两个请求结束后重复发送同一付款通知。
+
+| 顺序 | 业务断言 |
+| --- | --- |
+| 付款先提交 | 订单和支付单均为 `PAID`。关单扫描到订单后跳过。库存预占结算一次，只有一条 `CONSUMED` 流水，退款待办为空。 |
+| 关单先提交 | 订单保持 `CLOSED`，支付单记录 `LATE_PAID`。库存只返还一次，只有一条 `RELEASED` 流水。重复通知沿用稳定退款号，数据库只有一条 `READY` 的退款待办。 |
+
+每轮同时核对原 Run、单 Attempt 和执行租约、两次发布的不可变事件、Broker 两次投递与应答，以及一条已上报的 Inbox 和一次 Handler 进入。通过后删除本轮 vhost，保留 `.tools/dispatch-mysql/<vhost>/` 的报告、库表快照和进程日志。故障作用于测试 Publisher 的连接，覆盖确认丢失和消息重复投递。真实商户扣款、退款到账和 Broker 节点停机不属于此订单验收。
+
+2026-11-18 在 Windows、Java 21.0.12.1、MySQL 8.0.34（InnoDB，REPEATABLE READ）和 RabbitMQ 3.8.34 三节点环境执行。带 `-SkipBuild` 的 `-OrderPaymentRace` 于 10:25:27（Asia/Shanghai）完成，9 项断言通过，0 项失败。两种顺序各记录一条 InnoDB 行锁等待、两次 Broker 投递及应答、一次 Handler 执行。两个 Run 均成功。付款先提交时 `scanned=1, closed=0, skipped=1, failed=0`。关单先提交时 `scanned=1, closed=1, skipped=0, failed=0`，仅有一条退款待办。最终派发队列与死信队列均已排空，测试 vhost 已删除。
+
+证据保存在 `.tools/dispatch-mysql/taskflow_it_e953b28416f24d508e7c5a8eb6df6947/`。`report.json` 记录断言，`*-race.json` 记录锁等待与未确认发布，`*-dispatch.json`、`*-business.json` 和 `*-broker-drained.json` 记录恢复后状态。`test-order-mysql.ps1 -IncludePayment` 同日通过 14 项真实 MySQL 回归，其中订单 8 项、支付 6 项，0 失败、0 跳过。回归日志为 `.tools/order-mysql/20261118-102303-713/tests.log`。

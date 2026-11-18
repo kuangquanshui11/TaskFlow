@@ -13,7 +13,7 @@ if ($Scenario -in @('QuorumShort','QuorumExhausted','BrokerPartition') -and !$De
 $repoPath = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoPath
 . (Join-Path $PSScriptRoot 'lib/mq-management.ps1')
-. (Join-Path $PSScriptRoot 'lib/order-mq-race.ps1')
+if ($OrderPaymentRace) { . (Join-Path $PSScriptRoot 'lib/order-mq-race.ps1') }
 . (Join-Path $PSScriptRoot 'lib/dispatch-topology-faults.ps1')
 $cluster = Read-MqClusterSettings $ClusterSettingsPath
 $java = (Get-Command java -CommandType Application | Select-Object -First 1).Source

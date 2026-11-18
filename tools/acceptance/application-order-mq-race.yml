@@ -1,0 +1,15 @@
+order:
+  payment-window: 2m
+  wechat-pay:
+    enabled: true
+    app-id: wxTest
+    merchant-id: "123456"
+    merchant-serial: "123456789ABCDEFFEDCBA98765432101"
+    private-key-path: "${TASKFLOW_ORDER_RACE_ROOT}/payment-merchant.pem"
+    public-key-id: PUB_KEY_ID_123456789
+    public-key-path: "${TASKFLOW_ORDER_RACE_ROOT}/payment-provider.pub.pem"
+    api-v3-key: "${TASKFLOW_ORDER_RACE_PAYMENT_KEY}"
+    notify-url: https://merchant.example.test/api/v1/order-payments/updateWechatNotification
+  payment-work:
+    scan-enabled: false
+    inventory-release-enabled: false
