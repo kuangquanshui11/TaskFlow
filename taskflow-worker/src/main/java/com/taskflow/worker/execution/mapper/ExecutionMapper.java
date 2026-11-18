@@ -15,15 +15,24 @@ public class ExecutionMapper {
     private final JdbcTemplate jdbc;
     public ExecutionMapper(JdbcTemplate jdbc) { this.jdbc = jdbc; }
     public Optional<ExecutionRow> find(UUID id) {
-        return jdbc.query("SELECT * FROM worker_execution WHERE attempt_id=?", this::read, id.toString()).stream().findFirst();
+        return jdbc.query("""
+                SELECT e.*, COALESCE(NULLIF(e.dispatch_json,''),h.dispatch_json) AS history_dispatch,
+                       COALESCE(e.message,h.message) AS history_message
+                FROM worker_execution e LEFT JOIN worker_execution_detail_archive h ON h.attempt_id=e.attempt_id
+                WHERE e.attempt_id=?
+                """, (rs, index) -> read(rs, "history_dispatch", "history_message"), id.toString()).stream().findFirst();
     }
     public List<Event> selectAttemptEvents(UUID runId, UUID attemptId, String workerId, int limit) {
         return jdbc.query("""
                 SELECT id,event_type,occurred_at,report_number,state,result_code
-                FROM worker_attempt_event WHERE run_id=? AND attempt_id=? AND worker_id=? ORDER BY id DESC LIMIT ?
+                FROM worker_attempt_event WHERE run_id=? AND attempt_id=? AND worker_id=?
+                UNION ALL
+                SELECT id,event_type,occurred_at,report_number,state,result_code
+                FROM worker_attempt_event_archive WHERE run_id=? AND attempt_id=? AND worker_id=?
+                ORDER BY id DESC LIMIT ?
                 """, (rs, i) -> new Event(rs.getLong("id"), rs.getString("event_type"), instant(rs, "occurred_at"),
                 rs.getObject("report_number", Integer.class), rs.getString("state"), rs.getString("result_code")),
-                runId.toString(), attemptId.toString(), workerId, limit);
+                runId.toString(), attemptId.toString(), workerId, runId.toString(), attemptId.toString(), workerId, limit);
     }
     public void insert(UUID attemptId, UUID runId, String fingerprint, String encoded, Instant now) {
         insert(attemptId, runId, fingerprint, encoded, now, null, Context.EMPTY);
@@ -168,9 +177,12 @@ public class ExecutionMapper {
                 """, type, ts(now), number, id.toString());
     }
     private ExecutionRow read(ResultSet rs, int index) throws SQLException {
+        return read(rs, "dispatch_json", "message");
+    }
+    private ExecutionRow read(ResultSet rs, String dispatch, String message) throws SQLException {
         return new ExecutionRow(UUID.fromString(rs.getString("attempt_id")), UUID.fromString(rs.getString("run_id")),
-                rs.getString("fingerprint"), rs.getString("dispatch_json"), rs.getString("state"), rs.getString("result_code"),
-                rs.getString("message"), rs.getBoolean("retryable"), rs.getBoolean("reported"), rs.getInt("report_count"),
+                rs.getString("fingerprint"), rs.getString(dispatch), rs.getString("state"), rs.getString("result_code"),
+                rs.getString(message), rs.getBoolean("retryable"), rs.getBoolean("reported"), rs.getInt("report_count"),
                 instant(rs, "next_report_at"), instant(rs, "created_at"), instant(rs, "finished_at"), rs.getString("report_worker_id"),
                 rs.getString("report_session_id") == null ? null : UUID.fromString(rs.getString("report_session_id")),
                 new Context(rs.getString("traceparent"), rs.getString("tracestate")));

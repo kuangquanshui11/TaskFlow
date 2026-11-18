@@ -30,6 +30,8 @@ import static org.mockito.ArgumentMatchers.*;
 @org.springframework.test.context.ContextConfiguration(initializers = com.taskflow.scheduler.support.IsolatedTestDatabaseInitializer.class)
 class RunExecutionTests {
     @Autowired IRunService runs;
+    @Autowired com.taskflow.scheduler.history.service.IHistoryArchiveService history;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
     @Autowired JdbcTemplate jdbc;
     @Autowired JsonMapper json;
     @Value("${local.server.port}") int port;
@@ -64,6 +66,57 @@ class RunExecutionTests {
             assertThat(a.get(5, TimeUnit.SECONDS).id()).isEqualTo(b.get(5, TimeUnit.SECONDS).id());
         }
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM run_attempt", Long.class)).isEqualTo(1);
+    }
+    @Test void archiveKeepsSnapshotsTimelineAndManualAndCronIdentity() {
+        doAnswer(call -> {
+            Dispatch command = call.getArgument(0);
+            runs.updateResult(new Result(command.attemptId(), command.runId(), command.leaseVersion(),
+                    "SUCCEEDED", "SUCCEEDED", "original result", false, "worker-default",
+                    UUID.fromString("00000000-0000-0000-0000-000000000001")));
+            return null;
+        }).when(worker).dispatch(any());
+        var manual = create(UUID.randomUUID(), "archive", 1);
+        var manualId = runs.insert(manual).id();
+        var old = Instant.now().minus(Duration.ofDays(100)).truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        var cron = new Snapshot(8, 1, "archive cron", "demoSuccess", null, 30, 1, 5,
+                "CRON", "0 * * * * *", "Asia/Shanghai", "SKIP", true, null);
+        var tx = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        var cronId = tx.execute(status -> runs.insertScheduled(cron, old, old));
+        runs.dispatchPending();
+        var manualBefore = runs.selectById(manualId);
+        var cronBefore = runs.selectById(cronId);
+        assertThat(manualBefore.state()).isEqualTo("SUCCEEDED");
+        assertThat(cronBefore.state()).isEqualTo("SUCCEEDED");
+        var attemptId = manualBefore.attempts().getFirst().id();
+        var events = mapper.selectAttemptEvents(manualId, attemptId, 100);
+        assertThat(events).isNotEmpty();
+        var activeId = runs.insert(create(UUID.randomUUID(), "in flight", 1)).id();
+        jdbc.update("UPDATE run_execution SET finished_at=? WHERE id IN (?, ?, ?)",
+                Timestamp.from(old), manualId.toString(), cronId.toString(), activeId.toString());
+
+        assertThat(history.runBatch(true)).containsEntry("runs", 2);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM run_snapshot_archive", Long.class)).isZero();
+        assertThat(history.runBatch(false)).containsEntry("runs", 2);
+        assertThat(history.runBatch(false)).containsEntry("runs", 0);
+        assertThat(jdbc.queryForObject("SELECT snapshot_json FROM run_execution WHERE id=?", String.class, activeId.toString()))
+                .isNotEmpty();
+        assertThat(jdbc.queryForObject("SELECT snapshot_json FROM run_execution WHERE id=?", String.class, manualId.toString()))
+                .isEmpty();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM scheduler_attempt_event WHERE run_id=?", Long.class, manualId.toString()))
+                .isZero();
+        assertThat(mapper.selectAttemptEvents(manualId, attemptId, 100)).isEqualTo(events);
+        assertThat(runs.selectById(manualId).snapshot()).isEqualTo(manualBefore.snapshot());
+        assertThat(runs.selectByRequestKey(manual.requestKey()).attempts()).isEqualTo(manualBefore.attempts());
+        var attempt = manualBefore.attempts().getFirst();
+        runs.updateResult(new Result(attempt.id(), manualId, attempt.leaseVersion(),
+                "SUCCEEDED", "SUCCEEDED", "original result", false, "worker-default",
+                UUID.fromString("00000000-0000-0000-0000-000000000001")));
+        assertThat(runs.insert(manual).id()).isEqualTo(manualId);
+        assertThatThrownBy(() -> runs.insert(create(manual.requestKey(), "changed", 1)))
+                .isInstanceOf(RunException.class);
+        UUID replayedCron = tx.execute(status -> runs.insertScheduled(cron, old, old));
+        assertThat(replayedCron).isEqualTo(cronId);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM run_execution", Long.class)).isEqualTo(3);
     }
     @Test void creationRollsBackIfFirstAttemptCannotBeStored() {
         doThrow(new IllegalStateException("injected")).when(mapper).insertAttempt(any());

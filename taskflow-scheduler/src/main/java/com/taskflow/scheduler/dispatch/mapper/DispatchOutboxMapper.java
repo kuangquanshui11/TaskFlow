@@ -22,9 +22,13 @@ public class DispatchOutboxMapper {
                 attemptId.toString(), attemptId.toString(), ts(when), ts(Instant.now()), traceContext.traceparent(), traceContext.tracestate());
     }
     public Optional<OutboxEvent> find(UUID id, boolean lock) {
-        return jdbc.query("SELECT * FROM dispatch_outbox WHERE event_id=?" + (lock ? " FOR UPDATE" : ""), (rs, i) ->
+        return jdbc.query("""
+                SELECT o.*, COALESCE(o.message_json,(
+                    SELECT h.message_json FROM dispatch_outbox_payload_archive h WHERE h.event_id=o.event_id)) AS history_message
+                FROM dispatch_outbox o WHERE o.event_id=?
+                """ + (lock ? " FOR UPDATE" : ""), (rs, i) ->
                 new OutboxEvent(UUID.fromString(rs.getString("event_id")), UUID.fromString(rs.getString("attempt_id")),
-                        rs.getString("state"), rs.getString("message_json"), instant(rs.getTimestamp("expires_at")),
+                        rs.getString("state"), rs.getString("history_message"), instant(rs.getTimestamp("expires_at")),
                         rs.getInt("publish_attempts"), instant(rs.getTimestamp("next_publish_at")), rs.getLong("claim_version"),
                         instant(rs.getTimestamp("claim_until")), rs.getString("last_error_code"),
                         rs.getString("target_worker_id") == null ? null : new DispatchTarget(rs.getString("target_worker_id"),

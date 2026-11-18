@@ -42,6 +42,7 @@ import static org.mockito.ArgumentMatchers.*;
 class RunStateConcurrencyTests {
     @org.springframework.beans.factory.annotation.Autowired com.taskflow.scheduler.observability.config.AsyncTracing tracing;
     @Autowired IRunService runs;
+    @Autowired com.taskflow.scheduler.history.service.IHistoryArchiveService history;
     @Autowired IExecutionLeaseService leases;
     @Autowired JdbcTemplate jdbc;
     @Autowired JsonMapper json;
@@ -376,6 +377,10 @@ class RunStateConcurrencyTests {
         });
         var pending = new ReviewOutcome(UUID.randomUUID(), run.id(), attempt.id(), Decision.STILL_UNKNOWN, "未查到业务流水", "operator-a");
         var initial = runs.updateOutcomeReview(pending);
+        if (pause) {
+            makeTerminalRunOld(run.id());
+            assertThat(history.runBatch(false)).containsEntry("runs", 0);
+        }
         assertThat(runs.updateOutcomeReview(pending)).isEqualTo(initial);
         assertThatThrownBy(() -> runs.updateOutcomeReview(new ReviewOutcome(pending.requestKey(), run.id(), attempt.id(),
                 Decision.NO_EFFECT, pending.evidence(), pending.actor()))).isInstanceOf(RunException.class).hasMessageContaining("请求标识已绑定");
@@ -389,6 +394,11 @@ class RunStateConcurrencyTests {
         assertThat(reviewed.state()).isEqualTo(waiting.state());
         assertThat(reviewed.attempts()).isEqualTo(waiting.attempts());
         assertThat(reviewed.rerunEligible()).isFalse();
+        if (pause) {
+            assertThat(history.runBatch(false)).containsEntry("runs", 1);
+            assertThat(runs.updateOutcomeReview(pending)).isEqualTo(initial);
+            assertThat(runs.selectById(run.id()).outcomeCases()).isEqualTo(reviewed.outcomeCases());
+        }
     }
 
     @ParameterizedTest
@@ -412,9 +422,20 @@ class RunStateConcurrencyTests {
                 first.leaseVersion(), first.targetWorkerId(), UUID.randomUUID())))
                 .isInstanceOfSatisfying(RunException.class, error -> assertThat(error.code()).isEqualTo("STALE_LEASE"));
         if (transport.equals("rabbitmq")) assertThat(outbox.find(first.id(), false).orElseThrow().state()).isEqualTo("CANCELLED");
+        var beforeArchive = outbox.find(first.id(), false);
+        makeTerminalRunOld(initial.id());
+        assertThat(history.runBatch(false)).containsEntry("runs", 1);
+        assertThat(service.updateCancellation(cancellation).cancellation()).isEqualTo(stopped.cancellation());
+        assertThat(service.selectById(initial.id()).attempts()).isEqualTo(stopped.attempts());
+        assertThat(outbox.find(first.id(), false)).isEqualTo(beforeArchive);
         var following = service.insert(serialRequest(7));
         service.dispatchPending();
         assertThat(service.selectById(following.id()).attempts().getFirst().expiresAt()).isNotNull();
+    }
+
+    private void makeTerminalRunOld(UUID runId) {
+        jdbc.update("UPDATE run_execution SET finished_at=? WHERE id=?",
+                Timestamp.from(Instant.now().minus(java.time.Duration.ofDays(100))), runId.toString());
     }
 
     @ParameterizedTest

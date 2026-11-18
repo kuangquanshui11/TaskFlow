@@ -35,6 +35,7 @@ import static org.mockito.ArgumentMatchers.*;
 class DispatchConsumerTests {
     @Autowired IDispatchConsumerService consumer;
     @Autowired IExecutionService executions;
+    @Autowired com.taskflow.worker.history.service.IHistoryArchiveService history;
     @Autowired JdbcTemplate jdbc;
     @Autowired JsonMapper json;
     @MockitoBean SchedulerReportClient reports;
@@ -69,6 +70,12 @@ class DispatchConsumerTests {
         assertThat(mapper.find(command.attemptId()).orElseThrow().traceContext()).isEqualTo(accepted.traceContext());
         executions.executePending();
         await().untilAsserted(() -> assertThat(mapper.find(command.attemptId()).orElseThrow().state()).isEqualTo("SUCCEEDED"));
+        when(reports.report(any())).thenReturn(SchedulerReportClient.Outcome.ACKNOWLEDGED);
+        executions.reportPending();
+        var old = java.sql.Timestamp.from(Instant.now().minus(java.time.Duration.ofDays(100)));
+        jdbc.update("UPDATE worker_execution SET finished_at=?,result_acknowledged_at=? WHERE attempt_id=?",
+                old, old, command.attemptId().toString());
+        assertThat(history.runBatch(false)).containsEntry("executions", 1);
         consumer.consume(message,channel); executions.executePending();
         assertThat(count()).isEqualTo(1);
         verify(handlers,times(1)).execute(any(), any());

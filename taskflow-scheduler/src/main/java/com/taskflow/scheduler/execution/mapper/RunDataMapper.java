@@ -22,6 +22,16 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class RunDataMapper {
     private static final String GROUPED_RESULT_CODE = "COALESCE(NULLIF(result_code,''),'UNKNOWN')";
+    private static final String RUN_HISTORY = """
+            SELECT r.*, COALESCE(NULLIF(r.snapshot_json,''),(
+                SELECT h.snapshot_json FROM run_snapshot_archive h WHERE h.run_id=r.id)) AS history_snapshot
+            FROM run_execution r
+            """;
+    private static final String ATTEMPT_HISTORY = """
+            SELECT a.*, COALESCE(a.message,(
+                SELECT h.message FROM run_attempt_detail_archive h WHERE h.attempt_id=a.id)) AS history_message
+            FROM run_attempt a
+            """;
     private final JdbcTemplate jdbc;
     public RunDataMapper(JdbcTemplate jdbc) { this.jdbc = jdbc; }
     public void insert(RunRow row) {
@@ -65,9 +75,11 @@ public class RunDataMapper {
 
     public List<OutcomeReview.Case> outcomeCases(UUID runId) {
         return jdbc.query("""
-                SELECT c.attempt_id,c.run_id,c.reason,c.detected_at,r.request_key,r.decision,r.evidence,r.actor,r.reviewed_at
+                SELECT c.attempt_id,c.run_id,c.reason,c.detected_at,r.request_key,r.decision,
+                       COALESCE(h.evidence,r.evidence) AS evidence,r.actor,r.reviewed_at
                 FROM run_outcome_case c LEFT JOIN run_outcome_review r
                   ON r.review_id=(SELECT MAX(history.review_id) FROM run_outcome_review history WHERE history.attempt_id=c.attempt_id)
+                LEFT JOIN run_outcome_review_detail_archive h ON h.review_id=r.review_id
                 WHERE c.run_id=? ORDER BY c.detected_at,c.attempt_id
                 """, (rs, row) -> new OutcomeReview.Case(
                 UUID.fromString(rs.getString("attempt_id")), rs.getString("reason"), instant(rs, "detected_at"),
@@ -76,8 +88,10 @@ public class RunDataMapper {
 
     public Optional<OutcomeReview.Review> outcomeReview(UUID requestKey) {
         return jdbc.query("""
-                SELECT c.run_id,r.attempt_id,r.request_key,r.decision,r.evidence,r.actor,r.reviewed_at
+                SELECT c.run_id,r.attempt_id,r.request_key,r.decision,
+                       COALESCE(h.evidence,r.evidence) AS evidence,r.actor,r.reviewed_at
                 FROM run_outcome_review r JOIN run_outcome_case c ON c.attempt_id=r.attempt_id
+                LEFT JOIN run_outcome_review_detail_archive h ON h.review_id=r.review_id
                 WHERE r.request_key=?
                 """, this::readOutcomeReview, requestKey.toString()).stream().findFirst();
     }
@@ -98,7 +112,7 @@ public class RunDataMapper {
     }
 
     public Optional<Attempt> lockCurrentAttempt(RunRow run) {
-        return jdbc.query("SELECT * FROM run_attempt WHERE run_id=? AND attempt_number=? FOR UPDATE",
+        return jdbc.query(ATTEMPT_HISTORY + "WHERE a.run_id=? AND a.attempt_number=? FOR UPDATE",
                 this::readAttempt, run.id().toString(), run.currentAttempt()).stream().findFirst();
     }
 
@@ -111,9 +125,13 @@ public class RunDataMapper {
     }
 
     public Optional<RunCancellation> cancellation(UUID runId, boolean lock) {
-        return jdbc.query("SELECT * FROM run_cancellation WHERE run_id=?" + (lock ? " FOR UPDATE" : ""), (rs, row) ->
+        return jdbc.query("""
+                SELECT c.*, COALESCE(NULLIF(c.reason,''),(
+                    SELECT h.reason FROM run_cancellation_detail_archive h WHERE h.run_id=c.run_id)) AS history_reason
+                FROM run_cancellation c WHERE c.run_id=?
+                """ + (lock ? " FOR UPDATE" : ""), (rs, row) ->
                 new RunCancellation(runId, UUID.fromString(rs.getString("attempt_id")), UUID.fromString(rs.getString("request_key")),
-                        rs.getString("reason"), rs.getString("actor"), instant(rs, "requested_at"), instant(rs, "deadline_at"),
+                        rs.getString("history_reason"), rs.getString("actor"), instant(rs, "requested_at"), instant(rs, "deadline_at"),
                         RunCancellation.Outcome.valueOf(rs.getString("outcome")), instant(rs, "finished_at"),
                         rs.getString("worker_result_status"), rs.getString("worker_result_code"), instant(rs, "worker_result_at")),
                 runId.toString()).stream().findFirst();
@@ -143,38 +161,42 @@ public class RunDataMapper {
     }
 
     public Optional<RunRow> find(UUID id) {
-        return jdbc.query("SELECT * FROM run_execution WHERE id=?", this::readRun, id.toString()).stream().findFirst();
+        return jdbc.query(RUN_HISTORY + "WHERE r.id=?", this::readRun, id.toString()).stream().findFirst();
     }
     public Optional<RunRow> lock(UUID id) {
-        return jdbc.query("SELECT * FROM run_execution WHERE id=? FOR UPDATE", this::readRun, id.toString()).stream().findFirst();
+        return jdbc.query(RUN_HISTORY + "WHERE r.id=? FOR UPDATE", this::readRun, id.toString()).stream().findFirst();
     }
     public Optional<RunRow> byKey(UUID key) {
-        return jdbc.query("SELECT * FROM run_execution WHERE request_key=?", this::readRun, key.toString()).stream().findFirst();
+        return jdbc.query(RUN_HISTORY + "WHERE r.request_key=?", this::readRun, key.toString()).stream().findFirst();
     }
     public Optional<RunRow> bySchedule(long jobId, Instant scheduledAt) {
-        return jdbc.query("SELECT * FROM run_execution WHERE job_id=? AND scheduled_at=?", this::readRun,
+        return jdbc.query(RUN_HISTORY + "WHERE r.job_id=? AND r.scheduled_at=?", this::readRun,
                 jobId, ts(scheduledAt)).stream().findFirst();
     }
     public Optional<Attempt> attempt(UUID id) {
-        return jdbc.query("SELECT * FROM run_attempt WHERE id=?", this::readAttempt, id.toString()).stream().findFirst();
+        return jdbc.query(ATTEMPT_HISTORY + "WHERE a.id=?", this::readAttempt, id.toString()).stream().findFirst();
     }
     public Optional<Attempt> lockAttempt(UUID id) {
-        return jdbc.query("SELECT * FROM run_attempt WHERE id=? FOR UPDATE", this::readAttempt, id.toString()).stream().findFirst();
+        return jdbc.query(ATTEMPT_HISTORY + "WHERE a.id=? FOR UPDATE", this::readAttempt, id.toString()).stream().findFirst();
     }
     public List<Attempt> attempts(UUID id) {
-        return jdbc.query("SELECT * FROM run_attempt WHERE run_id=? ORDER BY attempt_number", this::readAttempt, id.toString());
+        return jdbc.query(ATTEMPT_HISTORY + "WHERE a.run_id=? ORDER BY a.attempt_number", this::readAttempt, id.toString());
     }
     public List<SchedulerEvent> selectAttemptEvents(UUID runId, UUID attemptId, int limit) {
         return jdbc.query("""
                 SELECT id,worker_id,event_type,occurred_at,lease_version,sequence_number,state,result_code,deadline_at
-                FROM scheduler_attempt_event WHERE run_id=? AND attempt_id=? ORDER BY id DESC LIMIT ?
+                FROM scheduler_attempt_event WHERE run_id=? AND attempt_id=?
+                UNION ALL
+                SELECT id,worker_id,event_type,occurred_at,lease_version,sequence_number,state,result_code,deadline_at
+                FROM scheduler_attempt_event_archive WHERE run_id=? AND attempt_id=?
+                ORDER BY id DESC LIMIT ?
                 """, (rs, i) -> new SchedulerEvent(rs.getLong("id"), rs.getString("worker_id"),
                 rs.getString("event_type"), instant(rs, "occurred_at"), rs.getLong("lease_version"),
                 rs.getObject("sequence_number", Integer.class), rs.getString("state"), rs.getString("result_code"),
-                instant(rs, "deadline_at")), runId.toString(), attemptId.toString(), limit);
+                instant(rs, "deadline_at")), runId.toString(), attemptId.toString(), runId.toString(), attemptId.toString(), limit);
     }
     public List<RunRow> select(long jobId, int page, int size) {
-        return jdbc.query("SELECT * FROM run_execution WHERE job_id=? ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",
+        return jdbc.query(RUN_HISTORY + "WHERE r.job_id=? ORDER BY r.created_at DESC,r.id DESC LIMIT ? OFFSET ?",
                 this::readRun, jobId, size, (long) (page - 1) * size);
     }
     public long count(long jobId) {
@@ -328,7 +350,7 @@ public class RunDataMapper {
         var source = rs.getString("source_run_id");
         return new RunRow(UUID.fromString(rs.getString("id")), rs.getLong("job_id"), rs.getLong("config_version"),
                 UUID.fromString(rs.getString("request_key")), rs.getString("fingerprint"), rs.getString("state"),
-                rs.getString("snapshot_json"), rs.getInt("current_attempt"), rs.getString("result_code"),
+                rs.getString("history_snapshot"), rs.getInt("current_attempt"), rs.getString("result_code"),
                 rs.getString("message"), instant(rs, "created_at"), instant(rs, "updated_at"), rs.getString("trigger_type"),
                 instant(rs, "scheduled_at"), source == null ? null : UUID.fromString(source), rs.getString("rerun_actor"), instant(rs, "finished_at"),
                 new Context(rs.getString("traceparent"), rs.getString("tracestate")), rs.getString("trigger_actor"));
@@ -337,7 +359,7 @@ public class RunDataMapper {
         return new Attempt(UUID.fromString(rs.getString("id")), UUID.fromString(rs.getString("run_id")),
                 rs.getInt("attempt_number"), rs.getLong("lease_version"), rs.getString("state"),
                 rs.getInt("dispatch_count"), instant(rs, "next_dispatch_at"), instant(rs, "expires_at"),
-                instant(rs, "started_at"), instant(rs, "finished_at"), rs.getString("result_code"), rs.getString("message"),
+                instant(rs, "started_at"), instant(rs, "finished_at"), rs.getString("result_code"), rs.getString("history_message"),
                 instant(rs, "lease_until"), rs.getString("owner_worker_id"),
                 rs.getString("owner_session_id") == null ? null : UUID.fromString(rs.getString("owner_session_id")), rs.getString("target_worker_id"));
     }

@@ -257,6 +257,8 @@ GET /api/v1/job-handlers/select 返回配置允许的标识列表。默认是 de
 
 ## 手动执行与运行历史
 
+归档后的运行详情、请求键查询和 Attempt 时间线沿用同一路径、权限和响应格式。Admin 的审计与配置对账查询也会读取归档明细。归档通过各服务的本地启动配置控制。 [操作方式及保留范围](history-archive.md)
+
 POST /api/v1/runs/insert：
 
 ```json

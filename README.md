@@ -4,6 +4,8 @@ TaskFlow 是参考 XXL-JOB 架构的 Java 后端学习项目，目标是构建�
 
 ## 当前能力
 
+Admin、Scheduler 和 Worker 支持独立的历史明细归档。默认关闭，可先查看候选批次，再执行单批或定时归档。旧 Run 和运维记录仍可通过原入口查询。 [归档与部署](docs/history-archive.md)
+
 控制台「配置对账」支持人工批次和自动双向扫描。操作员可以核实版本、同版本内容和孤立副本，对缺失或落后补发原事件并复查。 [操作说明与恢复流程](docs/config-reconciliation.md)
 
 控制台 `/runs` 提供全局运行列表，支持创建时间、Run 状态、任务 ID、触发来源组合筛选与 Run ID 精确查询；沿用 run:read 权限，查询数据由 Scheduler 管理。时间与分页边界见 [全局运行查询](docs/global-run-query.md)。

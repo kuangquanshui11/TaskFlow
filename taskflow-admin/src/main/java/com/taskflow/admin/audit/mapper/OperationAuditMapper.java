@@ -37,7 +37,7 @@ public class OperationAuditMapper {
     }
 
     public Optional<OperationAudit> byRequestKey(UUID key) {
-        return jdbc.sql("SELECT * FROM operation_audit WHERE request_key=:key")
+        return jdbc.sql("SELECT * FROM operation_audit_history WHERE request_key=:key")
                 .param("key", key.toString()).query(this::read).optional();
     }
 
@@ -65,7 +65,7 @@ public class OperationAuditMapper {
     }
 
     public List<OperationAudit> select(Query query) {
-        var sql = new StringBuilder("SELECT * FROM operation_audit WHERE 1=1");
+        var sql = new StringBuilder("SELECT * FROM operation_audit_history WHERE 1=1");
         var params = new java.util.HashMap<String, Object>();
         filter(sql, params, "occurred_at", ">=", "from", timestamp(query.from()));
         filter(sql, params, "occurred_at", "<", "to", timestamp(query.to()));

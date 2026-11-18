@@ -46,6 +46,7 @@ import static org.awaitility.Awaitility.await;
 class WorkerExecutionTests {
     @org.springframework.beans.factory.annotation.Autowired com.taskflow.worker.observability.config.AsyncTracing tracing;
     @Autowired IExecutionService executions;
+    @Autowired com.taskflow.worker.history.service.IHistoryArchiveService history;
     @MockitoSpyBean ExecutionMapper mapper;
     @Autowired JdbcTemplate jdbc;
     @Autowired JsonMapper json;
@@ -96,6 +97,43 @@ class WorkerExecutionTests {
         executions.insert(command); executions.executePending();
         assertThat(mapper.find(command.attemptId()).orElseThrow().state()).isEqualTo("SUCCEEDED");
         verify(handlers, times(1)).execute(any(), any());
+    }
+    @Test void archiveKeepsTheInboxFingerprintAndExecutionTimelineAcrossRedelivery() throws Exception {
+        var command = command("demoSuccess", 1, 30, "{}");
+        when(reports.report(any())).thenReturn(Outcome.ACKNOWLEDGED);
+        executions.insert(command);
+        executions.executePending();
+        finished(command);
+        executions.reportPending();
+        var before = eventTypes(command);
+        assertThat(before).contains("REPORT_ACKNOWLEDGED");
+        var unreported = command("demoSuccess", 1, 30, "{}");
+        executions.insert(unreported);
+        executions.executePending();
+        finished(unreported);
+        var old = Timestamp.from(Instant.now().minus(Duration.ofDays(100)));
+        jdbc.update("UPDATE worker_execution SET finished_at=?,result_recorded_at=?,result_acknowledged_at=? WHERE attempt_id=?",
+                old, old, Timestamp.from(old.toInstant().plusMillis(10)), command.attemptId().toString());
+        jdbc.update("UPDATE worker_execution SET finished_at=? WHERE attempt_id=?", old, unreported.attemptId().toString());
+        var timeline = attemptEvents.select(command.runId(), command.attemptId(), leases.owner().workerId());
+        assertThat(timeline.timing().resultReportMillis()).isEqualTo(10L);
+
+        assertThat(history.runBatch(true)).containsEntry("executions", 1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM worker_execution_detail_archive", Long.class)).isZero();
+        assertThat(history.runBatch(false)).containsEntry("executions", 1);
+        assertThat(history.runBatch(false)).containsEntry("executions", 0);
+        assertThat(jdbc.queryForObject("SELECT dispatch_json FROM worker_execution WHERE attempt_id=?",
+                String.class, command.attemptId().toString())).isEmpty();
+        assertThat(eventTypes(command)).isEmpty();
+        assertThat(attemptEvents.select(command.runId(), command.attemptId(), leases.owner().workerId())).isEqualTo(timeline);
+        assertThat(mapper.find(command.attemptId()).orElseThrow().message()).isEqualTo("执行成功");
+        assertThat(executions.insert(command).state()).isEqualTo("SUCCEEDED");
+        var changed = new Dispatch(command.attemptId(), UUID.randomUUID(), command.attemptNumber(),
+                command.leaseVersion(), command.expiresAt(), command.snapshot());
+        assertThatThrownBy(() -> executions.insert(changed)).isInstanceOf(ExecutionException.class);
+        executions.executePending();
+        verify(handlers, times(2)).execute(any(), any());
+        assertThat(mapper.find(unreported.attemptId()).orElseThrow().reported()).isFalse();
     }
     @Test void transientResultSaveFailureRecoversWithoutRepeatingHandler() throws Exception {
         var command = command("demoSuccess", 1, 30, "{}");

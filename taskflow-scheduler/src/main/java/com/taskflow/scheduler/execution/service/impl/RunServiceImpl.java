@@ -223,7 +223,8 @@ public class RunServiceImpl implements IRunService {
     public void updateResult(Result result) {
         if (!java.util.Set.of("SUCCEEDED", "FAILED").contains(result.status()))
             throw new RunException(400, "INVALID_ARGUMENT", "不支持的执行终态");
-        transactions.executeWithoutResult(status -> {
+        // 归档可能在定位 Attempt 与取得 Run 行锁之间提交，当前读需看到归档后的结果正文。
+        readCommittedTransactions.executeWithoutResult(status -> {
             var pair = locked(result.attemptId());
             var run = pair.run(); var attempt = pair.attempt();
             if (!attempt.runId().equals(result.runId()) || attempt.leaseVersion() != result.leaseVersion()

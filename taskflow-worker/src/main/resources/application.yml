@@ -96,6 +96,11 @@ eureka:
   client:
     enabled: false
 taskflow:
+  history-archive:
+    mode: "${TASKFLOW_HISTORY_ARCHIVE_MODE:off}"
+    retention-days: "${TASKFLOW_HISTORY_ARCHIVE_RETENTION_DAYS:90}"
+    batch-size: "${TASKFLOW_HISTORY_ARCHIVE_BATCH_SIZE:20}"
+    interval: "${TASKFLOW_HISTORY_ARCHIVE_INTERVAL:1h}"
   sales:
     enabled: "${TASKFLOW_SALES_HANDLER_ENABLED:false}"
   inventory-sync:

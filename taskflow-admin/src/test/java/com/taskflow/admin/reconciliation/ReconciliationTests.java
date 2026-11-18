@@ -54,6 +54,8 @@ class ReconciliationTests {
     @Autowired IJobSyncService sync;
     @Autowired IReconciliationService reconciliation;
     @Autowired IAutomaticReconciliationService automatic;
+    @Autowired com.taskflow.admin.history.service.IHistoryArchiveService history;
+    @Autowired com.taskflow.admin.audit.mapper.OperationAuditMapper audits;
     @Autowired JdbcTemplate jdbc;
     @MockitoSpyBean ReconciliationMapper mapper;
     @MockitoSpyBean PlanReplicaClient client;
@@ -66,6 +68,49 @@ class ReconciliationTests {
         gates(); replicas.clear(); queries.set(0); code = 200; malformed = null; entered = null; release = null;
     }
     @AfterAll static void stop() { scheduler.stop(0); }
+
+    @Test void archiveKeepsAuditAndReconciliationReadableAndTheCurrentTombstoneReplayable() {
+        var job = jobs.insert(config("archive config"));
+        sync.dispatchPending();
+        var first = sync.selectByJobId(job.id());
+        jobs.delete(job.id(), 1);
+        sync.dispatchPending();
+        var tombstone = sync.selectByJobId(job.id());
+        assertThat(tombstone.deleted()).isTrue();
+        var scan = reconciliation.insert(UUID.randomUUID(), 0, 10);
+        assertThat(scan.checks()).hasSize(1);
+        var start = Instant.now().minusSeconds(60);
+        var filter = new com.taskflow.admin.audit.model.OperationAudit.Query(
+                start, Instant.now().plusSeconds(60), null, null, job.id(), null, null, 1, 10);
+        var auditBefore = audits.select(filter);
+        assertThat(auditBefore).hasSize(2);
+        var old = Timestamp.from(start.minus(java.time.Duration.ofDays(100)));
+        jdbc.update("UPDATE operation_audit SET updated_at=? WHERE job_id=?", old, job.id());
+        jdbc.update("UPDATE job_sync_outbox SET updated_at=? WHERE job_id=?", old, job.id());
+        jdbc.update("UPDATE config_reconciliation_scan SET finished_at=? WHERE request_id=?", old, scan.requestId().toString());
+
+        assertThat(history.runBatch(true)).containsEntry("audits", 2)
+                .containsEntry("reconciliationScans", 1).containsEntry("syncEvents", 1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM reconciliation_check_archive", Long.class)).isZero();
+        assertThat(history.runBatch(false)).containsEntry("audits", 2)
+                .containsEntry("reconciliationScans", 1).containsEntry("syncEvents", 1);
+        assertThat(history.runBatch(false)).containsEntry("audits", 0)
+                .containsEntry("reconciliationScans", 0).containsEntry("syncEvents", 0);
+        assertThat(audits.select(filter)).extracting(com.taskflow.admin.audit.model.OperationAudit::id)
+                .containsExactlyElementsOf(auditBefore.stream().map(com.taskflow.admin.audit.model.OperationAudit::id).toList());
+        assertThat(mapper.checks(scan.requestId())).isEqualTo(scan.checks());
+        assertThat(jdbc.queryForObject("SELECT snapshot_json FROM job_sync_payload_archive WHERE event_id=?",
+                String.class, first.eventId().toString())).isNotBlank();
+        assertThat(jdbc.queryForObject("SELECT snapshot_json FROM job_sync_outbox WHERE event_id=?",
+                String.class, tombstone.eventId().toString())).isNotBlank();
+        replicas.remove(job.id());
+        gates();
+        var missing = reconciliation.insert(UUID.randomUUID(), 0, 10);
+        assertThat(reconciliation.repair(UUID.randomUUID(), missing.checks().getFirst().id()).outcome()).isEqualTo("ENQUEUED");
+        sync.dispatchPending();
+        assertThat(replicas.get(job.id()).deleted()).isTrue();
+        assertThat(sync.selectByJobId(job.id()).eventId()).isEqualTo(tombstone.eventId());
+    }
 
     @Test void automaticRoundResumesAfterUnavailabilityAndFindsSameVersionCorruptionAndOrphans() {
         var missing = jobs.insert(config("missing"));

@@ -425,7 +425,8 @@ try {
             '    locations: "classpath:db/migration,filesystem:' + $resultFailureMigrations.Replace('\','/') + '"'
         } else { '' }
         $schemaPath = (Join-Path $repoPath 'taskflow-admin/src/test/resources/db/test-schema.sql').Replace('\','/')
-        $sqlInit = if ($name -eq 'admin') { "  sql:" + [Environment]::NewLine + "    init:" + [Environment]::NewLine + "      mode: always" + [Environment]::NewLine + "      schema-locations: 'file:$schemaPath'" } else { '' }
+        $archiveSchema = (Join-Path $repoPath 'taskflow-admin/src/main/resources/db/migration/V11__history_archive.sql').Replace('\','/')
+        $sqlInit = if ($name -eq 'admin') { "  sql:" + [Environment]::NewLine + "    init:" + [Environment]::NewLine + "      mode: always" + [Environment]::NewLine + "      schema-locations: 'file:$schemaPath,file:$archiveSchema'" } else { '' }
         $mqYaml = ''
         $mqHealth = 'false'
         if ($Transport -eq 'rabbitmq' -and $name -ne 'admin') {

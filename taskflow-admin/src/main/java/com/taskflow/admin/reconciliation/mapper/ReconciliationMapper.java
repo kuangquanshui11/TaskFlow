@@ -68,7 +68,11 @@ public class ReconciliationMapper {
                 checks(id)), id.toString()).stream().findFirst();
     }
     public List<Check> checks(UUID scanId) {
-        return jdbc.query("SELECT record_json,repair_request_id FROM config_reconciliation_check WHERE scan_id=? ORDER BY job_id",
+        return jdbc.query("""
+                SELECT COALESCE(h.record_json,c.record_json) AS record_json,c.repair_request_id
+                FROM config_reconciliation_check c LEFT JOIN reconciliation_check_archive h ON h.check_id=c.check_id
+                WHERE c.scan_id=? ORDER BY c.job_id
+                """,
                 this::readCheck, scanId.toString());
     }
 
@@ -105,8 +109,9 @@ public class ReconciliationMapper {
 
     public List<Check> roundChecks(UUID roundId, long afterJobId, int limit) {
         return jdbc.query("""
-                SELECT record_json,repair_request_id FROM config_reconciliation_check
-                WHERE round_id=? AND job_id>? ORDER BY job_id LIMIT ?
+                SELECT COALESCE(h.record_json,c.record_json) AS record_json,c.repair_request_id
+                FROM config_reconciliation_check c LEFT JOIN reconciliation_check_archive h ON h.check_id=c.check_id
+                WHERE c.round_id=? AND c.job_id>? ORDER BY c.job_id LIMIT ?
                 """, this::readCheck, roundId.toString(), afterJobId, limit);
     }
     public Optional<Repair> repair(UUID requestId) {
