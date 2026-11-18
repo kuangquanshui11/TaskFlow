@@ -1,0 +1,68 @@
+spring:
+  config:
+    import: ""
+  datasource:
+    url: "jdbc:mysql://127.0.0.1:${TASKFLOW_FAULT_DB_PORT}/${TASKFLOW_FAULT_DB_SCHEMA}?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&connectTimeout=2000&socketTimeout=10000"
+    username: root
+    password: ""
+    hikari:
+      connection-init-sql: "SET time_zone = '+00:00'"
+      transaction-isolation: TRANSACTION_REPEATABLE_READ
+  rabbitmq:
+    addresses: "${TASKFLOW_FAULT_MQ_ADDRESSES}"
+    virtual-host: "${TASKFLOW_FAULT_VHOST}"
+    username: "${TASKFLOW_FAULT_MQ_USERNAME}"
+    password: "${TASKFLOW_FAULT_MQ_PASSWORD}"
+    connection-timeout: 1s
+    requested-heartbeat: 10s
+server:
+  address: 127.0.0.1
+  port: "${TASKFLOW_FAULT_PORT}"
+management:
+  health:
+    rabbit:
+      enabled: false
+    redis:
+      enabled: false
+taskflow:
+  history-archive:
+    mode: off
+  nodes:
+    worker-id: worker-default
+    node-token: "${TASKFLOW_FAULT_TOKEN}"
+    scheduler-url: "${TASKFLOW_FAULT_SCHEDULER_URL}"
+    heartbeat-interval: 500ms
+    offline-timeout: 3s
+    request-timeout: 1s
+  plans:
+    trigger:
+      enabled: false
+  dispatch:
+    transport: rabbitmq
+    confirm-timeout: "${TASKFLOW_FAULT_CONFIRM_TIMEOUT:1s}"
+    claim-lease: "${TASKFLOW_FAULT_CLAIM_LEASE:8s}"
+    scan-interval: 200ms
+    retry-delay: 2s
+    max-retry-delay: 2s
+    max-publish-attempts: 3
+  execution:
+    scheduler-url: "${TASKFLOW_FAULT_SCHEDULER_URL}"
+    worker-url: "${TASKFLOW_FAULT_WORKER_URL}"
+    control-token: "${TASKFLOW_FAULT_TOKEN}"
+    dispatch-token: "${TASKFLOW_FAULT_TOKEN}"
+    report-token: "${TASKFLOW_FAULT_TOKEN}"
+    scan-interval: 200
+    request-timeout: 2s
+    lease:
+      duration: 300s
+      renewal-interval: 5s
+      safety-margin: 2s
+  order:
+    enabled: true
+    url: "${TASKFLOW_FAULT_ORDER_URL}"
+    token: "${TASKFLOW_FAULT_TOKEN}"
+order:
+  api-token: "${TASKFLOW_FAULT_TOKEN}"
+  worker-token: "${TASKFLOW_FAULT_TOKEN}"
+  cache-enabled: false
+  payment-window: 1s

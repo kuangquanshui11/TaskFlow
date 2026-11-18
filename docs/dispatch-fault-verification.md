@@ -1,5 +1,7 @@
 # 派发进程故障窗口验证
 
+真实 MySQL 的事务提交前强杀、提交后发布前强杀，以及发布确认未返回时的 Broker 故障，见 [MySQL 与 RabbitMQ 故障专项](dispatch-mysql-fault-verification.md)。下文保留原 H2 验证的日期、环境和适用边界。
+
 ## 验证范围与复现
 
 验证日期：2026-10-30。环境为 Windows、Java 21、当前项目构建的 Scheduler / Worker 可执行 JAR、RabbitMQ 3.8.34 三节点集群。每轮创建随机 `taskflow_it_<GUID>` vhost、四个三副本 quorum 队列，以及 Scheduler、两个 Worker 各自独立的 H2 文件库和随机端口。Worker 身份、队列、Inbox 分别隔离；应用使用设置文件中的独立服务账号。
